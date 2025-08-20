@@ -14,6 +14,13 @@ self.addEventListener('activate', (event) => {
         keys.map((key) => (key !== CACHE_NAME ? caches.delete(key) : Promise.resolve()))
       );
       await self.clients.claim();
+      if ('periodicSync' in registration) {
+        try {
+          // Request a periodic sync every 15 minutes for background tasks
+          // Name: 'gmail-sync' (ops flush + snooze processing delegated to client via postMessage)
+          await registration.periodicSync.register('gmail-sync', { minInterval: 15 * 60 * 1000 });
+        } catch {}
+      }
     })()
   );
 });
@@ -41,6 +48,18 @@ self.addEventListener('fetch', (event) => {
       }
     })()
   );
+});
+
+// Notify clients periodically to trigger background processing in the app
+self.addEventListener('periodicsync', (event) => {
+  if (event.tag === 'gmail-sync') {
+    event.waitUntil(
+      (async () => {
+        const allClients = await self.clients.matchAll({ type: 'window' });
+        for (const c of allClients) c.postMessage({ type: 'SYNC_TICK' });
+      })()
+    );
+  }
 });
 
 
