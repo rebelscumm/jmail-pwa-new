@@ -5,6 +5,7 @@
   import { labels as labelsStore } from '$lib/stores/labels';
   import { threads as threadsStore, messages as messagesStore } from '$lib/stores/threads';
   import { getDB } from '$lib/db/indexeddb';
+  import { archiveThread, markRead, markUnread } from '$lib/queue/intents';
 
   const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID as string;
 
@@ -104,6 +105,12 @@
       <li>
         <a href={`/viewer/${t.threadId}`}>{t.lastMsgMeta.subject}</a>
         <small> — {t.lastMsgMeta.from}</small>
+        <button on:click={() => archiveThread(t.threadId)}>Archive</button>
+        {#if t.labelIds && t.labelIds.includes('UNREAD')}
+          <button on:click={() => markRead(t.threadId)}>Mark read</button>
+        {:else}
+          <button on:click={() => markUnread(t.threadId)}>Mark unread</button>
+        {/if}
       </li>
     {/each}
   </ul>
