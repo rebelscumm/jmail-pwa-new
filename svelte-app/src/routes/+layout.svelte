@@ -14,6 +14,17 @@
   import NavCMLXItem from "$lib/nav/NavCMLXItem.svelte";
   import { styling } from "./themeStore";
   import "../app.css";
+  import { startFlushLoop } from "$lib/queue/flush";
+  import { startSnoozeTimer } from "$lib/snooze/scheduler";
+  
+  if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  }
+
+  if (typeof window !== 'undefined') {
+    startFlushLoop();
+    startSnoozeTimer();
+  }
 
   let { children }: { children: Snippet } = $props();
 
@@ -23,6 +34,18 @@
       icon: iconHome,
       iconS: iconHomeS,
       label: "Home",
+    },
+    {
+      path: base + "/inbox",
+      icon: iconHome,
+      iconS: iconHomeS,
+      label: "Inbox",
+    },
+    {
+      path: base + "/settings",
+      icon: iconPalette,
+      iconS: iconPaletteS,
+      label: "Settings",
     },
     {
       path: base + "/UX",
