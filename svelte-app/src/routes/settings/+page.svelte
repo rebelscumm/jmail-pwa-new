@@ -3,12 +3,23 @@
   import { getDB } from '$lib/db/indexeddb';
   import { listLabels } from '$lib/gmail/api';
   import type { GmailLabel } from '$lib/types';
+  import { loadSettings, saveLabelMapping, settings } from '$lib/stores/settings';
 
   let labels: GmailLabel[] = [];
-  let mappingJson = '{\n  "Snooze 10m": "",\n  "Snooze 3h": "",\n  "Snooze 1d": ""\n}';
+  let mappingJson = '';
   let info = '';
+  let anchorHour = 5;
+  let roundMinutes = 5;
+  let unreadOnUnsnooze = true;
 
   onMount(async () => {
+    await loadSettings();
+    const s = $settings as any;
+    anchorHour = s.anchorHour;
+    roundMinutes = s.roundMinutes;
+    unreadOnUnsnooze = s.unreadOnUnsnooze;
+    mappingJson = JSON.stringify(s.labelMapping, null, 2);
+
     const db = await getDB();
     const tx = db.transaction('labels');
     labels = await tx.store.getAll();
@@ -30,8 +41,7 @@
       for (const [k, v] of Object.entries(parsed)) {
         if (!known.has(v)) throw new Error(`Unknown label id for ${k}: ${v}`);
       }
-      const db = await getDB();
-      await db.put('settings', parsed, 'labelMapping');
+      await saveLabelMapping(parsed);
       info = 'Saved!';
     } catch (e: any) {
       info = String(e?.message || e);
@@ -67,4 +77,3 @@
     const file=e.currentTarget.files?.[0]; if(!file) return; file.text().then(t=>mappingJson=t);
   }} />
 </div>
-

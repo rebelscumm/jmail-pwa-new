@@ -6,6 +6,7 @@
   import { threads as threadsStore, messages as messagesStore } from '$lib/stores/threads';
   import { getDB } from '$lib/db/indexeddb';
   import { archiveThread, markRead, markUnread } from '$lib/queue/intents';
+  import { snoozeThreadByRule } from '$lib/snooze/actions';
 
   const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID as string;
 
@@ -111,6 +112,10 @@
         {:else}
           <button on:click={() => markUnread(t.threadId)}>Mark unread</button>
         {/if}
+        <!-- Quick snooze chips -->
+        <button on:click={() => snoozeThreadByRule(t.threadId, '10m')}>10m</button>
+        <button on:click={() => snoozeThreadByRule(t.threadId, '3h')}>3h</button>
+        <button on:click={() => snoozeThreadByRule(t.threadId, '1d')}>1d</button>
       </li>
     {/each}
   </ul>
