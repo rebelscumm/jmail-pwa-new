@@ -45,6 +45,21 @@
     import('$lib/db/backups').then((m) => m.maybeCreateWeeklySnapshot());
     // Keep optional: legacy local snooze viewer; safe if empty
     import('$lib/stores/snooze').then((m)=>m.loadSnoozes());
+
+    // Ensure first-run shows connect wizard at root
+    (async () => {
+      try {
+        const { getDB } = await import('$lib/db/indexeddb');
+        const db = await getDB();
+        const account = await db.get('auth', 'me');
+        if (!account) {
+          const target = (base || '') + '/';
+          if (location.pathname !== target) {
+            location.href = target;
+          }
+        }
+      } catch (_) {}
+    })();
   }
 
   let { children }: { children: Snippet } = $props();
