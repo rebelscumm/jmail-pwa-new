@@ -20,8 +20,8 @@
       navigator.serviceWorker?.addEventListener('message', (e: MessageEvent) => {
         if ((e.data && e.data.type) === 'SYNC_TICK') void hydrateFromCache();
       });
-    } catch (e: any) {
-      error = String(e?.message || e);
+    } catch (e: unknown) {
+      error = e instanceof Error ? e.message : String(e);
     }
     loading = false;
   });
@@ -31,8 +31,8 @@
     try {
       await acquireTokenInteractive();
       await hydrate();
-    } catch (e: any) {
-      error = String(e?.message || e);
+    } catch (e: unknown) {
+      error = e instanceof Error ? e.message : String(e);
     }
   }
 
@@ -44,7 +44,7 @@
     if (cachedThreads?.length) threadsStore.set(cachedThreads);
     const cachedMessages = await db.getAll('messages');
     if (cachedMessages?.length) {
-      const dict: Record<string, any> = {};
+      const dict: Record<string, import('$lib/types').GmailMessage> = {};
       for (const m of cachedMessages) dict[m.id] = m;
       messagesStore.set(dict);
     }
@@ -62,22 +62,22 @@
     // Messages + Threads (first 25)
     const ids = await listInboxMessageIds(25);
     const msgs = await Promise.all(ids.map((id) => getMessageMetadata(id)));
-    const threadMap = new Map<string, { messageIds: string[]; labelIds: Set<string>; last: { from?: string; subject?: string; date?: number } }>();
+    const threadMap: Record<string, { messageIds: string[]; labelIds: Record<string, true>; last: { from?: string; subject?: string; date?: number } }> = {};
     for (const m of msgs) {
-      const entry = threadMap.get(m.threadId) || { messageIds: [], labelIds: new Set<string>(), last: {} };
-      entry.messageIds.push(m.id);
-      m.labelIds.forEach((x) => entry.labelIds.add(x));
+      const existing = threadMap[m.threadId] || { messageIds: [], labelIds: {}, last: {} };
+      existing.messageIds.push(m.id);
+      for (const x of m.labelIds) existing.labelIds[x] = true;
       const date = m.internalDate || Date.parse(m.headers?.Date || '');
-      if (!entry.last.date || (date && date > entry.last.date)) {
-        entry.last = { from: m.headers?.From, subject: m.headers?.Subject, date };
+      if (!existing.last.date || (date && date > existing.last.date)) {
+        existing.last = { from: m.headers?.From, subject: m.headers?.Subject, date };
       }
-      threadMap.set(m.threadId, entry);
+      threadMap[m.threadId] = existing;
     }
-    const threadList = Array.from(threadMap.entries()).map(([threadId, v]) => ({
+    const threadList = Object.entries(threadMap).map(([threadId, v]) => ({
       threadId,
       messageIds: v.messageIds,
       lastMsgMeta: v.last,
-      labelIds: Array.from(v.labelIds)
+      labelIds: Object.keys(v.labelIds)
     }));
     // Persist
     const txMsgs = db.transaction('messages', 'readwrite');
@@ -87,7 +87,7 @@
     for (const t of threadList) await txThreads.store.put(t);
     await txThreads.done;
     threadsStore.set(threadList);
-    const msgDict: Record<string, any> = {};
+    const msgDict: Record<string, import('$lib/types').GmailMessage> = {};
     for (const m of msgs) msgDict[m.id] = m;
     messagesStore.set(msgDict);
   }

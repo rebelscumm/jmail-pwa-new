@@ -1,7 +1,7 @@
 // Minimal service worker for offline support
 const CACHE_NAME = 'm3-svelte-cache-v1';
 
-self.addEventListener('install', (event) => {
+self.addEventListener('install', () => {
   self.skipWaiting();
 });
 
@@ -19,7 +19,9 @@ self.addEventListener('activate', (event) => {
           // Request a periodic sync every 15 minutes for background tasks
           // Name: 'gmail-sync' (ops flush + snooze processing delegated to client via postMessage)
           await registration.periodicSync.register('gmail-sync', { minInterval: 15 * 60 * 1000 });
-        } catch {}
+        } catch (_) {
+          // ignore
+        }
       }
     })()
   );
