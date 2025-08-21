@@ -20,6 +20,9 @@
   } & ActionProps;
 
   let props: Props = $props();
+
+  // Declare generic forwarded events so on:* type-checks on consumers
+  export type $$Events = Record<string, Event>;
 </script>
 
 {#if "for" in props}

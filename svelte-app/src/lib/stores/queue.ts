@@ -18,8 +18,6 @@ export async function refreshSyncState(): Promise<void> {
 
 export async function syncNow(): Promise<void> {
   const { flushOnce } = await import('$lib/queue/flush');
-  const { processDueSnoozes } = await import('$lib/snooze/scheduler');
-  await processDueSnoozes();
   await flushOnce();
   await refreshSyncState();
 }

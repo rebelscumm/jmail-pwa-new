@@ -2,9 +2,10 @@
   import { page } from "$app/stores";
   import { messages, threads } from "$lib/stores/threads";
   import { archiveThread, trashThread, spamThread } from "$lib/queue/intents";
-  import { snoozeThreadByRule } from "$lib/snooze/actions";
+  import { snoozeThreadByRule, manualUnsnoozeThread, isSnoozedThread } from "$lib/snooze/actions";
+  import Button from "$lib/buttons/Button.svelte";
   import { getMessageFull } from "$lib/gmail/api";
-  import { aiSummarizeEmail, aiDraftReply, findUnsubscribeTarget } from "$lib/ai/providers";
+  import { aiSummarizeEmail, aiDraftReply, findUnsubscribeTarget, aiExtractUnsubscribeUrl } from "$lib/ai/providers";
   import { htmlToText } from "$lib/ai/redact";
   const threadId = $page.params.threadId;
   const currentThread = $derived($threads.find((t) => t.threadId === threadId));
@@ -23,9 +24,10 @@
     navigator.clipboard.writeText(draft);
     alert('Reply draft copied to clipboard.');
   }
-  function unsubscribe(mid: string) {
+  async function unsubscribe(mid: string) {
     const m = $messages[mid]; if (!m) return;
-    const target = findUnsubscribeTarget(m.headers, m.bodyHtml);
+    let target = findUnsubscribeTarget(m.headers, m.bodyHtml);
+    if (!target) target = await aiExtractUnsubscribeUrl(m.headers?.Subject || '', m.bodyText, m.bodyHtml);
     if (target) {
       const ok = confirm(`Open unsubscribe target?\n${target}`);
       if (ok) window.open(target, '_blank');
@@ -60,20 +62,23 @@
       </li>
     {/each}
   </ul>
-  <div>
-    <button on:click={() => archiveThread(currentThread.threadId)}>Archive</button>
-    <button on:click={() => trashThread(currentThread.threadId)}>Delete</button>
-    <button on:click={() => spamThread(currentThread.threadId)}>Spam</button>
-    <button on:click={() => snoozeThreadByRule(currentThread.threadId, '10m')}>Snooze 10m</button>
-    <button on:click={() => snoozeThreadByRule(currentThread.threadId, '3h')}>Snooze 3h</button>
-    <button on:click={() => snoozeThreadByRule(currentThread.threadId, '1d')}>Snooze 1d</button>
-    <button on:click={() => copyText(currentThread.lastMsgMeta.subject || '')}>Copy Subject</button>
+  <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+    <Button variant="text" on:click={() => archiveThread(currentThread.threadId)}>Archive</Button>
+    <Button variant="text" on:click={() => trashThread(currentThread.threadId)}>Delete</Button>
+    <Button variant="text" on:click={() => spamThread(currentThread.threadId)}>Spam</Button>
+    {#if isSnoozedThread(currentThread)}
+      <Button variant="text" on:click={() => manualUnsnoozeThread(currentThread.threadId)}>Unsnooze</Button>
+    {/if}
+    <Button variant="text" on:click={() => snoozeThreadByRule(currentThread.threadId, '10m')}>Snooze 10m</Button>
+    <Button variant="text" on:click={() => snoozeThreadByRule(currentThread.threadId, '3h')}>Snooze 3h</Button>
+    <Button variant="text" on:click={() => snoozeThreadByRule(currentThread.threadId, '1d')}>Snooze 1d</Button>
+    <Button variant="text" on:click={() => copyText(currentThread.lastMsgMeta.subject || '')}>Copy Subject</Button>
     {#if currentThread.messageIds?.length}
       {@const mid = currentThread.messageIds[currentThread.messageIds.length-1]}
-      <button on:click={() => unsubscribe(mid)}>Unsubscribe</button>
-      <button on:click={() => summarize(mid)}>Summarize</button>
-      <button on:click={() => replyDraft(mid)}>Reply (AI) → Clipboard</button>
-      <button on:click={() => createTask(mid)}>Create Task</button>
+      <Button variant="text" on:click={() => unsubscribe(mid)}>Unsubscribe</Button>
+      <Button variant="text" on:click={() => summarize(mid)}>Summarize</Button>
+      <Button variant="text" on:click={() => replyDraft(mid)}>Reply (AI) → Clipboard</Button>
+      <Button variant="text" on:click={() => createTask(mid)}>Create Task</Button>
     {/if}
   </div>
 {:else}

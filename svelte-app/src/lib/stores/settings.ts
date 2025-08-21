@@ -55,13 +55,12 @@ export async function updateAppSettings(patch: Partial<AppSettings>): Promise<vo
 
 export function seedDefaultMapping(): Record<string, string> {
   // Placeholder IDs; user must map these in Settings after label discovery.
-  // Keys cover hours, times, relative days, ranges, weekdays, and buckets.
+  // Canonical keys matching SnoozePanel options and rules.
   const keys = [
-    'zz-1hour','zz-2Hour','3Hour',
+    '10m','30m','1h','2h','3h',
     '6am','2pm','7pm',
-    'Day2','Day4','Day7','zDay14',
-    ...Array.from({ length: 30 }, (_, i) => `${String(i + 1).padStart(2,'0')} day${i===0?'':'s'}`),
-    'Monday','Friday',
+    ...Array.from({ length: 30 }, (_, i) => `${i + 1}d`),
+    'Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday',
     'Desktop','long-term'
   ];
   const mapping: Record<string, string> = {};

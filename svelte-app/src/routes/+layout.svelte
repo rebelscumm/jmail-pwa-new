@@ -15,7 +15,6 @@
   import { styling } from "./themeStore";
   import "../app.css";
   import { startFlushLoop } from "$lib/queue/flush";
-  import { startSnoozeTimer } from "$lib/snooze/scheduler";
   import TopAppBar from "$lib/misc/TopAppBar.svelte";
   import { refreshSyncState } from "$lib/stores/queue";
   
@@ -40,47 +39,20 @@
 
   if (typeof window !== 'undefined') {
     startFlushLoop();
-    startSnoozeTimer();
     // Load settings at app start
     import('$lib/stores/settings').then((m)=>m.loadSettings());
     refreshSyncState();
     import('$lib/db/backups').then((m) => m.maybeCreateWeeklySnapshot());
+    // Keep optional: legacy local snooze viewer; safe if empty
     import('$lib/stores/snooze').then((m)=>m.loadSnoozes());
   }
 
   let { children }: { children: Snippet } = $props();
 
   const paths = [
-    {
-      path: base || "/",
-      icon: iconHome,
-      iconS: iconHomeS,
-      label: "Home",
-    },
-    {
-      path: base + "/inbox",
-      icon: iconHome,
-      iconS: iconHomeS,
-      label: "Inbox",
-    },
-    {
-      path: base + "/settings",
-      icon: iconPalette,
-      iconS: iconPaletteS,
-      label: "Settings",
-    },
-    {
-      path: base + "/UX",
-      icon: iconHome,
-      iconS: iconHomeS,
-      label: "UX",
-    },
-    {
-      path: base + "/theme",
-      icon: iconPalette,
-      iconS: iconPaletteS,
-      label: "Theme",
-    },
+    { path: base + "/inbox", icon: iconHome, iconS: iconHomeS, label: "Inbox" },
+    { path: base + "/snoozed", icon: iconBook, iconS: iconBookS, label: "Snoozed" },
+    { path: base + "/settings", icon: iconPalette, iconS: iconPaletteS, label: "Settings" }
   ];
   const normalizePath = (path: string) => {
     const u = new URL(path, page.url.href);
@@ -105,32 +77,7 @@
             text={label}
           />
         {/each}
-        {#if page.url.pathname.startsWith(base + "/docs")}
-          {#each [["Quick start", `${base}/docs/quick-start`], ["Walkthrough", `${base}/docs/detailed-walkthrough`], ["llms.txt", `${base}/llms.txt`]] as [text, href]}
-            <NavCMLXItem
-              variant="auto"
-              {href}
-              selected={page.url.pathname == href}
-              icon={page.url.pathname == href ? iconBookS : iconBook}
-              {text}
-            />
-          {/each}
-        {:else}
-          <NavCMLXItem
-            variant="auto"
-            href={normalizePath(base + "/docs/quick-start")}
-            selected={page.url.pathname.startsWith(base + "/docs")}
-            icon={page.url.pathname.startsWith(base + "/docs") ? iconBookS : iconBook}
-            text="Docs"
-          />
-        {/if}
-        <NavCMLXItem
-          variant="auto"
-          href={normalizePath(base + "/transitions")}
-          selected={page.url.pathname.startsWith(base + "/transitions")}
-          icon={page.url.pathname.startsWith(base + "/transitions") ? iconAnimationS : iconAnimation}
-          text="Animations"
-        />
+        
       </NavCMLX>
     </div>
   {/if}

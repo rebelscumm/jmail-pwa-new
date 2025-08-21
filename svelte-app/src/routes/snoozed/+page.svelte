@@ -1,88 +1,40 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { initAuth, acquireTokenInteractive } from '$lib/gmail/auth';
-  import { listLabels, listInboxMessageIds, getMessageMetadata } from '$lib/gmail/api';
+  import { get } from 'svelte/store';
+  import { getDB } from '$lib/db/indexeddb';
+  import { listMessageIdsByLabelId, getMessageMetadata } from '$lib/gmail/api';
   import { labels as labelsStore } from '$lib/stores/labels';
   import { threads as threadsStore, messages as messagesStore } from '$lib/stores/threads';
-  import { getDB } from '$lib/db/indexeddb';
-  import { archiveThread, markRead, markUnread, undoLast } from '$lib/queue/intents';
-  import { snoozeThreadByRule, manualUnsnoozeThread, isSnoozedThread } from '$lib/snooze/actions';
+  import { settings } from '$lib/stores/settings';
   import VirtualList from '$lib/utils/VirtualList.svelte';
-  import ListItem from '$lib/containers/ListItem.svelte';
-  import Button from '$lib/buttons/Button.svelte';
-  import { snoozeByThread } from '$lib/stores/snooze';
-
-  const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID as string;
+  import { manualUnsnoozeThread, isSnoozedThread } from '$lib/snooze/actions';
 
   let loading = true;
   let error: string | null = null;
   let nextPageToken: string | undefined;
+  let activeLabelId: string | null = null;
+  let labelOptions: { id: string; name: string }[] = [];
   let syncing = false;
-  import { searchQuery } from '$lib/stores/search';
-  let debouncedQuery = '';
-  $effect(() => { const id = setTimeout(() => debouncedQuery = $searchQuery, 300); return () => clearTimeout(id); });
-  const visibleThreads = $derived(
-    !debouncedQuery
-      ? $threadsStore
-      : $threadsStore.filter((t) => {
-          const subj = (t.lastMsgMeta.subject || '').toLowerCase();
-          const from = (t.lastMsgMeta.from || '').toLowerCase();
-          const q = debouncedQuery.toLowerCase();
-          return subj.includes(q) || from.includes(q);
-        })
-  );
 
   onMount(async () => {
     try {
-      await initAuth(CLIENT_ID);
-      // Load settings first for snooze defaults
-      const { loadSettings } = await import('$lib/stores/settings');
-      await loadSettings();
-      await hydrateFromCache();
-      navigator.serviceWorker?.addEventListener('message', (e: MessageEvent) => {
-        if ((e.data && e.data.type) === 'SYNC_TICK') void hydrateFromCache();
-      });
+      // derive snooze labels from mapping
+      const s = get(settings);
+      const snoozeIds = Array.from(new Set(Object.values(s.labelMapping || {}).filter(Boolean)));
+      const mapName: Record<string, string> = {};
+      for (const l of get(labelsStore)) mapName[l.id] = l.name;
+      labelOptions = snoozeIds.map((id) => ({ id, name: mapName[id] || id }));
+      activeLabelId = snoozeIds[0] || null;
+      if (activeLabelId) await hydrate(activeLabelId);
     } catch (e: unknown) {
       error = e instanceof Error ? e.message : String(e);
     }
     loading = false;
   });
 
-  async function signIn() {
-    error = null;
-    try {
-      await acquireTokenInteractive();
-      await hydrate();
-    } catch (e: unknown) {
-      error = e instanceof Error ? e.message : String(e);
-    }
-  }
-
-  async function hydrateFromCache() {
+  async function hydrate(labelId: string) {
     const db = await getDB();
-    const cachedLabels = await db.getAll('labels');
-    if (cachedLabels?.length) labelsStore.set(cachedLabels);
-    const cachedThreads = await db.getAll('threads');
-    if (cachedThreads?.length) threadsStore.set(cachedThreads);
-    const cachedMessages = await db.getAll('messages');
-    if (cachedMessages?.length) {
-      const dict: Record<string, import('$lib/types').GmailMessage> = {};
-      for (const m of cachedMessages) dict[m.id] = m;
-      messagesStore.set(dict);
-    }
-  }
-
-  async function hydrate() {
-    const db = await getDB();
-    // Labels
-    const remoteLabels = await listLabels();
-    const tx = db.transaction('labels', 'readwrite');
-    for (const l of remoteLabels) await tx.store.put(l);
-    await tx.done;
-    labelsStore.set(remoteLabels);
-
-    // Messages + Threads (first 25)
-    const page = await listInboxMessageIds(25);
+    const page = await listMessageIdsByLabelId(labelId, 25);
     nextPageToken = page.nextPageToken;
     const msgs = await mapWithConcurrency(page.ids, 4, (id) => getMessageMetadata(id));
     const threadMap: Record<string, { messageIds: string[]; labelIds: Record<string, true>; last: { from?: string; subject?: string; date?: number } }> = {};
@@ -116,10 +68,10 @@
   }
 
   async function loadMore() {
-    if (!nextPageToken) return;
+    if (!activeLabelId || !nextPageToken) return;
     syncing = true;
     try {
-      const page = await listInboxMessageIds(25, nextPageToken);
+      const page = await listMessageIdsByLabelId(activeLabelId, 25, nextPageToken);
       nextPageToken = page.nextPageToken;
       const msgs = await mapWithConcurrency(page.ids, 4, (id) => getMessageMetadata(id));
       const db = await getDB();
@@ -178,46 +130,39 @@
   }
 </script>
 
+<h3>Snoozed</h3>
+{#if labelOptions.length > 1}
+  <label>
+    Label:
+    <select bind:value={activeLabelId} on:change={(e)=>{ const id=(e.currentTarget as HTMLSelectElement).value; threadsStore.set([]); messagesStore.set({}); hydrate(id); }}>
+      {#each labelOptions as opt}
+        <option value={opt.id}>{opt.name}</option>
+      {/each}
+    </select>
+  </label>
+{/if}
+
 {#if loading}
   <p>Loading…</p>
+{:else if error}
+  <p style="color:red">{error}</p>
+{:else if !activeLabelId}
+  <p>No snooze labels configured. Map them in Settings.</p>
 {:else}
-  <button on:click={signIn}>Sign in with Google</button>
-  {#if error}
-    <p style="color:red">{error}</p>
-  {/if}
-  <h3>Inbox</h3>
-  <button on:click={() => undoLast(1)}>Undo</button>
   <button disabled={!nextPageToken || syncing} on:click={loadMore}>{syncing ? 'Loading…' : 'Load more'}</button>
   <div style="height:70vh">
-    <VirtualList items={visibleThreads} rowHeight={68}>
+    <VirtualList items={$threadsStore} rowHeight={68}>
       {#snippet children(item: import('$lib/types').GmailThread)}
-      <ListItem
-        headline={item.lastMsgMeta.subject || '(no subject)'}
-        supporting={item.lastMsgMeta.from || ''}
-        lines={2}
-        href={`/viewer/${item.threadId}`}
-      />
-      <div style="display:flex; gap:0.5rem; align-items:center; justify-content:flex-end; padding:0 0.5rem;">
+      <div style="display:flex; align-items:center; gap:0.5rem; overflow:hidden">
+        <a href={`/viewer/${item.threadId}`} style="flex:1; min-width:0; white-space:nowrap; text-overflow:ellipsis; overflow:hidden; font-weight:{item.labelIds?.includes('UNREAD') ? 'bold' : 'normal'}">{item.lastMsgMeta.subject}</a>
+        <small style="white-space:nowrap">{item.lastMsgMeta.from}</small>
         {#if isSnoozedThread(item)}
-          <Button variant="text" on:click={() => manualUnsnoozeThread(item.threadId)}>Unsnooze</Button>
+          <button on:click={() => manualUnsnoozeThread(item.threadId)}>Unsnooze</button>
         {/if}
-        <Button variant="text" on:click={() => archiveThread(item.threadId)}>Archive</Button>
-        {#if item.labelIds && item.labelIds.includes('UNREAD')}
-          <Button variant="text" on:click={() => markRead(item.threadId)}>Read</Button>
-        {:else}
-          <Button variant="text" on:click={() => markUnread(item.threadId)}>Unread</Button>
-        {/if}
-        <details>
-          <summary class="m3-font-label-medium" style="cursor:pointer">Snooze ▾</summary>
-          <div style="position:relative">
-            <div style="position:absolute; right:0; z-index:10;">
-              <svelte:component this={(await import('$lib/snooze/SnoozePanel.svelte')).default} onSelect={(k: string) => snoozeThreadByRule(item.threadId, k)} />
-            </div>
-          </div>
-        </details>
       </div>
       {/snippet}
     </VirtualList>
   </div>
 {/if}
+
 

@@ -89,4 +89,18 @@ export function findUnsubscribeTarget(headers?: Record<string,string>, html?: st
   return null;
 }
 
+export async function aiExtractUnsubscribeUrl(subject: string, bodyText?: string, bodyHtml?: string): Promise<string | null> {
+  const s = get(settings);
+  const text = bodyText || htmlToText(bodyHtml) || '';
+  const redacted = redactPII(`${subject}\n\n${text}`);
+  const prompt = `From the following email content, extract a single unsubscribe URL or mailto link if present. Respond with ONLY the URL, nothing else. If none is present, respond with "NONE".\n\n${redacted}`;
+  const provider = s.aiProvider || 'openai';
+  const out = provider === 'anthropic' ? await callAnthropic(prompt) : provider === 'gemini' ? await callGemini(prompt) : await callOpenAI(prompt);
+  const line = (out.text || '').trim();
+  if (!line || /^none$/i.test(line)) return null;
+  if (/^(https?:|mailto:)/i.test(line)) return line;
+  const match = line.match(/(https?:[^\s]+|mailto:[^\s]+)/i);
+  return match ? match[1] : null;
+}
+
 

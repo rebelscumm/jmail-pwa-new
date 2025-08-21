@@ -31,6 +31,16 @@ export async function listInboxMessageIds(maxResults = 25, pageToken?: string): 
   return { ids: (data.messages || []).map((m) => m.id), nextPageToken: data.nextPageToken };
 }
 
+export async function listMessageIdsByLabelId(labelId: string, maxResults = 25, pageToken?: string): Promise<{ ids: string[]; nextPageToken?: string }> {
+  const q = new URLSearchParams({ maxResults: String(maxResults) });
+  q.append('labelIds', labelId);
+  if (pageToken) q.set('pageToken', pageToken);
+  const data = await api<{ messages?: { id: string }[]; nextPageToken?: string }>(
+    `/messages?${q.toString()}`
+  );
+  return { ids: (data.messages || []).map((m) => m.id), nextPageToken: data.nextPageToken };
+}
+
 export async function getMessageMetadata(id: string): Promise<GmailMessage> {
   type GmailMessageApiResponse = {
     id: string;

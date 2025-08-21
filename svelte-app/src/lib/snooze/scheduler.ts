@@ -1,3 +1,4 @@
+// Deprecated: label-driven snooze handled externally; keep timer to process unsnooze label if still used elsewhere
 import { DateTime } from 'luxon';
 import { getDB } from '$lib/db/indexeddb';
 import type { SnoozeQueueItem } from '$lib/types';

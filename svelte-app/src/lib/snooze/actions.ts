@@ -1,30 +1,49 @@
 import { get } from 'svelte/store';
-import { DateTime } from 'luxon';
 import { settings } from '$lib/stores/settings';
-import { resolveRule, DEFAULTS } from '$lib/snooze/rules';
-import { enqueueSnooze } from '$lib/snooze/scheduler';
 import { getDB } from '$lib/db/indexeddb';
-import { queueThreadModify } from '$lib/queue/intents';
-
-const ACCOUNT_SUB = 'me';
+import { queueThreadModify, recordIntent } from '$lib/queue/intents';
+import type { GmailThread } from '$lib/types';
 
 export async function snoozeThreadByRule(threadId: string, ruleKey: string) {
   const db = await getDB();
   const thread = await db.get('threads', threadId);
   if (!thread) return;
   const s = get(settings);
-  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-  const due = resolveRule(ruleKey, zone, { anchorHour: s.anchorHour ?? DEFAULTS.anchorHour, roundMinutes: s.roundMinutes ?? DEFAULTS.roundMinutes });
   const labelId = s.labelMapping[ruleKey];
   if (!labelId) throw new Error(`No labelId mapped for rule ${ruleKey}`);
 
-  // Optimistically apply snooze label and remove INBOX
+  // Label-driven snooze only: add snooze label and remove INBOX; external script handles due time/unsnooze
   await queueThreadModify(threadId, [labelId], ['INBOX']);
-  // Persistent bucket: no due date
-  if (!due) {
-    return;
-  }
-  // Enqueue snooze item
-  await enqueueSnooze(ACCOUNT_SUB, threadId, thread.messageIds, labelId, due, zone, s.unreadOnUnsnooze);
+  await recordIntent(threadId, { type: 'snooze', addLabelIds: [labelId], removeLabelIds: ['INBOX'], ruleKey }, { addLabelIds: ['INBOX'], removeLabelIds: [labelId] });
+}
+
+function getMappedSnoozeLabelIds(): string[] {
+  const s = get(settings);
+  const set = new Set<string>();
+  for (const v of Object.values(s.labelMapping || {})) if (v) set.add(v);
+  return Array.from(set);
+}
+
+export function isSnoozedThread(thread: GmailThread): boolean {
+  const snoozeIds = new Set(getMappedSnoozeLabelIds());
+  return (thread.labelIds || []).some((l) => snoozeIds.has(l));
+}
+
+export async function manualUnsnoozeThread(threadId: string) {
+  const db = await getDB();
+  const thread = (await db.get('threads', threadId)) as GmailThread | undefined;
+  if (!thread) return;
+  const snoozeIds = new Set(getMappedSnoozeLabelIds());
+  const present = (thread.labelIds || []).filter((l) => snoozeIds.has(l));
+  if (!present.length) return; // Nothing to unsnooze
+  const s = get(settings);
+  const add: string[] = ['INBOX'];
+  if (s.unreadOnUnsnooze) add.push('UNREAD');
+  await queueThreadModify(threadId, add, present);
+  await recordIntent(
+    threadId,
+    { type: 'unsnooze', addLabelIds: add, removeLabelIds: present },
+    { addLabelIds: present, removeLabelIds: add }
+  );
 }
 

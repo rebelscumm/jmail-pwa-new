@@ -9,6 +9,7 @@ function roundUp(dt: DateTime, minutes: number) {
   return dt.plus({ minutes: add }).startOf('minute');
 }
 
+// Keep rules for previewing times in the SnoozePanel; actual scheduling is label-driven externally
 export const rules: Record<string, SnoozeRule> = {
   '10m': {
     labelName: '10m',
