@@ -8,8 +8,7 @@
   import { archiveThread, markRead, markUnread, undoLast } from '$lib/queue/intents';
   import { snoozeThreadByRule, manualUnsnoozeThread, isSnoozedThread } from '$lib/snooze/actions';
   import VirtualList from '$lib/utils/VirtualList.svelte';
-  import ListItem from '$lib/containers/ListItem.svelte';
-  import Button from '$lib/buttons/Button.svelte';
+  import ThreadListRow from '$lib/utils/ThreadListRow.svelte';
   import { snoozeByThread } from '$lib/stores/snooze';
 
   const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID as string;
@@ -191,31 +190,7 @@
   <div style="height:70vh">
     <VirtualList items={visibleThreads} rowHeight={68}>
       {#snippet children(item: import('$lib/types').GmailThread)}
-      <ListItem
-        headline={item.lastMsgMeta.subject || '(no subject)'}
-        supporting={item.lastMsgMeta.from || ''}
-        lines={2}
-        href={`/viewer/${item.threadId}`}
-      />
-      <div style="display:flex; gap:0.5rem; align-items:center; justify-content:flex-end; padding:0 0.5rem;">
-        {#if isSnoozedThread(item)}
-          <Button variant="text" onclick={() => manualUnsnoozeThread(item.threadId)}>Unsnooze</Button>
-        {/if}
-        <Button variant="text" onclick={() => archiveThread(item.threadId)}>Archive</Button>
-        {#if item.labelIds && item.labelIds.includes('UNREAD')}
-          <Button variant="text" onclick={() => markRead(item.threadId)}>Read</Button>
-        {:else}
-          <Button variant="text" onclick={() => markUnread(item.threadId)}>Unread</Button>
-        {/if}
-        <details>
-          <summary class="m3-font-label-medium" style="cursor:pointer">Snooze ▾</summary>
-          <div style="position:relative">
-            <div style="position:absolute; right:0; z-index:10;">
-              <svelte:component this={(await import('$lib/snooze/SnoozePanel.svelte')).default} onSelect={(k: string) => snoozeThreadByRule(item.threadId, k)} />
-            </div>
-          </div>
-        </details>
-      </div>
+      <ThreadListRow {item} thread={item} />
       {/snippet}
     </VirtualList>
   </div>

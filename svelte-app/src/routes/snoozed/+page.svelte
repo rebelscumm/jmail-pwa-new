@@ -7,7 +7,7 @@
   import { threads as threadsStore, messages as messagesStore } from '$lib/stores/threads';
   import { settings } from '$lib/stores/settings';
   import VirtualList from '$lib/utils/VirtualList.svelte';
-  import { manualUnsnoozeThread, isSnoozedThread } from '$lib/snooze/actions';
+  import ThreadListRow from '$lib/utils/ThreadListRow.svelte';
 
   let loading = true;
   let error: string | null = null;
@@ -153,13 +153,7 @@
   <div style="height:70vh">
     <VirtualList items={$threadsStore} rowHeight={68}>
       {#snippet children(item: import('$lib/types').GmailThread)}
-      <div style="display:flex; align-items:center; gap:0.5rem; overflow:hidden">
-        <a href={`/viewer/${item.threadId}`} style="flex:1; min-width:0; white-space:nowrap; text-overflow:ellipsis; overflow:hidden; font-weight:{item.labelIds?.includes('UNREAD') ? 'bold' : 'normal'}">{item.lastMsgMeta.subject}</a>
-        <small style="white-space:nowrap">{item.lastMsgMeta.from}</small>
-        {#if isSnoozedThread(item)}
-          <button on:click={() => manualUnsnoozeThread(item.threadId)}>Unsnooze</button>
-        {/if}
-      </div>
+        <ThreadListRow thread={item} />
       {/snippet}
     </VirtualList>
   </div>
