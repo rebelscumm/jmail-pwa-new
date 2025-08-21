@@ -45,13 +45,19 @@ export type SnoozeQueueItem = {
 export type QueuedOp = {
   id: string; // uuid
   accountSub: string;
-  op: {
-    type: "batchModify";
-    ids: string[];
-    addLabelIds: string[];
-    removeLabelIds: string[];
-  };
-  scopeKey: string; // `${threadId}`
+  op:
+    | {
+        type: "batchModify";
+        ids: string[];
+        addLabelIds: string[];
+        removeLabelIds: string[];
+      }
+    | {
+        type: "sendMessage";
+        raw: string; // base64url-encoded RFC 2822
+        threadId?: string;
+      };
+  scopeKey: string; // `${threadId}` or synthetic key for compose
   opHash: string; // deterministic hash of intent for idempotency
   createdAt: number;
   attempts: number;

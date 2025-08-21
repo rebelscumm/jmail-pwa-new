@@ -57,7 +57,7 @@
         {#if $messages[mid]?.bodyText}
           <pre style="white-space:pre-wrap">{ $messages[mid]?.bodyText }</pre>
         {:else}
-          <button on:click={() => loadBody(mid)}>Load full</button>
+          <button onclick={() => loadBody(mid)}>Load full</button>
         {/if}
       </li>
     {/each}

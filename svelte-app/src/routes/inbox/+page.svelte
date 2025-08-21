@@ -13,10 +13,10 @@
 
   const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID as string;
 
-  let loading = true;
-  let error: string | null = null;
-  let nextPageToken: string | undefined;
-  let syncing = false;
+  let loading = $state(true);
+  let error: string | null = $state(null);
+  let nextPageToken: string | undefined = $state();
+  let syncing = $state(false);
   import { searchQuery } from '$lib/stores/search';
   let debouncedQuery = '';
   $effect(() => { const id = setTimeout(() => debouncedQuery = $searchQuery, 300); return () => clearTimeout(id); });
@@ -180,13 +180,15 @@
 {#if loading}
   <p>Loading…</p>
 {:else}
-  <button on:click={signIn}>Sign in with Google</button>
+  <button onclick={signIn}>Sign in with Google</button>
   {#if error}
     <p style="color:red">{error}</p>
   {/if}
-  <h3>Inbox</h3>
-  <button on:click={() => undoLast(1)}>Undo</button>
-  <button disabled={!nextPageToken || syncing} on:click={loadMore}>{syncing ? 'Loading…' : 'Load more'}</button>
+  <div style="display:flex; gap:0.5rem; align-items:center; margin-bottom:0.5rem;">
+    <h3 style="margin:0">Inbox</h3>
+    <button onclick={() => undoLast(1)}>Undo</button>
+    <button disabled={!nextPageToken || syncing} onclick={loadMore}>{syncing ? 'Loading…' : 'Load more'}</button>
+  </div>
   <div style="height:70vh">
     <VirtualList items={visibleThreads} rowHeight={68}>
       {#snippet children(item: import('$lib/types').GmailThread)}

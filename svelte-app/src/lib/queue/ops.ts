@@ -36,6 +36,27 @@ export async function enqueueBatchModify(
   return op;
 }
 
+export async function enqueueSendMessage(
+  accountSub: string,
+  raw: string,
+  threadId?: string
+): Promise<QueuedOp> {
+  const db = await getDB();
+  const intent = { type: 'sendMessage' as const, raw, threadId };
+  const op: QueuedOp = {
+    id: uuidv4(),
+    accountSub,
+    op: intent,
+    scopeKey: threadId || `compose:${uuidv4()}`,
+    opHash: hashIntent(intent),
+    createdAt: Date.now(),
+    attempts: 0,
+    nextAttemptAt: Date.now()
+  };
+  await db.put('ops', op);
+  return op;
+}
+
 export async function getDueOps(now = Date.now()): Promise<QueuedOp[]> {
   const db = await getDB();
   const tx = db.transaction('ops');

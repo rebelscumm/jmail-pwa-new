@@ -116,3 +116,13 @@ export async function getMessageFull(id: string): Promise<GmailMessage> {
   return message;
 }
 
+export async function sendMessageRaw(raw: string, threadId?: string): Promise<{ id: string; threadId: string }> {
+  type SendResponse = { id: string; threadId: string };
+  const body: Record<string, unknown> = { raw };
+  if (threadId) body.threadId = threadId;
+  return await api<SendResponse>(`/messages/send`, {
+    method: 'POST',
+    body: JSON.stringify(body)
+  });
+}
+

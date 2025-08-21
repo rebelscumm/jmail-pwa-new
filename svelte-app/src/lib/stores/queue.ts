@@ -22,7 +22,6 @@ export async function syncNow(): Promise<void> {
   await refreshSyncState();
 }
 
-import { writable } from 'svelte/store';
 import type { QueuedOp } from '$lib/types';
 
 export const queue = writable<QueuedOp[]>([]);

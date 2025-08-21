@@ -13,7 +13,7 @@
   const offsetTop = $derived(startIndex * rowHeight);
 </script>
 
-<div bind:this={container} on:scroll={onScroll} style="overflow: auto; will-change: transform; contain: strict;">
+<div bind:this={container} onscroll={onScroll} style="overflow: auto; will-change: transform; contain: strict;">
   <div style={`height:${total}px; position: relative;`}>
     <div style={`position:absolute; top:${offsetTop}px; left:0; right:0`}>
       {#each slice as item, i}
@@ -23,7 +23,6 @@
       {/each}
     </div>
   </div>
-  <slot />
 </div>
 
 

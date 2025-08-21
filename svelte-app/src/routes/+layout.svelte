@@ -4,6 +4,8 @@
   import iconHomeS from "@ktibow/iconset-material-symbols/home";
   import iconPalette from "@ktibow/iconset-material-symbols/palette-outline";
   import iconPaletteS from "@ktibow/iconset-material-symbols/palette";
+  import iconOutbox from "@ktibow/iconset-material-symbols/outbox-outline";
+  import iconOutboxS from "@ktibow/iconset-material-symbols/outbox";
   import iconBook from "@ktibow/iconset-material-symbols/book-2-outline";
   import iconBookS from "@ktibow/iconset-material-symbols/book-2";
   import iconAnimation from "@ktibow/iconset-material-symbols/animation";
@@ -17,6 +19,14 @@
   import { startFlushLoop } from "$lib/queue/flush";
   import TopAppBar from "$lib/misc/TopAppBar.svelte";
   import { refreshSyncState } from "$lib/stores/queue";
+  import FAB from "$lib/buttons/FAB.svelte";
+  import Snackbar from "$lib/containers/Snackbar.svelte";
+  import iconCompose from "@ktibow/iconset-material-symbols/edit";
+  import BottomSheet from "$lib/containers/BottomSheet.svelte";
+  import TextField from "$lib/forms/TextField.svelte";
+  import TextFieldMultiline from "$lib/forms/TextFieldMultiline.svelte";
+  import Button from "$lib/buttons/Button.svelte";
+  import { queueSendRaw } from "$lib/queue/intents";
   
   if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').catch(() => {});
@@ -46,6 +56,16 @@
     // Keep optional: legacy local snooze viewer; safe if empty
     import('$lib/stores/snooze').then((m)=>m.loadSnoozes());
 
+    // Offline banner
+    const updateBanner = () => {
+      const el = document.querySelector('#offline-banner');
+      if (!el) return;
+      el.classList.toggle('visible', !navigator.onLine);
+    };
+    window.addEventListener('online', updateBanner);
+    window.addEventListener('offline', updateBanner);
+    setTimeout(updateBanner, 0);
+
     // Ensure first-run shows connect wizard at root
     (async () => {
       try {
@@ -67,7 +87,9 @@
   const paths = [
     { path: base + "/inbox", icon: iconHome, iconS: iconHomeS, label: "Inbox" },
     { path: base + "/snoozed", icon: iconBook, iconS: iconBookS, label: "Snoozed" },
-    { path: base + "/settings", icon: iconPalette, iconS: iconPaletteS, label: "Settings" }
+    { path: base + "/settings", icon: iconPalette, iconS: iconPaletteS, label: "Settings" },
+    { path: base + "/theme", icon: iconPalette, iconS: iconPaletteS, label: "Theme" },
+    { path: base + "/outbox", icon: iconOutbox, iconS: iconOutboxS, label: "Outbox" }
   ];
   const normalizePath = (path: string) => {
     const u = new URL(path, page.url.href);
@@ -75,6 +97,41 @@
     if (path.endsWith("/")) path = path.slice(0, -1);
     return path || "/";
   };
+
+  // Compose sheet state
+  let showCompose = $state(false);
+  let to = $state("");
+  let subject = $state("");
+  let body = $state("");
+  let snackbar: ReturnType<typeof Snackbar>;
+
+  function makeRfc2822(): string {
+    const boundary = `----jmail-${Math.random().toString(36).slice(2)}`;
+    const headers = [
+      `To: ${to}`,
+      `Subject: ${subject}`,
+      `Content-Type: text/plain; charset=utf-8`,
+    ].join("\r\n");
+    const raw = `${headers}\r\n\r\n${body}`;
+    // base64url encode
+    const b64 = btoa(unescape(encodeURIComponent(raw)))
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/g, "");
+    return b64;
+  }
+
+  async function sendCompose() {
+    try {
+      const raw = makeRfc2822();
+      await queueSendRaw(raw);
+      showCompose = false;
+      to = subject = body = "";
+      snackbar.show({ message: "Message queued to send", closable: true });
+    } catch (e) {
+      snackbar.show({ message: `Failed to queue: ${e instanceof Error ? e.message : e}`, closable: true });
+    }
+  }
 </script>
 
 {@html `<style>${$styling}</style>`}
@@ -98,7 +155,12 @@
   {/if}
   <div class="content">
     <TopAppBar onSyncNow={() => refreshSyncState()} />
+    <div id="offline-banner" class="offline">You are offline. Actions will be queued.</div>
     {@render children()}
+    <div class="fab-holder">
+      <FAB color="primary" icon={iconCompose} onclick={() => (showCompose = true)} />
+    </div>
+    <Snackbar bind:this={snackbar} />
   </div>
 </div>
 
@@ -153,4 +215,35 @@
       grid-column: 2;
     }
   }
+  .fab-holder {
+    position: fixed;
+    right: 1.25rem;
+    bottom: var(--m3-util-bottom-offset, 1.25rem);
+    z-index: 3;
+  }
+  .offline {
+    display: none;
+    background: rgb(var(--m3-scheme-surface-container-highest));
+    color: rgb(var(--m3-scheme-on-surface));
+    border: 1px solid var(--m3-outline-variant);
+    border-radius: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    margin-bottom: 0.5rem;
+  }
+  .offline.visible { display: block; }
 </style>
+
+{#if showCompose}
+  <BottomSheet close={() => (showCompose = false)}>
+    <div style="display:grid; gap:0.5rem; padding-bottom:1rem;">
+      <h3 class="m3-font-title-medium" style="margin:0.25rem 0 0 0">New message</h3>
+      <TextField label="To" bind:value={to} type="email" />
+      <TextField label="Subject" bind:value={subject} />
+      <TextFieldMultiline label="Message" bind:value={body} rows={8} />
+      <div style="display:flex; gap:0.5rem; justify-content:flex-end;">
+        <Button variant="text" onclick={() => (showCompose = false)}>Discard</Button>
+        <Button variant="filled" onclick={sendCompose}>Send</Button>
+      </div>
+    </div>
+  </BottomSheet>
+{/if}

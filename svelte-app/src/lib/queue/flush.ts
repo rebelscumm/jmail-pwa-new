@@ -1,5 +1,5 @@
 import { getDB } from '$lib/db/indexeddb';
-import { batchModify } from '$lib/gmail/api';
+import { batchModify, sendMessageRaw } from '$lib/gmail/api';
 import type { QueuedOp } from '$lib/types';
 import { backoffDelay, getDueOps, pruneDuplicateOps } from './ops';
 import { refreshSyncState } from '$lib/stores/queue';
@@ -10,11 +10,29 @@ export async function flushOnce(now = Date.now()): Promise<void> {
   const due = await getDueOps(now);
   if (!due.length) return;
 
-  // Coalesce batchModify ops by identical add/remove sets
+  // 1) Handle sendMessage ops individually
+  const sendOps = due.filter((o) => o.op.type === 'sendMessage');
+  for (const o of sendOps) {
+    try {
+      await sendMessageRaw(o.op.raw, o.op.threadId);
+      const tx = db.transaction('ops', 'readwrite');
+      await tx.store.delete(o.id);
+      await tx.done;
+    } catch (e: unknown) {
+      const tx = db.transaction('ops', 'readwrite');
+      o.attempts += 1;
+      o.nextAttemptAt = Date.now() + backoffDelay(o.attempts);
+      o.lastError = e instanceof Error ? e.message : String(e);
+      await tx.store.put(o);
+      await tx.done;
+    }
+  }
+
+  // 2) Coalesce batchModify ops by identical add/remove sets
   const groups = new Map<string, QueuedOp[]>();
   for (const op of due) {
     if (op.op.type !== 'batchModify') continue;
-    const key = JSON.stringify({ add: op.op.addLabelIds.sort(), rem: op.op.removeLabelIds.sort() });
+    const key = JSON.stringify({ add: op.op.addLabelIds.slice().sort(), rem: op.op.removeLabelIds.slice().sort() });
     const arr = groups.get(key) || [];
     arr.push(op);
     groups.set(key, arr);

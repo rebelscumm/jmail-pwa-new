@@ -11,20 +11,24 @@
   import { threads as threadsStore, messages as messagesStore } from '$lib/stores/threads';
 
   const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID as string;
-  let loading = true;
-  let ready = false;
-  let hasAccount = false;
+  let loading = $state(true);
+  let ready = $state(false);
+  let hasAccount = $state(false);
 
-  onMount(async () => {
-    await initAuth(CLIENT_ID).catch(()=>{});
-    authState.subscribe((s)=> ready = s.ready)();
-    const db = await getDB();
-    const account = await db.get('auth', 'me');
-    hasAccount = !!account;
-    if (hasAccount) {
-      await hydrate();
-    }
-    loading = false;
+  onMount(() => {
+    // Kick off auth init; readiness flows through the store
+    void initAuth(CLIENT_ID).catch(()=>{});
+    const unsub = authState.subscribe((s)=> ready = s.ready);
+    (async () => {
+      const db = await getDB();
+      const account = await db.get('auth', 'me');
+      hasAccount = !!account;
+      if (hasAccount) {
+        await hydrate();
+      }
+      loading = false;
+    })();
+    return () => unsub();
   });
 
   async function connect() {

@@ -1,5 +1,5 @@
 import { getDB } from '$lib/db/indexeddb';
-import { enqueueBatchModify, hashIntent } from '$lib/queue/ops';
+import { enqueueBatchModify, enqueueSendMessage, hashIntent } from '$lib/queue/ops';
 import type { GmailMessage, GmailThread, QueuedOp } from '$lib/types';
 import { get } from 'svelte/store';
 import { messages as messagesStore, threads as threadsStore } from '$lib/stores/threads';
@@ -152,5 +152,10 @@ export async function applyRemoteLabels(
   threadsStore.set(currentThreads.map((t) => (t.threadId === threadId ? newThread : t)));
   const currentMessages = get(messagesStore);
   messagesStore.set({ ...currentMessages, ...updatedMessages });
+}
+
+export async function queueSendRaw(rawRfc2822: string, threadId?: string): Promise<void> {
+  // No local state to mutate for compose. Just enqueue and let flush handle retries.
+  await enqueueSendMessage(ACCOUNT_SUB, rawRfc2822, threadId);
 }
 
