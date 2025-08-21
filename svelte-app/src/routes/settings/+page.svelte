@@ -14,6 +14,11 @@
   let _roundMinutes = 5;
   let _unreadOnUnsnooze = true;
   let _notifEnabled = false;
+  let _aiProvider: AppSettings['aiProvider'] = 'openai';
+  let _aiApiKey = '';
+  let _aiModel = '';
+  let _aiPageFetchOptIn = false;
+  let _taskFilePath = '';
   let backups: { key: string; createdAt: number }[] = [];
 
   onMount(async () => {
@@ -23,6 +28,11 @@
     _roundMinutes = s.roundMinutes;
     _unreadOnUnsnooze = s.unreadOnUnsnooze;
     _notifEnabled = !!s.notifEnabled;
+    _aiProvider = s.aiProvider || 'openai';
+    _aiApiKey = s.aiApiKey || '';
+    _aiModel = s.aiModel || '';
+    _aiPageFetchOptIn = !!s.aiPageFetchOptIn;
+    _taskFilePath = s.taskFilePath || '';
     mappingJson = JSON.stringify(s.labelMapping, null, 2);
 
     const db = await getDB();
@@ -66,7 +76,7 @@
   }
 
   async function saveAppSettings() {
-    await updateAppSettings({ anchorHour: _anchorHour, roundMinutes: _roundMinutes, unreadOnUnsnooze: _unreadOnUnsnooze, notifEnabled: _notifEnabled });
+    await updateAppSettings({ anchorHour: _anchorHour, roundMinutes: _roundMinutes, unreadOnUnsnooze: _unreadOnUnsnooze, notifEnabled: _notifEnabled, aiProvider: _aiProvider, aiApiKey: _aiApiKey, aiModel: _aiModel, aiPageFetchOptIn: _aiPageFetchOptIn, taskFilePath: _taskFilePath });
     if (_notifEnabled && 'Notification' in window) {
       const p = await Notification.requestPermission();
       if (p !== 'granted') {
@@ -122,6 +132,23 @@
   <label>Round minutes <input type="number" min="1" max="60" step="1" bind:value={_roundMinutes} /></label>
   <label><input type="checkbox" bind:checked={_unreadOnUnsnooze} /> Unread on unsnooze</label>
   <label><input type="checkbox" bind:checked={_notifEnabled} /> Notifications enabled</label>
+  <fieldset style="border:1px solid var(--m3-outline-variant); padding:0.5rem; border-radius:0.5rem;">
+    <legend>AI</legend>
+    <label>Provider
+      <select bind:value={_aiProvider}>
+        <option value="openai">OpenAI</option>
+        <option value="anthropic">Anthropic</option>
+        <option value="gemini">Gemini</option>
+      </select>
+    </label>
+    <label>API Key <input type="password" bind:value={_aiApiKey} placeholder="sk-..." /></label>
+    <label>Model <input bind:value={_aiModel} placeholder="gpt-4o-mini / claude-3-haiku / gemini-1.5-flash" /></label>
+    <label><input type="checkbox" bind:checked={_aiPageFetchOptIn} /> Allow page fetch for link-only emails</label>
+  </fieldset>
+  <fieldset style="border:1px solid var(--m3-outline-variant); padding:0.5rem; border-radius:0.5rem;">
+    <legend>Tasks</legend>
+    <label>Desktop: task file path <input bind:value={_taskFilePath} placeholder="C:\\path\\to\\tasks.md" /></label>
+  </fieldset>
   <button on:click={saveAppSettings}>Save Settings</button>
 </div>
 

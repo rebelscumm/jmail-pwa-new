@@ -56,3 +56,20 @@ export function backoffDelay(attempts: number): number {
   return base[idx] + jitter;
 }
 
+export async function pruneDuplicateOps(): Promise<void> {
+  const db = await getDB();
+  const all = await db.getAll('ops');
+  const byKey = new Map<string, QueuedOp>();
+  const toDelete: string[] = [];
+  for (const o of all) {
+    const key = `${o.scopeKey}:${o.opHash}`;
+    if (byKey.has(key)) toDelete.push(o.id);
+    else byKey.set(key, o);
+  }
+  if (toDelete.length) {
+    const tx = db.transaction('ops', 'readwrite');
+    for (const id of toDelete) await tx.store.delete(id);
+    await tx.done;
+  }
+}
+

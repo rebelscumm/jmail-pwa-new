@@ -124,3 +124,33 @@ export async function redoLast(n = 1): Promise<void> {
   await tx.done;
 }
 
+export async function applyRemoteLabels(
+  threadId: string,
+  labelsByMessage: Record<string, string[]>
+): Promise<void> {
+  const db = await getDB();
+  const thread = await db.get('threads', threadId);
+  if (!thread) return;
+  const txMsgs = db.transaction('messages', 'readwrite');
+  const updatedMessages: Record<string, GmailMessage> = {};
+  for (const mid of thread.messageIds) {
+    const current = (await txMsgs.store.get(mid)) as GmailMessage | undefined;
+    if (!current) continue;
+    const newLabels = labelsByMessage[mid] || current.labelIds;
+    const newMsg: GmailMessage = { ...current, labelIds: Array.from(new Set(newLabels)) };
+    updatedMessages[mid] = newMsg;
+    await txMsgs.store.put(newMsg);
+  }
+  await txMsgs.done;
+  // Thread labels = union of message labels
+  const union = new Set<string>();
+  for (const arr of Object.values(labelsByMessage)) arr.forEach((l) => union.add(l));
+  const newThread: GmailThread = { ...thread, labelIds: Array.from(union) };
+  await db.put('threads', newThread);
+  // Update stores
+  const currentThreads = get(threadsStore);
+  threadsStore.set(currentThreads.map((t) => (t.threadId === threadId ? newThread : t)));
+  const currentMessages = get(messagesStore);
+  messagesStore.set({ ...currentMessages, ...updatedMessages });
+}
+

@@ -32,6 +32,9 @@
           import('$lib/snooze/actions').then((m) => m.snoozeThreadByRule(data.threadId, '1h'));
         }
       }
+      if (msg.type === 'SYNC_TICK') {
+        import('$lib/db/backups').then((m) => m.maybeCreateWeeklySnapshot());
+      }
     });
   }
 
@@ -41,6 +44,8 @@
     // Load settings at app start
     import('$lib/stores/settings').then((m)=>m.loadSettings());
     refreshSyncState();
+    import('$lib/db/backups').then((m) => m.maybeCreateWeeklySnapshot());
+    import('$lib/stores/snooze').then((m)=>m.loadSnoozes());
   }
 
   let { children }: { children: Snippet } = $props();

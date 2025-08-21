@@ -16,6 +16,14 @@ export async function refreshSyncState(): Promise<void> {
   syncState.set({ pendingOps: ops.length, lastError: lastError || undefined, lastUpdatedAt: Date.now() });
 }
 
+export async function syncNow(): Promise<void> {
+  const { flushOnce } = await import('$lib/queue/flush');
+  const { processDueSnoozes } = await import('$lib/snooze/scheduler');
+  await processDueSnoozes();
+  await flushOnce();
+  await refreshSyncState();
+}
+
 import { writable } from 'svelte/store';
 import type { QueuedOp } from '$lib/types';
 

@@ -1,8 +1,9 @@
 import { getDB } from '$lib/db/indexeddb';
 import { batchModify } from '$lib/gmail/api';
 import type { QueuedOp } from '$lib/types';
-import { backoffDelay, getDueOps } from './ops';
+import { backoffDelay, getDueOps, pruneDuplicateOps } from './ops';
 import { refreshSyncState } from '$lib/stores/queue';
+import { applyRemoteLabels } from './intents';
 
 export async function flushOnce(now = Date.now()): Promise<void> {
   const db = await getDB();
@@ -38,6 +39,17 @@ export async function flushOnce(now = Date.now()): Promise<void> {
         const message = e instanceof Error ? e.message : String(e);
         o.lastError = message;
         await tx.store.put(o);
+        // Minimal reconcile: fetch server state for one thread and apply locally (server wins)
+        try {
+          const threadId = o.scopeKey;
+          // Fetch messages for thread (ids known), then update local labels
+          const labelsByMessage: Record<string, string[]> = {};
+          for (const id of o.op.ids) {
+            const m = await (await import('$lib/gmail/api')).getMessageMetadata(id);
+            labelsByMessage[id] = m.labelIds || [];
+          }
+          await applyRemoteLabels(threadId, labelsByMessage);
+        } catch (_) {}
       }
       await tx.done;
     }
@@ -52,6 +64,7 @@ export function startFlushLoop() {
   const run = async () => {
     try {
       await flushOnce();
+      await pruneDuplicateOps();
       // Notify UI for sync state chip if needed
       if (typeof navigator !== 'undefined' && navigator.serviceWorker?.controller) {
         navigator.serviceWorker.controller.postMessage({ type: 'SYNC_TICK' });

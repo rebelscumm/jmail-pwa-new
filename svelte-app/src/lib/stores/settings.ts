@@ -9,6 +9,11 @@ export type AppSettings = {
   unreadOnUnsnooze: boolean;
   labelMapping: LabelMapping;
   notifEnabled?: boolean;
+  aiProvider?: 'openai' | 'anthropic' | 'gemini';
+  aiApiKey?: string;
+  aiModel?: string;
+  aiPageFetchOptIn?: boolean;
+  taskFilePath?: string;
 };
 
 const DEFAULTS: AppSettings = {

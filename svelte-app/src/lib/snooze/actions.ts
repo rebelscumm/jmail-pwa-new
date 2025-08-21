@@ -18,11 +18,10 @@ export async function snoozeThreadByRule(threadId: string, ruleKey: string) {
   const labelId = s.labelMapping[ruleKey];
   if (!labelId) throw new Error(`No labelId mapped for rule ${ruleKey}`);
 
-  // Optimistically remove INBOX
-  await queueThreadModify(threadId, [], ['INBOX']);
+  // Optimistically apply snooze label and remove INBOX
+  await queueThreadModify(threadId, [labelId], ['INBOX']);
   // Persistent bucket: no due date
   if (!due) {
-    await queueThreadModify(threadId, [labelId], []);
     return;
   }
   // Enqueue snooze item

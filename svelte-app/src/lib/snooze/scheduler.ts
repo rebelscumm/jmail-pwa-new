@@ -57,10 +57,15 @@ export async function processDueSnoozes(now = Date.now(), inboxLabelId = 'INBOX'
     } catch (_) {}
   }
   await tx.done;
-  // Fire a lightweight notification request to the SW if settings allow (UI decides)
+  // Fire a lightweight notification request to the SW if settings allow
   try {
     if (typeof navigator !== 'undefined' && navigator.serviceWorker?.controller) {
-      navigator.serviceWorker.controller.postMessage({ type: 'SHOW_NOTIFICATION', payload: { title: 'Unsnoozed', body: `${due.length} thread(s) returned to Inbox`, tag: 'unsnooze' } });
+      const { settings } = await import('$lib/stores/settings');
+      let enabled = false;
+      settings.subscribe((s) => enabled = !!s.notifEnabled)();
+      if (enabled) {
+        navigator.serviceWorker.controller.postMessage({ type: 'SHOW_NOTIFICATION', payload: { title: 'Unsnoozed', body: `${due.length} thread(s) returned to Inbox`, tag: 'unsnooze' } });
+      }
     }
   } catch (_) {}
 }

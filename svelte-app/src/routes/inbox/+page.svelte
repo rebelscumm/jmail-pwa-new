@@ -8,6 +8,7 @@
   import { archiveThread, markRead, markUnread, undoLast } from '$lib/queue/intents';
   import { snoozeThreadByRule } from '$lib/snooze/actions';
   import VirtualList from '$lib/utils/VirtualList.svelte';
+  import { snoozeByThread } from '$lib/stores/snooze';
 
   const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID as string;
 
@@ -15,9 +16,9 @@
   let error: string | null = null;
   let nextPageToken: string | undefined;
   let syncing = false;
-  let query = '';
+  import { searchQuery } from '$lib/stores/search';
   let debouncedQuery = '';
-  $effect(() => { const id = setTimeout(() => debouncedQuery = query, 300); return () => clearTimeout(id); });
+  $effect(() => { const id = setTimeout(() => debouncedQuery = $searchQuery, 300); return () => clearTimeout(id); });
   const visibleThreads = $derived(
     !debouncedQuery
       ? $threadsStore
@@ -81,7 +82,7 @@
     // Messages + Threads (first 25)
     const page = await listInboxMessageIds(25);
     nextPageToken = page.nextPageToken;
-    const msgs = await Promise.all(page.ids.map((id) => getMessageMetadata(id)));
+    const msgs = await mapWithConcurrency(page.ids, 4, (id) => getMessageMetadata(id));
     const threadMap: Record<string, { messageIds: string[]; labelIds: Record<string, true>; last: { from?: string; subject?: string; date?: number } }> = {};
     for (const m of msgs) {
       const existing = threadMap[m.threadId] || { messageIds: [], labelIds: {}, last: {} };
@@ -118,7 +119,7 @@
     try {
       const page = await listInboxMessageIds(25, nextPageToken);
       nextPageToken = page.nextPageToken;
-      const msgs = await Promise.all(page.ids.map((id) => getMessageMetadata(id)));
+      const msgs = await mapWithConcurrency(page.ids, 4, (id) => getMessageMetadata(id));
       const db = await getDB();
       const txMsgs = db.transaction('messages', 'readwrite');
       for (const m of msgs) await txMsgs.store.put(m);
@@ -159,6 +160,20 @@
       syncing = false;
     }
   }
+
+  async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+    const results: R[] = new Array(items.length);
+    let idx = 0;
+    const workers = new Array(Math.min(limit, items.length)).fill(0).map(async () => {
+      while (true) {
+        const current = idx++;
+        if (current >= items.length) break;
+        results[current] = await fn(items[current]);
+      }
+    });
+    await Promise.all(workers);
+    return results;
+  }
 </script>
 
 {#if loading}
@@ -171,23 +186,36 @@
   <h3>Inbox</h3>
   <button on:click={() => undoLast(1)}>Undo</button>
   <button disabled={!nextPageToken || syncing} on:click={loadMore}>{syncing ? 'Loading…' : 'Load more'}</button>
-  <input placeholder="Search" bind:value={query} style="margin-left:0.5rem; height:2rem;" />
   <div style="height:70vh">
     <VirtualList items={visibleThreads} rowHeight={68}>
       {#snippet children(item: import('$lib/types').GmailThread)}
       <div style="display:flex; align-items:center; gap:0.5rem; overflow:hidden">
         <input type="checkbox" aria-label="Select thread" />
-        <a href={`/viewer/${item.threadId}`} style="flex:1; min-width:0; white-space:nowrap; text-overflow:ellipsis; overflow:hidden">{item.lastMsgMeta.subject}</a>
+        <a href={`/viewer/${item.threadId}`} style="flex:1; min-width:0; white-space:nowrap; text-overflow:ellipsis; overflow:hidden; font-weight:{item.labelIds?.includes('UNREAD') ? 'bold' : 'normal'}">{item.lastMsgMeta.subject}</a>
         <small style="white-space:nowrap">{item.lastMsgMeta.from}</small>
+        {#if item.labelIds}
+          {#each item.labelIds.slice(0,3) as lid}
+            <span style="border:1px solid var(--m3-outline-variant); border-radius:999px; padding:0 0.5rem; font-size:0.75rem;">{lid}</span>
+          {/each}
+        {/if}
+        {#if $snoozeByThread[item.threadId]}
+          {@const due = new Date($snoozeByThread[item.threadId].dueAtUtc)}
+          <span aria-label="Snooze due" style="border:1px dashed var(--m3-outline-variant); border-radius:999px; padding:0 0.5rem; font-size:0.75rem; color:rgb(var(--m3-scheme-on-surface-variant))">{due.toLocaleString(undefined,{weekday:'short', hour:'2-digit', minute:'2-digit'})}</span>
+        {/if}
         <button on:click={() => archiveThread(item.threadId)}>Archive</button>
         {#if item.labelIds && item.labelIds.includes('UNREAD')}
-          <button on:click={() => markRead(item.threadId)}>Mark read</button>
+          <button on:click={() => markRead(item.threadId)}>Read</button>
         {:else}
-          <button on:click={() => markUnread(item.threadId)}>Mark unread</button>
+          <button on:click={() => markUnread(item.threadId)}>Unread</button>
         {/if}
-        <button on:click={() => snoozeThreadByRule(item.threadId, '10m')}>10m</button>
-        <button on:click={() => snoozeThreadByRule(item.threadId, '3h')}>3h</button>
-        <button on:click={() => snoozeThreadByRule(item.threadId, '1d')}>1d</button>
+        <details>
+          <summary>Snooze ▾</summary>
+          <div style="position:relative">
+            <div style="position:absolute; right:0; z-index:10;">
+              <svelte:component this={(await import('$lib/snooze/SnoozePanel.svelte')).default} onSelect={(k: string) => snoozeThreadByRule(item.threadId, k)} />
+            </div>
+          </div>
+        </details>
       </div>
       {/snippet}
     </VirtualList>

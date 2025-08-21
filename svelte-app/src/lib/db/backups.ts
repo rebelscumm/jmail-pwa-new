@@ -82,4 +82,16 @@ export async function restoreBackup(key: string): Promise<void> {
   await tx.done;
 }
 
+export async function maybeCreateWeeklySnapshot(): Promise<void> {
+  const db = await getDB();
+  const all = await db.getAllFromIndex('backups', 'by_createdAt');
+  const now = Date.now();
+  const weekMs = 7 * 24 * 60 * 60 * 1000;
+  const latest = all[all.length - 1];
+  if (!latest || (now - latest.createdAt) > weekMs) {
+    await createBackup();
+    await pruneOldBackups(4);
+  }
+}
+
 

@@ -91,7 +91,8 @@ self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   event.waitUntil((async () => {
     const all = await self.clients.matchAll({ type: 'window' });
-    const client = all[0] || await self.clients.openWindow('/');
+    const url = ndata.threadId ? `/viewer/${ndata.threadId}` : '/';
+    const client = (all[0] && 'focus' in all[0]) ? all[0] : await self.clients.openWindow(url);
     if (client && 'postMessage' in client) {
       client.postMessage({ type: 'NOTIFICATION_ACTION', action, data: ndata });
       client.focus && client.focus();
