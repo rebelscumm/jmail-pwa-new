@@ -28,13 +28,14 @@ export async function flushOnce(now = Date.now()): Promise<void> {
       const tx = db.transaction('ops', 'readwrite');
       for (const o of ops) await tx.store.delete(o.id);
       await tx.done;
-    } catch (e: any) {
+    } catch (e: unknown) {
       // Retry with backoff
       const tx = db.transaction('ops', 'readwrite');
       for (const o of ops) {
         o.attempts += 1;
         o.nextAttemptAt = Date.now() + backoffDelay(o.attempts);
-        o.lastError = String(e?.message || e);
+        const message = e instanceof Error ? e.message : String(e);
+        o.lastError = message;
         await tx.store.put(o);
       }
       await tx.done;

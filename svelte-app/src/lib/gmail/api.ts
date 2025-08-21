@@ -1,5 +1,5 @@
-import { ensureValidToken, getAuthState } from '$lib/gmail/auth';
-import type { GmailLabel, GmailMessage, GmailThread } from '$lib/types';
+import { ensureValidToken } from '$lib/gmail/auth';
+import type { GmailLabel, GmailMessage } from '$lib/types';
 
 const GMAIL_BASE = 'https://gmail.googleapis.com/gmail/v1/users/me';
 
@@ -30,7 +30,15 @@ export async function listInboxMessageIds(maxResults = 25): Promise<string[]> {
 }
 
 export async function getMessageMetadata(id: string): Promise<GmailMessage> {
-  const data = await api<any>(
+  type GmailMessageApiResponse = {
+    id: string;
+    threadId: string;
+    snippet?: string;
+    internalDate?: string | number;
+    labelIds?: string[];
+    payload?: { headers?: { name: string; value: string }[] };
+  };
+  const data = await api<GmailMessageApiResponse>(
     `/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date`
   );
   const headers: Record<string, string> = {};

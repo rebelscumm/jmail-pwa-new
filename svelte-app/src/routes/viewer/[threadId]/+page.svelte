@@ -1,17 +1,15 @@
 <script lang="ts">
-  import { page } from "$app/state";
+  import { page } from "$app/stores";
   import { messages, threads } from "$lib/stores/threads";
   const threadId = $page.params.threadId;
-  $effect(() => {
-    // noop: rely on hydrated stores for MVP
-  });
+  const currentThread = $derived($threads.find((t) => t.threadId === threadId));
 </script>
 
-{#if $threads.find((t) => t.threadId === threadId) as thread}
-  <h2>{thread.lastMsgMeta.subject}</h2>
-  <p><small>{thread.lastMsgMeta.from}</small></p>
+{#if currentThread}
+  <h2>{currentThread.lastMsgMeta.subject}</h2>
+  <p><small>{currentThread.lastMsgMeta.from}</small></p>
   <ul>
-    {#each thread.messageIds as mid}
+    {#each currentThread.messageIds as mid}
       <li>{ $messages[mid]?.snippet }</li>
     {/each}
   </ul>
@@ -19,7 +17,7 @@
   <p>Thread not loaded.</p>
 {/if}
 
-<script context="module" lang="ts">
+<script module lang="ts">
   export const prerender = false;
   export const ssr = false;
   export const csr = true;

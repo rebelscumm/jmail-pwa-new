@@ -4,20 +4,21 @@
   import { listLabels } from '$lib/gmail/api';
   import type { GmailLabel } from '$lib/types';
   import { loadSettings, saveLabelMapping, settings } from '$lib/stores/settings';
+  import type { AppSettings } from '$lib/stores/settings';
 
   let labels: GmailLabel[] = [];
   let mappingJson = '';
   let info = '';
-  let anchorHour = 5;
-  let roundMinutes = 5;
-  let unreadOnUnsnooze = true;
+  let _anchorHour = 5;
+  let _roundMinutes = 5;
+  let _unreadOnUnsnooze = true;
 
   onMount(async () => {
     await loadSettings();
-    const s = $settings as any;
-    anchorHour = s.anchorHour;
-    roundMinutes = s.roundMinutes;
-    unreadOnUnsnooze = s.unreadOnUnsnooze;
+    const s = $settings as AppSettings;
+    _anchorHour = s.anchorHour;
+    _roundMinutes = s.roundMinutes;
+    _unreadOnUnsnooze = s.unreadOnUnsnooze;
     mappingJson = JSON.stringify(s.labelMapping, null, 2);
 
     const db = await getDB();
@@ -43,8 +44,8 @@
       }
       await saveLabelMapping(parsed);
       info = 'Saved!';
-    } catch (e: any) {
-      info = String(e?.message || e);
+    } catch (e: unknown) {
+      info = e instanceof Error ? e.message : String(e);
     }
   }
 
@@ -73,7 +74,8 @@
   <button on:click={saveMapping}>Save</button>
   <span>{info}</span>
   <button on:click={() => navigator.clipboard.writeText(mappingJson)}>Copy</button>
-  <input type="file" accept="application/json" on:change={(e:any)=>{
-    const file=e.currentTarget.files?.[0]; if(!file) return; file.text().then(t=>mappingJson=t);
+  <input type="file" accept="application/json" on:change={(e)=>{
+    const input = e.currentTarget as HTMLInputElement;
+    const file=input.files?.[0]; if(!file) return; file.text().then((t: string)=>mappingJson=t);
   }} />
 </div>
