@@ -199,13 +199,13 @@
       />
       <div style="display:flex; gap:0.5rem; align-items:center; justify-content:flex-end; padding:0 0.5rem;">
         {#if isSnoozedThread(item)}
-          <Button variant="text" on:click={() => manualUnsnoozeThread(item.threadId)}>Unsnooze</Button>
+          <Button variant="text" onclick={() => manualUnsnoozeThread(item.threadId)}>Unsnooze</Button>
         {/if}
-        <Button variant="text" on:click={() => archiveThread(item.threadId)}>Archive</Button>
+        <Button variant="text" onclick={() => archiveThread(item.threadId)}>Archive</Button>
         {#if item.labelIds && item.labelIds.includes('UNREAD')}
-          <Button variant="text" on:click={() => markRead(item.threadId)}>Read</Button>
+          <Button variant="text" onclick={() => markRead(item.threadId)}>Read</Button>
         {:else}
-          <Button variant="text" on:click={() => markUnread(item.threadId)}>Unread</Button>
+          <Button variant="text" onclick={() => markUnread(item.threadId)}>Unread</Button>
         {/if}
         <details>
           <summary class="m3-font-label-medium" style="cursor:pointer">Snooze ▾</summary>

@@ -63,22 +63,22 @@
     {/each}
   </ul>
   <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
-    <Button variant="text" on:click={() => archiveThread(currentThread.threadId)}>Archive</Button>
-    <Button variant="text" on:click={() => trashThread(currentThread.threadId)}>Delete</Button>
-    <Button variant="text" on:click={() => spamThread(currentThread.threadId)}>Spam</Button>
+    <Button variant="text" onclick={() => archiveThread(currentThread.threadId)}>Archive</Button>
+    <Button variant="text" onclick={() => trashThread(currentThread.threadId)}>Delete</Button>
+    <Button variant="text" onclick={() => spamThread(currentThread.threadId)}>Spam</Button>
     {#if isSnoozedThread(currentThread)}
-      <Button variant="text" on:click={() => manualUnsnoozeThread(currentThread.threadId)}>Unsnooze</Button>
+      <Button variant="text" onclick={() => manualUnsnoozeThread(currentThread.threadId)}>Unsnooze</Button>
     {/if}
-    <Button variant="text" on:click={() => snoozeThreadByRule(currentThread.threadId, '10m')}>Snooze 10m</Button>
-    <Button variant="text" on:click={() => snoozeThreadByRule(currentThread.threadId, '3h')}>Snooze 3h</Button>
-    <Button variant="text" on:click={() => snoozeThreadByRule(currentThread.threadId, '1d')}>Snooze 1d</Button>
-    <Button variant="text" on:click={() => copyText(currentThread.lastMsgMeta.subject || '')}>Copy Subject</Button>
+    <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '10m')}>Snooze 10m</Button>
+    <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '3h')}>Snooze 3h</Button>
+    <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '1d')}>Snooze 1d</Button>
+    <Button variant="text" onclick={() => copyText(currentThread.lastMsgMeta.subject || '')}>Copy Subject</Button>
     {#if currentThread.messageIds?.length}
       {@const mid = currentThread.messageIds[currentThread.messageIds.length-1]}
-      <Button variant="text" on:click={() => unsubscribe(mid)}>Unsubscribe</Button>
-      <Button variant="text" on:click={() => summarize(mid)}>Summarize</Button>
-      <Button variant="text" on:click={() => replyDraft(mid)}>Reply (AI) → Clipboard</Button>
-      <Button variant="text" on:click={() => createTask(mid)}>Create Task</Button>
+      <Button variant="text" onclick={() => unsubscribe(mid)}>Unsubscribe</Button>
+      <Button variant="text" onclick={() => summarize(mid)}>Summarize</Button>
+      <Button variant="text" onclick={() => replyDraft(mid)}>Reply (AI) → Clipboard</Button>
+      <Button variant="text" onclick={() => createTask(mid)}>Create Task</Button>
     {/if}
   </div>
 {:else}
