@@ -35,13 +35,29 @@ export interface AppDB extends DBSchema {
     key: string; // sub
     value: AccountAuthMeta;
   };
+  backups: {
+    key: string; // snapshot key e.g. `weekly-2025-03`
+    value: { key: string; createdAt: number; data: unknown };
+    indexes: { by_createdAt: number };
+  };
+  journal: {
+    key: string; // uuid
+    value: {
+      id: string;
+      createdAt: number;
+      threadId: string;
+      intent: { type: string; addLabelIds: string[]; removeLabelIds: string[]; ruleKey?: string };
+      inverse: { addLabelIds: string[]; removeLabelIds: string[] };
+    };
+    indexes: { by_createdAt: number };
+  };
 }
 
 let dbPromise: Promise<IDBPDatabase<AppDB>> | null = null;
 
 export function getDB(): Promise<IDBPDatabase<AppDB>> {
   if (!dbPromise) {
-    dbPromise = openDB<AppDB>('gmail-pwa-db', 1, {
+    dbPromise = openDB<AppDB>('gmail-pwa-db', 2, {
       upgrade(db, oldVersion, _newVersion, _tx) {
         // v1 initial schema
         if (oldVersion < 1) {
@@ -64,6 +80,13 @@ export function getDB(): Promise<IDBPDatabase<AppDB>> {
           db.createObjectStore('settings');
           db.createObjectStore('auth');
         }
+        // v2: backups + journal
+        if (oldVersion < 2) {
+          const backups = db.createObjectStore('backups', { keyPath: 'key' });
+          backups.createIndex('by_createdAt', 'createdAt');
+          const journal = db.createObjectStore('journal', { keyPath: 'id' });
+          journal.createIndex('by_createdAt', 'createdAt');
+        }
       }
     });
   }
@@ -79,7 +102,9 @@ export async function clearAllStores() {
     db.clear('snoozeQueue'),
     db.clear('ops'),
     db.clear('settings'),
-    db.clear('auth')
+    db.clear('auth'),
+    db.clear('backups'),
+    db.clear('journal')
   ]);
 }
 

@@ -16,14 +16,31 @@
   import "../app.css";
   import { startFlushLoop } from "$lib/queue/flush";
   import { startSnoozeTimer } from "$lib/snooze/scheduler";
+  import TopAppBar from "$lib/misc/TopAppBar.svelte";
+  import { refreshSyncState } from "$lib/stores/queue";
   
   if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').catch(() => {});
+    navigator.serviceWorker.addEventListener('message', (e) => {
+      const msg = e.data || {};
+      if (msg.type === 'NOTIFICATION_ACTION') {
+        const data = msg.data || {};
+        if (msg.action === 'archive' && data.threadId) {
+          import('$lib/queue/intents').then((m) => m.archiveThread(data.threadId));
+        }
+        if (msg.action === 'snooze1h' && data.threadId) {
+          import('$lib/snooze/actions').then((m) => m.snoozeThreadByRule(data.threadId, '1h'));
+        }
+      }
+    });
   }
 
   if (typeof window !== 'undefined') {
     startFlushLoop();
     startSnoozeTimer();
+    // Load settings at app start
+    import('$lib/stores/settings').then((m)=>m.loadSettings());
+    refreshSyncState();
   }
 
   let { children }: { children: Snippet } = $props();
@@ -113,6 +130,7 @@
     </div>
   {/if}
   <div class="content">
+    <TopAppBar onSyncNow={() => refreshSyncState()} />
     {@render children()}
   </div>
 </div>

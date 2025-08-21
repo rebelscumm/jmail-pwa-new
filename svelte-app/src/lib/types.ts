@@ -9,6 +9,8 @@ export type GmailMessage = {
   headers?: Record<string, string>;
   labelIds: string[];
   internalDate?: number; // ms epoch
+  bodyText?: string;
+  bodyHtml?: string;
 };
 
 export type GmailThread = {

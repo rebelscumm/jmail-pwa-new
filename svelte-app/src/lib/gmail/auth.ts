@@ -75,6 +75,15 @@ export async function acquireTokenInteractive(): Promise<void> {
   const now = Date.now();
   const expiryMs = now + (token.expires_in - 60) * 1000; // safety margin
   authState.update((s) => ({ ...s, accessToken: token.access_token, expiryMs }));
+  try {
+    // Persist minimal token metadata for session continuity without storing secrets
+    const { getDB } = await import('$lib/db/indexeddb');
+    const db = await getDB();
+    const account = { sub: 'me', tokenExpiry: expiryMs } satisfies AccountAuthMeta;
+    await db.put('auth', account, account.sub);
+  } catch (_) {
+    // non-fatal
+  }
 }
 
 export async function ensureValidToken(): Promise<string> {
@@ -91,6 +100,12 @@ export async function ensureValidToken(): Promise<string> {
   const now = Date.now();
   const expiryMs = now + (token.expires_in - 60) * 1000;
   authState.update((s) => ({ ...s, accessToken: token.access_token, expiryMs }));
+  try {
+    const { getDB } = await import('$lib/db/indexeddb');
+    const db = await getDB();
+    const account = { sub: 'me', tokenExpiry: expiryMs } satisfies AccountAuthMeta;
+    await db.put('auth', account, account.sub);
+  } catch (_) {}
   return token.access_token;
 }
 

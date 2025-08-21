@@ -64,4 +64,39 @@ self.addEventListener('periodicsync', (event) => {
   }
 });
 
+// Basic notification helper for due snoozes; app triggers show via postMessage
+self.addEventListener('message', async (event) => {
+  const data = event.data || {};
+  if (data && data.type === 'SHOW_NOTIFICATION' && self.registration?.showNotification) {
+    const { title, body, tag, data: extra, actions } = data.payload || {};
+    try {
+      await self.registration.showNotification(title || 'Update', {
+        body: body || '',
+        tag: tag || undefined,
+        data: extra || undefined,
+        actions: actions || [
+          { action: 'archive', title: 'Archive' },
+          { action: 'snooze1h', title: '+1h' }
+        ]
+      });
+    } catch (_) {
+      // ignore
+    }
+  }
+});
+
+self.addEventListener('notificationclick', (event) => {
+  const action = event.action;
+  const ndata = event.notification?.data || {};
+  event.notification.close();
+  event.waitUntil((async () => {
+    const all = await self.clients.matchAll({ type: 'window' });
+    const client = all[0] || await self.clients.openWindow('/');
+    if (client && 'postMessage' in client) {
+      client.postMessage({ type: 'NOTIFICATION_ACTION', action, data: ndata });
+      client.focus && client.focus();
+    }
+  })());
+});
+
 

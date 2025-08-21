@@ -8,13 +8,15 @@ export type AppSettings = {
   roundMinutes: number;
   unreadOnUnsnooze: boolean;
   labelMapping: LabelMapping;
+  notifEnabled?: boolean;
 };
 
 const DEFAULTS: AppSettings = {
   anchorHour: 5,
   roundMinutes: 5,
   unreadOnUnsnooze: true,
-  labelMapping: {}
+  labelMapping: {},
+  notifEnabled: false
 };
 
 export const settings = writable<AppSettings>({ ...DEFAULTS });
@@ -44,5 +46,21 @@ export async function updateAppSettings(patch: Partial<AppSettings>): Promise<vo
   const db = await getDB();
   const current = await db.get('settings', 'app');
   await db.put('settings', { ...(current as object), ...patch }, 'app');
+}
+
+export function seedDefaultMapping(): Record<string, string> {
+  // Placeholder IDs; user must map these in Settings after label discovery.
+  // Keys cover hours, times, relative days, ranges, weekdays, and buckets.
+  const keys = [
+    'zz-1hour','zz-2Hour','3Hour',
+    '6am','2pm','7pm',
+    'Day2','Day4','Day7','zDay14',
+    ...Array.from({ length: 30 }, (_, i) => `${String(i + 1).padStart(2,'0')} day${i===0?'':'s'}`),
+    'Monday','Friday',
+    'Desktop','long-term'
+  ];
+  const mapping: Record<string, string> = {};
+  for (const k of keys) mapping[k] = '';
+  return mapping;
 }
 

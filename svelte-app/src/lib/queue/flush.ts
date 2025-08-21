@@ -2,6 +2,7 @@ import { getDB } from '$lib/db/indexeddb';
 import { batchModify } from '$lib/gmail/api';
 import type { QueuedOp } from '$lib/types';
 import { backoffDelay, getDueOps } from './ops';
+import { refreshSyncState } from '$lib/stores/queue';
 
 export async function flushOnce(now = Date.now()): Promise<void> {
   const db = await getDB();
@@ -41,6 +42,7 @@ export async function flushOnce(now = Date.now()): Promise<void> {
       await tx.done;
     }
   }
+  await refreshSyncState().catch(() => {});
 }
 
 let timer: number | null = null;
@@ -50,6 +52,10 @@ export function startFlushLoop() {
   const run = async () => {
     try {
       await flushOnce();
+      // Notify UI for sync state chip if needed
+      if (typeof navigator !== 'undefined' && navigator.serviceWorker?.controller) {
+        navigator.serviceWorker.controller.postMessage({ type: 'SYNC_TICK' });
+      }
     } finally {
       timer = setTimeout(run, 2000) as unknown as number;
     }

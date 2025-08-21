@@ -15,12 +15,16 @@ export async function snoozeThreadByRule(threadId: string, ruleKey: string) {
   const s = get(settings);
   const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   const due = resolveRule(ruleKey, zone, { anchorHour: s.anchorHour ?? DEFAULTS.anchorHour, roundMinutes: s.roundMinutes ?? DEFAULTS.roundMinutes });
-  if (!due) return;
   const labelId = s.labelMapping[ruleKey];
   if (!labelId) throw new Error(`No labelId mapped for rule ${ruleKey}`);
 
   // Optimistically remove INBOX
   await queueThreadModify(threadId, [], ['INBOX']);
+  // Persistent bucket: no due date
+  if (!due) {
+    await queueThreadModify(threadId, [labelId], []);
+    return;
+  }
   // Enqueue snooze item
   await enqueueSnooze(ACCOUNT_SUB, threadId, thread.messageIds, labelId, due, zone, s.unreadOnUnsnooze);
 }

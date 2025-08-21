@@ -69,21 +69,58 @@ export async function queueThreadModify(threadId: string, addLabelIds: string[],
 
 export async function archiveThread(threadId: string) {
   await queueThreadModify(threadId, [], ['INBOX']);
+  await recordIntent(threadId, { type: 'archive', addLabelIds: [], removeLabelIds: ['INBOX'] }, { addLabelIds: ['INBOX'], removeLabelIds: [] });
 }
 
 export async function spamThread(threadId: string) {
   await queueThreadModify(threadId, ['SPAM'], ['INBOX']);
+  await recordIntent(threadId, { type: 'spam', addLabelIds: ['SPAM'], removeLabelIds: ['INBOX'] }, { addLabelIds: ['INBOX'], removeLabelIds: ['SPAM'] });
 }
 
 export async function trashThread(threadId: string) {
   await queueThreadModify(threadId, ['TRASH'], ['INBOX']);
+  await recordIntent(threadId, { type: 'trash', addLabelIds: ['TRASH'], removeLabelIds: ['INBOX'] }, { addLabelIds: ['INBOX'], removeLabelIds: ['TRASH'] });
 }
 
 export async function markRead(threadId: string) {
   await queueThreadModify(threadId, [], ['UNREAD']);
+  await recordIntent(threadId, { type: 'markRead', addLabelIds: [], removeLabelIds: ['UNREAD'] }, { addLabelIds: ['UNREAD'], removeLabelIds: [] });
 }
 
 export async function markUnread(threadId: string) {
   await queueThreadModify(threadId, ['UNREAD'], []);
+  await recordIntent(threadId, { type: 'markUnread', addLabelIds: ['UNREAD'], removeLabelIds: [] }, { addLabelIds: [], removeLabelIds: ['UNREAD'] });
+}
+
+export async function recordIntent(threadId: string, intent: { type: string; addLabelIds: string[]; removeLabelIds: string[]; ruleKey?: string }, inverse: { addLabelIds: string[]; removeLabelIds: string[] }) {
+  const db = await getDB();
+  const entry = { id: crypto.randomUUID(), createdAt: Date.now(), threadId, intent, inverse };
+  await db.put('journal', entry);
+}
+
+export async function undoLast(n = 1): Promise<void> {
+  const db = await getDB();
+  const tx = db.transaction('journal', 'readwrite');
+  const idx = tx.store.index('by_createdAt');
+  const entries = await idx.getAll();
+  const toUndo = entries.slice(-n);
+  for (const e of toUndo.reverse()) {
+    await queueThreadModify(e.threadId, e.inverse.addLabelIds, e.inverse.removeLabelIds);
+    await tx.store.delete(e.id);
+  }
+  await tx.done;
+}
+
+export async function redoLast(n = 1): Promise<void> {
+  const db = await getDB();
+  const tx = db.transaction('journal', 'readwrite');
+  const idx = tx.store.index('by_createdAt');
+  const entries = await idx.getAll();
+  const toRedo = entries.slice(-n);
+  for (const e of toRedo) {
+    await queueThreadModify(e.threadId, e.intent.addLabelIds, e.intent.removeLabelIds);
+    await recordIntent(e.threadId, e.intent, e.inverse);
+  }
+  await tx.done;
 }
 
