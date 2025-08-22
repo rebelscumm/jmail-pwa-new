@@ -60,8 +60,13 @@ declare global {
 export async function initAuth(clientId: string) {
   lastInitAt = new Date().toISOString();
   try {
+    // Auto-resolve client ID from multiple sources if missing
     if (!clientId || typeof clientId !== 'string' || clientId.trim().length === 0) {
-      throw new Error('Missing Google client ID (VITE_GOOGLE_CLIENT_ID)');
+      const resolved = resolveGoogleClientId();
+      if (resolved && resolved.trim().length > 0) clientId = resolved;
+      if (!clientId || String(clientId).trim().length === 0) {
+        throw new Error('Missing Google client ID (VITE_GOOGLE_CLIENT_ID)');
+      }
     }
     await loadGis();
     if (!window?.google?.accounts?.oauth2) {

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { initAuth, acquireTokenInteractive, authState, getAuthDiagnostics } from '$lib/gmail/auth';
+  import { initAuth, acquireTokenInteractive, authState, getAuthDiagnostics, resolveGoogleClientId } from '$lib/gmail/auth';
   import { listLabels, listInboxMessageIds, getMessageMetadata, GmailApiError, getProfile, copyGmailDiagnosticsToClipboard, getAndClearGmailDiagnostics } from '$lib/gmail/api';
   import { labels as labelsStore } from '$lib/stores/labels';
   import { threads as threadsStore, messages as messagesStore } from '$lib/stores/threads';
@@ -11,7 +11,7 @@
   import Card from '$lib/containers/Card.svelte';
   import LoadingIndicator from '$lib/forms/LoadingIndicator.svelte';
 
-  const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID as string;
+  let CLIENT_ID: string = (import.meta as any)?.env?.VITE_GOOGLE_CLIENT_ID as string;
 
   let loading = $state(true);
   let ready = $state(false);
@@ -67,6 +67,7 @@
     const unsub = authState.subscribe((s) => (ready = s.ready));
     (async () => {
       try {
+        CLIENT_ID = CLIENT_ID || resolveGoogleClientId() as string;
         await initAuth(CLIENT_ID);
         // Load settings first for snooze defaults
         const { loadSettings } = await import('$lib/stores/settings');
@@ -110,6 +111,7 @@
     apiErrorStatus = undefined;
     try {
       if (!ready) {
+        CLIENT_ID = CLIENT_ID || resolveGoogleClientId() as string;
         try { await initAuth(CLIENT_ID); } catch (_) {}
       }
       await acquireTokenInteractive();
