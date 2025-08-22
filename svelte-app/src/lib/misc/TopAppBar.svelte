@@ -23,7 +23,8 @@
   import iconBackup from '@ktibow/iconset-material-symbols/backup';
   import iconRefresh from '@ktibow/iconset-material-symbols/refresh';
   import iconLogout from '@ktibow/iconset-material-symbols/logout';
-  let { onSyncNow }: { onSyncNow?: () => void } = $props();
+  import iconBack from '@ktibow/iconset-material-symbols/chevron-left';
+  let { onSyncNow, backHref, backLabel }: { onSyncNow?: () => void; backHref?: string; backLabel?: string } = $props();
   let overflowDetails: HTMLDetailsElement;
   let aboutOpen = $state(false);
   function toggleOverflow(e: MouseEvent) {
@@ -38,6 +39,19 @@
       await syncNow();
     } catch {}
     onSyncNow && onSyncNow();
+  }
+
+  function handleBack() {
+    try {
+      const canGoBack = typeof document !== 'undefined' && document.referrer && history.length > 1;
+      if (canGoBack) {
+        history.back();
+        return;
+      }
+    } catch {}
+    if (backHref) {
+      location.href = backHref;
+    }
   }
 
   let search = $state('');
@@ -140,6 +154,11 @@
 
 <div class="topbar">
   <div class="left">
+    {#if backHref}
+      <Button variant="text" iconType="full" aria-label={backLabel || 'Back'} onclick={handleBack}>
+        <Icon icon={iconBack} />
+      </Button>
+    {/if}
     <SplitButton variant="filled" x="inner" y="down" onclick={() => doUndo(1)} on:toggle={(e) => { if (e.detail) refreshUndo(); }}>
       {#snippet children()}
         <Icon icon={iconUndo} />
