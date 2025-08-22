@@ -23,6 +23,7 @@
   import iconBackup from '@ktibow/iconset-material-symbols/backup';
   import iconRefresh from '@ktibow/iconset-material-symbols/refresh';
   import iconLogout from '@ktibow/iconset-material-symbols/logout';
+  import iconContentCopy from '@ktibow/iconset-material-symbols/content-copy';
   let { onSyncNow }: { onSyncNow?: () => void } = $props();
   let overflowDetails: HTMLDetailsElement;
   let aboutOpen = $state(false);
@@ -203,6 +204,7 @@
         <MenuItem icon={iconSettings} onclick={() => (location.href = '/settings')}>Settings</MenuItem>
         <MenuItem icon={iconBackup} onclick={async()=>{ const m = await import('$lib/db/backups'); await m.createBackup(); await m.pruneOldBackups(4); }}>Create backup</MenuItem>
         <MenuItem icon={iconRefresh} onclick={() => { const u = new URL(window.location.href); u.searchParams.set('refresh', '1'); location.href = u.toString(); }}>Force update</MenuItem>
+        <MenuItem icon={iconContentCopy} onclick={async()=>{ const ok = await copyGmailDiagnosticsToClipboard({ reason: 'topbar_manual_copy', pendingOps: $syncState.pendingOps, lastUpdatedAt: $syncState.lastUpdatedAt }); showSnackbar({ message: ok ? 'Diagnostics copied' : 'Failed to copy diagnostics', closable: true }); }}>Copy diagnostics</MenuItem>
         <MenuItem icon={iconLogout} onclick={doRelogin}>Re-login</MenuItem>
         <MenuItem icon={iconInfo} onclick={() => { aboutOpen = true; }}>About</MenuItem>
       </Menu>
