@@ -249,7 +249,6 @@
     <Divider inset />
 
     <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
-      <Button variant="text" onclick={() => copyDiagnostics('viewer_toolbar_copy')}>Copy diagnostics</Button>
       <Button variant="text" onclick={() => relogin(currentThread.messageIds?.[0])}>Re-login</Button>
       <Button variant="text" onclick={() => archiveThread(currentThread.threadId).then(()=> showSnackbar({ message: 'Archived', actions: { Undo: () => undoLast(1) } }))}>Archive</Button>
       <Button variant="text" color="error" onclick={() => trashThread(currentThread.threadId).then(()=> showSnackbar({ message: 'Deleted', actions: { Undo: () => undoLast(1) } }))}>Delete</Button>
