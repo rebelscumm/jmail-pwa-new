@@ -15,6 +15,8 @@
   import iconUndo from '@ktibow/iconset-material-symbols/undo';
   import iconRedo from '@ktibow/iconset-material-symbols/redo';
   import iconSync from '@ktibow/iconset-material-symbols/sync';
+  import Dialog from '$lib/containers/Dialog.svelte';
+  import iconInfo from '@ktibow/iconset-material-symbols/info';
   let { onSyncNow }: { onSyncNow?: () => void } = $props();
   let overflowDetails: HTMLDetailsElement;
   function toggleOverflow(e: MouseEvent) {
@@ -85,6 +87,12 @@
     window.addEventListener('click', handleWindowClick);
     return () => window.removeEventListener('click', handleWindowClick);
   });
+
+  // About dialog state and build info
+  let showAbout = $state(false);
+  const APP_VERSION: string = __APP_VERSION__;
+  const BUILD_DATE: string = __BUILD_DATE__;
+  const COMMIT_HASH: string = __COMMIT_HASH__;
 </script>
 
 <div class="topbar">
@@ -136,10 +144,24 @@
         <MenuItem onclick={doSync}>Sync now</MenuItem>
         <MenuItem onclick={async()=>{ const m = await import('$lib/db/backups'); await m.createBackup(); await m.pruneOldBackups(4); }}>Create backup</MenuItem>
         <MenuItem onclick={async()=>{ const m = await import('$lib/queue/ops'); await m.pruneDuplicateOps(); }}>Deduplicate</MenuItem>
+        <MenuItem onclick={() => (showAbout = true)}>About</MenuItem>
       </Menu>
     </details>
   </div>
+
 </div>
+
+<Dialog bind:open={showAbout} headline="About" icon={iconInfo} closeOnClick={false}>
+  {#snippet children()}
+    <div style="display:grid; gap:0.25rem;">
+      <div>Version: {APP_VERSION}</div>
+      <div>Build: {COMMIT_HASH ? COMMIT_HASH.slice(0, 7) : BUILD_DATE}</div>
+    </div>
+  {/snippet}
+  {#snippet buttons()}
+    <Button variant="text" onclick={() => (showAbout = false)}>Close</Button>
+  {/snippet}
+</Dialog>
 
 <style>
   .topbar {
