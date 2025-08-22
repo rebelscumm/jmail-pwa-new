@@ -8,6 +8,7 @@
   import { settings } from '$lib/stores/settings';
   import VirtualList from '$lib/utils/VirtualList.svelte';
   import ThreadListRow from '$lib/utils/ThreadListRow.svelte';
+  import Button from '$lib/buttons/Button.svelte';
 
   let loading = true;
   let error: string | null = null;
@@ -149,7 +150,7 @@
 {:else if !activeLabelId}
   <p>No snooze labels configured. Map them in Settings.</p>
 {:else}
-  <button disabled={!nextPageToken || syncing} on:click={loadMore}>{syncing ? 'Loading…' : 'Load more'}</button>
+  <Button variant="outlined" disabled={!nextPageToken || syncing} onclick={loadMore}>{syncing ? 'Loading…' : 'Load more'}</Button>
   <div style="height:70vh">
     <VirtualList items={$threadsStore} rowHeight={68} getKey={(t) => t.threadId}>
       {#snippet children(item: import('$lib/types').GmailThread)}

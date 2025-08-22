@@ -253,15 +253,12 @@
   }
   @media (width < 52.5rem) {
     .container {
-      grid-template-rows: 1fr auto;
-      --m3-util-bottom-offset: 5rem;
+      grid-template-rows: 1fr;
+      /* Remove extra bottom spacing since bottom tabs are removed */
+      --m3-util-bottom-offset: unset;
     }
     .sidebar {
-      flex-direction: column;
-      bottom: 0;
-      width: 100%;
-      z-index: 3;
-      grid-row: 2;
+      display: none;
     }
   }
   @media (width >= 52.5rem) {
