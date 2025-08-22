@@ -223,20 +223,13 @@
   </div>
   <div class="fg" style={`transform: translateX(${dx}px); transition: ${animating ? 'transform 180ms var(--m3-util-easing-fast)' : 'none'};`} in:fade={{ duration: 120 }} out:fade={{ duration: 180 }}>
     <ListItem
-      headlineSnippet={() => {
+      headline={() => {
         const subject = thread.lastMsgMeta.subject || '(no subject)';
         const from = thread.lastMsgMeta.from || '';
         const dateStr = thread.lastMsgMeta?.date ? formatDateTime(thread.lastMsgMeta.date) : '';
-        const parts: string[] = [subject];
-        if (from) parts.push(`<span class=\"from\">${from}</span>`);
-        if (dateStr) parts.push(`<span class=\"badge\">${dateStr}</span>`);
-        return parts.join(' ');
-      }}
-      supportingSnippet={() => {
-        const parts: any[] = [];
-        // Keep supporting text minimal; show only snippet-like secondary info when available.
-        // Currently, no extra snippet beyond headline. Leave empty for cleaner MD3 one-line.
-        return parts.join(' ');
+        const fromPart = from ? ` — ${from}` : '';
+        const datePart = dateStr ? ` • ${dateStr}` : '';
+        return `${subject}${fromPart}${datePart}`;
       }}
       supporting={''}
       lines={3}
