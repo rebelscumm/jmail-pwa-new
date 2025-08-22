@@ -10,6 +10,7 @@
   import { base } from '$app/paths';
   import { show as showSnackbar } from '$lib/containers/snackbar';
   import { fade } from 'svelte/transition';
+  import { rules, DEFAULTS } from '$lib/snooze/rules';
 
   let { thread }: { thread: import('$lib/types').GmailThread } = $props();
 
@@ -126,6 +127,32 @@
       return '';
     }
   }
+
+  function pickShortestSnooze(keys: string[]): string | null {
+    try {
+      const now = new Date();
+      let bestKey: string | null = null;
+      let bestTime: number | null = null;
+      for (const k of keys) {
+        const r = rules[k];
+        if (!r || typeof r.resolver !== 'function') continue;
+        const dt = r.resolver(now, DEFAULTS);
+        if (!(dt instanceof Date) || isNaN(dt.getTime())) continue;
+        const t = dt.getTime();
+        if (bestTime == null || t < bestTime) { bestTime = t; bestKey = k; }
+      }
+      return bestKey || (keys[0] || null);
+    } catch {
+      return keys[0] || null;
+    }
+  }
+
+  $effect(() => {
+    if (mappedKeys && mappedKeys.length) {
+      const shortest = pickShortestSnooze(mappedKeys);
+      if (shortest) defaultSnoozeKey = shortest as any;
+    }
+  });
 </script>
 
 {#snippet trailing()}
@@ -155,9 +182,6 @@
 {/snippet}
 
 {#snippet trailingWithDate()}
-  {#if thread.lastMsgMeta?.date}
-    <span>{formatDateTime(thread.lastMsgMeta.date)}</span>
-  {/if}
   {@render trailing()}
 {/snippet}
 
@@ -181,7 +205,7 @@
   </div>
   <div class="fg" style={`transform: translateX(${dx}px); transition: ${animating ? 'transform 180ms var(--m3-util-easing-fast)' : 'none'};`} in:fade={{ duration: 120 }} out:fade={{ duration: 180 }}>
     <ListItem
-      headline={thread.lastMsgMeta.subject || '(no subject)'}
+      headline={(thread.lastMsgMeta.subject || '(no subject)') + (thread.lastMsgMeta?.date ? ` \u00B7 ${formatDateTime(thread.lastMsgMeta.date)}` : '')}
       supporting={`${thread.lastMsgMeta.from || ''}`}
       lines={3}
       unread={(thread.labelIds || []).includes('UNREAD')}

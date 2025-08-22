@@ -98,7 +98,7 @@
     border: none;
     position: relative;
     background: transparent;
-    color: inherit;
+    color: rgb(var(--m3-scheme-on-surface));
     -webkit-tap-highlight-color: transparent;
     min-width: 0;
   }
