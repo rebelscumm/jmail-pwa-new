@@ -1,5 +1,5 @@
 // Minimal service worker for offline support
-const CACHE_NAME = 'm3-svelte-cache-v1';
+const CACHE_NAME = 'Jmail-v1.0.1';
 
 self.addEventListener('install', () => {
   self.skipWaiting();
