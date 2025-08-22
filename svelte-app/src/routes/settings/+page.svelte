@@ -172,6 +172,34 @@
     await restoreBackup(key);
     info = `Restored ${key}.`;
   }
+
+  async function saveAll() {
+    try {
+      // Prefer JSON editor if it diverged from UI mapping; otherwise save UI mapping
+      const uiAsJson = JSON.stringify(uiMapping, null, 2);
+      if ((mappingJson || '').trim() && uiAsJson.trim() !== (mappingJson || '').trim()) {
+        await saveMapping();
+      } else {
+        await saveUiMapping();
+      }
+    } catch (e) {
+      info = e instanceof Error ? e.message : String(e);
+    }
+    try {
+      await saveAppSettings();
+    } catch (e) {
+      info = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  async function saveAndExit() {
+    await saveAll();
+    location.href = '/inbox';
+  }
+
+  function closeWithoutSaving() {
+    location.href = '/inbox';
+  }
 </script>
 
 <h3>Labels</h3>
@@ -357,3 +385,9 @@
     {/if}
   </ul>
 </Card>
+
+<div style="display:flex; gap:0.5rem; justify-content:flex-end; margin-top:1rem;">
+  <Button variant="text" onclick={closeWithoutSaving}>Close</Button>
+  <Button variant="outlined" onclick={saveAll}>Save</Button>
+  <Button variant="filled" onclick={saveAndExit}>Save & Exit</Button>
+</div>
