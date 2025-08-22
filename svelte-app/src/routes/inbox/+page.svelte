@@ -15,6 +15,7 @@
   import iconInbox from '@ktibow/iconset-material-symbols/inbox';
   import iconMarkEmailUnread from '@ktibow/iconset-material-symbols/mark-email-unread';
   import iconSnooze from '@ktibow/iconset-material-symbols/snooze';
+  import { getLabel } from '$lib/gmail/api';
 
   let CLIENT_ID: string = (import.meta as any)?.env?.VITE_GOOGLE_CLIENT_ID as string;
 
@@ -40,9 +41,10 @@
         })
   );
   const totalThreadsCount = $derived($threadsStore?.length || 0);
-  const inboxCount = $derived(inboxThreads.length);
+  let inboxLabelStats = $state<{ messagesTotal?: number; messagesUnread?: number; threadsTotal?: number; threadsUnread?: number } | null>(null);
+  const inboxCount = $derived(inboxLabelStats?.threadsTotal ?? inboxThreads.length);
   const visibleThreadsCount = $derived(visibleThreads?.length || 0);
-  const unreadCount = $derived(inboxThreads.filter((t) => (t.labelIds || []).includes('UNREAD')).length);
+  const unreadCount = $derived(inboxLabelStats?.threadsUnread ?? inboxThreads.filter((t) => (t.labelIds || []).includes('UNREAD')).length);
   const soonSnoozedCount = $derived(() => {
     try {
       const now = Date.now();
@@ -183,9 +185,21 @@
     await tx.done;
     labelsStore.set(remoteLabels);
 
-    // Messages + Threads (first 25)
+    // Messages + Threads (first 25) and label stats for accurate counts
     // Optional profile ping only in dev for diagnostics
     if (import.meta.env.DEV) { try { await getProfile(); } catch (_) {} }
+    // Fetch INBOX label metadata for totals
+    try {
+      const inboxLabel = await getLabel('INBOX');
+      inboxLabelStats = {
+        messagesTotal: inboxLabel.messagesTotal,
+        messagesUnread: inboxLabel.messagesUnread,
+        threadsTotal: inboxLabel.threadsTotal,
+        threadsUnread: inboxLabel.threadsUnread
+      };
+    } catch (_) {
+      inboxLabelStats = null;
+    }
     const page = await listInboxMessageIds(25);
     nextPageToken = page.nextPageToken;
     const msgs = await mapWithConcurrency(page.ids, 4, (id) => getMessageMetadata(id));

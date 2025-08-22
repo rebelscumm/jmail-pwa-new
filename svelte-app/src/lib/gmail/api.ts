@@ -310,6 +310,20 @@ export async function getProfile(): Promise<{ emailAddress: string; messagesTota
   return data;
 }
 
+export async function getLabel(labelId: string): Promise<GmailLabel & { id: string }> {
+  type LabelResponse = GmailLabel & {
+    messageListVisibility?: string;
+    labelListVisibility?: string;
+    messagesTotal?: number;
+    messagesUnread?: number;
+    threadsTotal?: number;
+    threadsUnread?: number;
+  };
+  const data = await api<LabelResponse>(`/labels/${encodeURIComponent(labelId)}`);
+  pushDiag({ type: 'label', id: data.id, name: (data as any)?.name, messagesTotal: (data as any)?.messagesTotal, threadsTotal: (data as any)?.threadsTotal, messagesUnread: (data as any)?.messagesUnread, threadsUnread: (data as any)?.threadsUnread });
+  return data as GmailLabel & { id: string };
+}
+
 function summarizeListData(data: unknown) {
   try {
     const d: any = data || {};
