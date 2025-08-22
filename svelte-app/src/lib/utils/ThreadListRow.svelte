@@ -3,9 +3,6 @@
   import Button from '$lib/buttons/Button.svelte';
   import SplitButton from '$lib/buttons/SplitButton.svelte';
   import Menu from '$lib/containers/Menu.svelte';
-  import SnoozePanel from '$lib/snooze/SnoozePanel.svelte';
-  import Dialog from '$lib/containers/Dialog.svelte';
-  import DatePickerDocked from '$lib/forms/DatePickerDocked.svelte';
   import { archiveThread, trashThread, markRead, markUnread, undoLast } from '$lib/queue/intents';
   import { snoozeThreadByRule, manualUnsnoozeThread, isSnoozedThread } from '$lib/snooze/actions';
   import { settings } from '$lib/stores/settings';
@@ -40,9 +37,17 @@
   let mappedKeys = $derived(Array.from(new Set(Object.keys($settings.labelMapping || {}).filter((k) => $settings.labelMapping[k]).map((k) => normalizeRuleKey(k)))));
   let defaultSnoozeKey = $derived(mappedKeys.includes('1h') ? '1h' : (mappedKeys[0] || null));
 
-  let dateDialogOpen = $state(false);
   function isMapped(key: string): boolean {
     try { return mappedKeys.includes(normalizeRuleKey(key)); } catch { return false; }
+  }
+  function toRuleKey(display: string): string {
+    const d = display.toLowerCase();
+    if (d === '2p') return '2pm';
+    if (d === '6a') return '6am';
+    if (d === '7p') return '7pm';
+    if (d === 'mon') return 'Monday';
+    if (d === 'fri') return 'Friday';
+    return display;
   }
   async function trySnooze(key: string): Promise<void> {
     const k = normalizeRuleKey(key);
@@ -62,10 +67,6 @@
     } catch {
       return 0;
     }
-  }
-  function dateValidator(dateStr: string): boolean {
-    const n = daysFromToday(dateStr);
-    return n >= 1 && n <= 30 && isMapped(`${n}d`);
   }
   async function onDatePicked(dateStr: string): Promise<void> {
     const n = daysFromToday(dateStr);
@@ -220,9 +221,21 @@
           <div class="snooze-menu">
             <Menu>
               {#if mappedKeys.length > 0}
-                <SnoozePanel onSelect={(k) => trySnooze(k)} />
-                <div class="footer">
-                  <Button variant="text" onclick={() => { dateDialogOpen = true; }}>Pick date…</Button>
+                <div class="list">
+                  {#each ['1h','2h','3h','2p','6a','7p','2d','4d','mon','fri','7d','14d','30d'] as item}
+                    {#if isMapped(toRuleKey(item))}
+                      <Button variant="text" onclick={() => trySnooze(toRuleKey(item))}>{item}</Button>
+                    {/if}
+                  {/each}
+                  <div class="date-row">
+                    <label class="m3-font-body-small" for={`native-date-${thread.threadId}`}>Pick date</label>
+                    <input id={`native-date-${thread.threadId}`}
+                      type="date"
+                      min={(new Date(Date.now()+24*60*60*1000)).toISOString().slice(0,10)}
+                      max={(new Date(Date.now()+30*24*60*60*1000)).toISOString().slice(0,10)}
+                      onchange={(e) => { const v = (e.currentTarget as HTMLInputElement).value; if (v) { onDatePicked(v); (e.currentTarget as HTMLInputElement).value = ''; } }}
+                    />
+                  </div>
                 </div>
               {:else}
                 <div style="padding:0.5rem 0.75rem; max-width: 18rem;" class="m3-font-body-small">No snooze labels configured. Map them in Settings.</div>
@@ -274,21 +287,6 @@
   </div>
 </div>
 
-<Dialog headline="Pick date" bind:open={dateDialogOpen} closeOnClick={false}>
-  {#snippet children()}
-    <DatePickerDocked
-      date={''}
-      clearable={false}
-      dateValidator={dateValidator}
-      close={() => (dateDialogOpen = false)}
-      setDate={onDatePicked}
-    />
-  {/snippet}
-  {#snippet buttons()}
-    <Button variant="text" onclick={() => (dateDialogOpen = false)}>Close</Button>
-  {/snippet}
-</Dialog>
-
 <style>
   .swipe-wrapper {
     position: relative;
@@ -336,7 +334,11 @@
   }
   .actions { display:flex; flex-direction: column; gap:0.25rem; align-items:flex-end; }
   .snooze-menu :global(.m3-container) { padding: 0; }
+  .snooze-menu .list { display:flex; flex-direction: column; gap: 0.125rem; padding: 0.25rem; }
+  .snooze-menu .list :global(button) { justify-content: flex-start; }
   .snooze-menu .footer { display:flex; justify-content:flex-end; padding: 0.25rem 0.5rem; border-top: 1px solid rgb(var(--m3-scheme-outline-variant)); }
+  .snooze-menu .date-row { display:flex; align-items:center; justify-content:space-between; gap:0.5rem; padding: 0.25rem 0.5rem; }
+  .snooze-menu .date-row input[type="date"] { background: transparent; color: inherit; border: 1px solid rgb(var(--m3-scheme-outline-variant)); border-radius: 0.5rem; padding: 0.25rem 0.5rem; }
   .leading-checkbox {
     display: inline-flex;
     align-items: center;
