@@ -186,6 +186,28 @@ export function getAuthDiagnostics(): Record<string, unknown> {
   }
 }
 
+// Try to resolve Google Client ID from multiple sources to ease configuration in static hosts
+export function resolveGoogleClientId(): string | undefined {
+  try {
+    const envId = (import.meta as any)?.env?.VITE_GOOGLE_CLIENT_ID as string | undefined;
+    if (envId && envId.trim()) return envId.trim();
+  } catch (_) {}
+  try {
+    const lsId = typeof localStorage !== 'undefined' ? (localStorage.getItem('GOOGLE_CLIENT_ID') || localStorage.getItem('VITE_GOOGLE_CLIENT_ID')) : null;
+    if (lsId && lsId.trim()) return lsId.trim();
+  } catch (_) {}
+  try {
+    const url = typeof window !== 'undefined' ? new URL(window.location.href) : undefined;
+    const qp = url?.searchParams.get('client_id');
+    if (qp && qp.trim()) return qp.trim();
+  } catch (_) {}
+  try {
+    const winId = typeof window !== 'undefined' ? ((window as any).__ENV__?.GOOGLE_CLIENT_ID || (window as any).__env?.GOOGLE_CLIENT_ID) : undefined;
+    if (winId && String(winId).trim()) return String(winId).trim();
+  } catch (_) {}
+  return undefined;
+}
+
 // Fetch current token's granted scopes (diagnostics only)
 export async function fetchTokenInfo(): Promise<{ scope?: string; expires_in?: string; aud?: string } | undefined> {
   try {

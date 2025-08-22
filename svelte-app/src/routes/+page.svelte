@@ -3,12 +3,12 @@
   import { base } from '$app/paths';
   import ListItem from '$lib/containers/ListItem.svelte';
   import Button from '$lib/buttons/Button.svelte';
-  import { initAuth, acquireTokenInteractive, authState, getAuthDiagnostics } from '$lib/gmail/auth';
+  import { initAuth, acquireTokenInteractive, authState, getAuthDiagnostics, resolveGoogleClientId } from '$lib/gmail/auth';
   import { getDB } from '$lib/db/indexeddb';
   import { copyGmailDiagnosticsToClipboard } from '$lib/gmail/api';
   
 
-  const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID as string;
+  let CLIENT_ID = (import.meta as any)?.env?.VITE_GOOGLE_CLIENT_ID as string;
   let loading = $state(true);
   let ready = $state(false);
   let hasAccount = $state(false);
@@ -19,6 +19,7 @@
     (async () => {
       // Ensure auth is initialized before attempting API calls
       try {
+        CLIENT_ID = CLIENT_ID || resolveGoogleClientId() as string;
         await initAuth(CLIENT_ID);
       } catch (_) {}
       const db = await getDB();
@@ -36,6 +37,7 @@
   async function connect() {
     try {
       if (!ready) {
+        CLIENT_ID = CLIENT_ID || resolveGoogleClientId() as string;
         try { await initAuth(CLIENT_ID); } catch (_) {}
       }
       await acquireTokenInteractive();
@@ -88,6 +90,16 @@
       copiedDiagOk = false;
     }
   }
+
+  async function enterClientId() {
+    try {
+      const id = prompt('Enter Google OAuth Client ID (will be saved locally)', CLIENT_ID || '');
+      if (!id) return;
+      CLIENT_ID = id.trim();
+      try { localStorage.setItem('GOOGLE_CLIENT_ID', CLIENT_ID); } catch (_) {}
+      try { await initAuth(CLIENT_ID); } catch (_) {}
+    } catch (_) {}
+  }
 </script>
 
 {#if loading}
@@ -101,7 +113,10 @@
     <ListItem headline="Permissions" supporting="We request Gmail read/modify, labels, and metadata scopes to snooze and label threads." />
     <Button variant="filled" onclick={connect}>Sign in with Google</Button>
     {#if !ready}
-      <Button variant="text" onclick={copyDiagnostics}>{copiedDiagOk ? 'Copied!' : 'Copy diagnostics'}</Button>
+      <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+        <Button variant="text" onclick={copyDiagnostics}>{copiedDiagOk ? 'Copied!' : 'Copy diagnostics'}</Button>
+        <Button variant="outlined" onclick={enterClientId}>Enter client ID</Button>
+      </div>
     {/if}
     <Button variant="text" href="https://myaccount.google.com/permissions">Review Google permissions</Button>
   </div>
