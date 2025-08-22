@@ -102,6 +102,11 @@
           // eslint-disable-next-line no-console
           console.error('[Viewer] Failed to auto-load message', firstId, e);
           void copyDiagnostics('auto_load_failed', firstId, e);
+          // If it's still a permissions problem, surface clipboard copy proactively
+          const msg = e instanceof Error ? e.message : String(e);
+          if (typeof msg === 'string' && msg.toLowerCase().includes('permissions') || msg.toLowerCase().includes('scope')) {
+            void copyDiagnostics('scope_after_upgrade_failed', firstId, e);
+          }
         })
         .finally(() => { loadingMap[firstId] = false; });
     }

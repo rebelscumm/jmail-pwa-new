@@ -206,10 +206,35 @@ export async function getMessageFull(id: string): Promise<GmailMessage> {
         const before = await fetchTokenInfo();
         pushDiag({ type: 'tokeninfo_snapshot', id, tokenInfo: before });
       } catch (_) {}
-      // Do NOT auto-prompt. Surface a consistent error that the UI can handle.
-      throw new GmailApiError('Additional Gmail permissions are required to read this message body. Please grant access.', 403, { reason: 'scope_upgrade_required', id });
+      // Attempt an automatic scope upgrade once, then retry.
+      try {
+        const { acquireTokenForScopes } = await import('$lib/gmail/auth');
+        const scopes = [
+          'https://www.googleapis.com/auth/gmail.readonly',
+          'https://www.googleapis.com/auth/gmail.modify'
+        ].join(' ');
+        const upgraded = await acquireTokenForScopes(scopes, 'consent');
+        pushDiag({ type: 'scope_upgrade_attempt', id, upgraded });
+        if (upgraded) {
+          try {
+            data = await api<GmailMessageApiResponse>(`/messages/${id}?format=full`);
+          } catch (retryErr) {
+            const rmsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+            pushDiag({ type: 'scope_upgrade_retry_failed', id, error: rmsg });
+            throw retryErr;
+          }
+        }
+      } catch (upgradeErr) {
+        const uMsg = upgradeErr instanceof Error ? upgradeErr.message : String(upgradeErr);
+        pushDiag({ type: 'scope_upgrade_error', id, error: uMsg });
+      }
+      if (!data) {
+        // Do NOT auto-prompt further. Surface a consistent error that the UI can handle.
+        throw new GmailApiError('Additional Gmail permissions are required to read this message body. Please grant access.', 403, { reason: 'scope_upgrade_required', id });
+      }
+    } else {
+      throw e;
     }
-    throw e;
   }
   const headers: Record<string, string> = {};
   for (const h of data.payload?.headers || []) headers[h.name] = h.value;
