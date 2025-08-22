@@ -15,6 +15,12 @@
   import iconUndo from '@ktibow/iconset-material-symbols/undo';
   import iconRedo from '@ktibow/iconset-material-symbols/redo';
   import iconSync from '@ktibow/iconset-material-symbols/sync';
+  // Added: stores and icons for badges
+  import { threads as threadsStore, messages as messagesStore } from '$lib/stores/threads';
+  import { snoozeByThread } from '$lib/stores/snooze';
+  import iconInbox from '@ktibow/iconset-material-symbols/inbox';
+  import iconMail from '@ktibow/iconset-material-symbols/mail';
+  import iconSnooze from '@ktibow/iconset-material-symbols/snooze';
   let { onSyncNow }: { onSyncNow?: () => void } = $props();
   let overflowDetails: HTMLDetailsElement;
   function toggleOverflow(e: MouseEvent) {
@@ -60,6 +66,24 @@
       });
     }
   });
+
+  // Added: derived counts for badges
+  const totalInboxEmails = $derived(Object.values($messagesStore || {}).filter((m) => (m.labelIds || []).includes('INBOX')).length);
+  const unreadEmails = $derived(Object.values($messagesStore || {}).filter((m) => (m.labelIds || []).includes('UNREAD')).length);
+  const snoozedSoonEmails = $derived((() => {
+    const map = $snoozeByThread || {} as Record<string, { dueAtUtc: number }>;
+    const now = Date.now();
+    const upper = now + 24 * 60 * 60 * 1000;
+    let sum = 0;
+    for (const threadId in map) {
+      const info = map[threadId];
+      if (info && typeof info.dueAtUtc === 'number' && info.dueAtUtc >= now && info.dueAtUtc <= upper) {
+        const thread = ($threadsStore || []).find((t) => t.threadId === threadId);
+        sum += thread?.messageIds?.length || 0;
+      }
+    }
+    return sum;
+  })());
 
   async function onPendingChipClick() {
     if ($syncState.lastError) {
@@ -115,6 +139,12 @@
     </SplitButton>
   </div>
   <div class="right">
+    <!-- Added: badges -->
+    <div class="badges">
+      <Chip variant="assist" icon={iconInbox} disabled title="Inbox emails">{totalInboxEmails}</Chip>
+      <Chip variant="assist" icon={iconMail} disabled title="Unread emails">{unreadEmails}</Chip>
+      <Chip variant="assist" icon={iconSnooze} disabled title="Snoozed in next 24h">{snoozedSoonEmails}</Chip>
+    </div>
     <div class="search-field">
       <TextField label="Search" leadingIcon={iconSearch} bind:value={search} />
     </div>
@@ -161,6 +191,8 @@
   .overflow > summary { list-style: none; }
   .summary-btn { cursor: pointer; }
   .overflow[open] > :global(.m3-container) { position:absolute; right:0; margin-top:0.25rem; }
+  /* Added: badges container styling */
+  .badges { display: flex; gap: 0.5rem; flex-wrap: wrap; }
 </style>
 
 
