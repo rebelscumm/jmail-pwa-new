@@ -122,7 +122,6 @@
         <MenuItem onclick={() => (location.href = '/settings')}>Settings</MenuItem>
         <MenuItem onclick={doSync}>Sync now</MenuItem>
         <MenuItem onclick={async()=>{ const m = await import('$lib/db/backups'); await m.createBackup(); await m.pruneOldBackups(4); }}>Create backup</MenuItem>
-        <MenuItem onclick={async()=>{ const m = await import('$lib/queue/ops'); await m.pruneDuplicateOps(); }}>Deduplicate</MenuItem>
       </Menu>
     </details>
   </div>
