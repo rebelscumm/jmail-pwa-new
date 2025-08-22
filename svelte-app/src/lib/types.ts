@@ -1,6 +1,12 @@
 // Core shared types for the Gmail PWA client
 
-export type GmailLabel = { id: string; name: string; type: "system" | "user" };
+export type GmailLabel = { id: string; name: string; type: "system" | "user" } & {
+  // Optional stats provided by Gmail labels.get when requested
+  messagesTotal?: number;
+  messagesUnread?: number;
+  threadsTotal?: number;
+  threadsUnread?: number;
+};
 
 export type GmailMessage = {
   id: string;
