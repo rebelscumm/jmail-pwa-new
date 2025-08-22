@@ -6,7 +6,6 @@
   import TextField from '$lib/forms/TextField.svelte';
   import Menu from '$lib/containers/Menu.svelte';
   import MenuItem from '$lib/containers/MenuItem.svelte';
-  import Chip from '$lib/forms/Chip.svelte';
   import Icon from '$lib/misc/_icon.svelte';
   import { show as showSnackbar } from '$lib/containers/snackbar';
   import { copyGmailDiagnosticsToClipboard } from '$lib/gmail/api';
@@ -61,17 +60,26 @@
     }
   });
 
-  async function onPendingChipClick() {
-    if ($syncState.lastError) {
-      const ok = await copyGmailDiagnosticsToClipboard({
-        reason: 'user_clicked_pending_chip',
-        lastError: $syncState.lastError,
-        pendingOps: $syncState.pendingOps,
-        lastUpdatedAt: $syncState.lastUpdatedAt
-      });
-      showSnackbar({ message: ok ? 'Diagnostics copied' : 'Failed to copy diagnostics', closable: true });
-    }
+  // Compute and auto-update relative last sync label
+  let nowMs = $state(Date.now());
+  $effect(() => {
+    const id = setInterval(() => { nowMs = Date.now(); }, 30000);
+    return () => clearInterval(id);
+  });
+  function formatLastSyncLabel(lastUpdatedAt: number): string {
+    if (!lastUpdatedAt) return 'Never';
+    const diffMs = nowMs - lastUpdatedAt;
+    const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto', style: 'short' });
+    const seconds = Math.round(diffMs / 1000);
+    if (Math.abs(seconds) < 60) return rtf.format(-seconds, 'second');
+    const minutes = Math.round(seconds / 60);
+    if (Math.abs(minutes) < 60) return rtf.format(-minutes, 'minute');
+    const hours = Math.round(minutes / 60);
+    if (Math.abs(hours) < 24) return rtf.format(-hours, 'hour');
+    const days = Math.round(hours / 24);
+    return rtf.format(-days, 'day');
   }
+  $inspect(formatLastSyncLabel);
 
   // Close overflow menu when clicking outside of it
   $effect(() => {
@@ -118,12 +126,9 @@
     <div class="search-field">
       <TextField label="Search" leadingIcon={iconSearch} bind:value={search} />
     </div>
-    <Chip variant="assist" elevated={$syncState.pendingOps > 0} title={$syncState.lastError ? `Error: ${$syncState.lastError} — click to copy diagnostics` : ''} onclick={onPendingChipClick}>
-      {$syncState.pendingOps ? `${$syncState.pendingOps} pending` : 'Synced'}
-    </Chip>
-    <Button variant="outlined" iconType="left" onclick={doSync} aria-label="Sync now">
+    <Button variant="outlined" iconType="left" onclick={doSync} aria-label={`Sync now — last synced ${formatLastSyncLabel($syncState.lastUpdatedAt)}`} title={$syncState.lastError ? `Error: ${$syncState.lastError} — click to sync` : `Last synced ${formatLastSyncLabel($syncState.lastUpdatedAt)}`}>
       <Icon icon={iconSync} />
-      Sync now
+      Last sync {formatLastSyncLabel($syncState.lastUpdatedAt)}
     </Button>
     <details class="overflow" bind:this={overflowDetails}>
       <summary aria-label="More actions" class="summary-btn" onclick={toggleOverflow}>
@@ -139,6 +144,7 @@
       </Menu>
     </details>
   </div>
+
 </div>
 
 <style>
