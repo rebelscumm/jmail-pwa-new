@@ -10,13 +10,17 @@
   import Icon from '$lib/misc/_icon.svelte';
   import { show as showSnackbar } from '$lib/containers/snackbar';
   import { copyGmailDiagnosticsToClipboard } from '$lib/gmail/api';
+  import Dialog from '$lib/containers/Dialog.svelte';
+  import { appVersion, buildId } from '$lib/utils/version';
   import iconSearch from '@ktibow/iconset-material-symbols/search';
   import iconMore from '@ktibow/iconset-material-symbols/more-vert';
+  import iconInfo from '@ktibow/iconset-material-symbols/info';
   import iconUndo from '@ktibow/iconset-material-symbols/undo';
   import iconRedo from '@ktibow/iconset-material-symbols/redo';
   import iconSync from '@ktibow/iconset-material-symbols/sync';
   let { onSyncNow }: { onSyncNow?: () => void } = $props();
   let overflowDetails: HTMLDetailsElement;
+  let aboutOpen = $state(false);
   function toggleOverflow(e: MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
@@ -167,8 +171,20 @@
         <MenuItem onclick={() => (location.href = '/settings')}>Settings</MenuItem>
         <MenuItem onclick={doSync}>Sync now</MenuItem>
         <MenuItem onclick={async()=>{ const m = await import('$lib/db/backups'); await m.createBackup(); await m.pruneOldBackups(4); }}>Create backup</MenuItem>
+        <MenuItem onclick={() => { aboutOpen = true; }}>About</MenuItem>
       </Menu>
     </details>
+    <Dialog icon={iconInfo} headline="About" bind:open={aboutOpen} closeOnClick={false}>
+      {#snippet children()}
+        <div class="about">
+          <div class="row"><span class="k">Version</span><span class="v">{appVersion}</span></div>
+          <div class="row"><span class="k">Build</span><span class="v">{buildId}</span></div>
+        </div>
+      {/snippet}
+      {#snippet buttons()}
+        <Button variant="text" onclick={() => (aboutOpen = false)}>Close</Button>
+      {/snippet}
+    </Dialog>
   </div>
 </div>
 
@@ -193,6 +209,10 @@
   .summary-btn { cursor: pointer; }
   .overflow[open] > :global(.m3-container) { position:absolute; right:0; margin-top:0.25rem; }
   .last-sync { color: rgb(var(--m3-scheme-on-surface-variant)); margin-inline-start: 0.25rem; }
+  .about { display:flex; flex-direction:column; gap:0.5rem; }
+  .about .row { display:flex; justify-content:space-between; gap:1rem; }
+  .about .k { color: rgb(var(--m3-scheme-on-surface-variant)); }
+  .about .v { color: rgb(var(--m3-scheme-on-surface)); font-variant-numeric: tabular-nums; }
 </style>
 
 
