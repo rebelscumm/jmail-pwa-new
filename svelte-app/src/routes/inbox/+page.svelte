@@ -100,27 +100,33 @@
 
   onMount(() => {
     const unsub = authState.subscribe((s) => (ready = s.ready));
+    if (($threadsStore || []).length) loading = false;
     (async () => {
+      let hadCache = false;
       try {
         CLIENT_ID = CLIENT_ID || resolveGoogleClientId() as string;
         await initAuth(CLIENT_ID);
         // Load settings first for snooze defaults
         const { loadSettings } = await import('$lib/stores/settings');
         await loadSettings();
-        await hydrateFromCache();
+        hadCache = await hydrateFromCache();
+        if (hadCache) loading = false;
         navigator.serviceWorker?.addEventListener('message', (e: MessageEvent) => {
           if ((e.data && e.data.type) === 'SYNC_TICK') void hydrateFromCache();
         });
-        // Attempt initial remote hydrate
+        // Attempt initial remote hydrate without blocking UI if cache exists
         try {
+          syncing = true;
           await hydrate();
         } catch (e) {
           setApiError(e);
+        } finally {
+          syncing = false;
         }
       } catch (e) {
         setApiError(e);
       } finally {
-        loading = false;
+        if (!hadCache) loading = false;
       }
     })();
     return () => unsub();
@@ -164,16 +170,19 @@
 
   async function hydrateFromCache() {
     const db = await getDB();
+    let hasCached = false;
     const cachedLabels = await db.getAll('labels');
-    if (cachedLabels?.length) labelsStore.set(cachedLabels);
+    if (cachedLabels?.length) { labelsStore.set(cachedLabels); hasCached = true; }
     const cachedThreads = await db.getAll('threads');
-    if (cachedThreads?.length) threadsStore.set(cachedThreads);
+    if (cachedThreads?.length) { threadsStore.set(cachedThreads); hasCached = true; }
     const cachedMessages = await db.getAll('messages');
     if (cachedMessages?.length) {
       const dict: Record<string, import('$lib/types').GmailMessage> = {};
       for (const m of cachedMessages) dict[m.id] = m;
       messagesStore.set(dict);
+      hasCached = true;
     }
+    return hasCached;
   }
 
   async function hydrate() {
