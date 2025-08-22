@@ -15,6 +15,7 @@
   import iconUndo from '@ktibow/iconset-material-symbols/undo';
   import iconRedo from '@ktibow/iconset-material-symbols/redo';
   import iconSync from '@ktibow/iconset-material-symbols/sync';
+  import { getDB } from '$lib/db/indexeddb';
   let { onSyncNow }: { onSyncNow?: () => void } = $props();
   let overflowDetails: HTMLDetailsElement;
   function toggleOverflow(e: MouseEvent) {
@@ -72,31 +73,83 @@
       showSnackbar({ message: ok ? 'Diagnostics copied' : 'Failed to copy diagnostics', closable: true });
     }
   }
+
+  type JournalEntry = {
+    id: string;
+    createdAt: number;
+    threadId: string;
+    intent: { type: string; addLabelIds: string[]; removeLabelIds: string[]; ruleKey?: string };
+    inverse: { addLabelIds: string[]; removeLabelIds: string[] };
+  };
+  type HistoryItem = { label: string };
+  let actionHistory: HistoryItem[] = $state([]);
+  function ellipsize(text: string, max = 48): string {
+    if (!text) return '';
+    return text.length > max ? text.slice(0, max - 1) + '…' : text;
+  }
+  function describeIntent(e: JournalEntry, subject: string): string {
+    const s = ellipsize(subject || '(no subject)');
+    switch (e.intent.type) {
+      case 'archive': return `Archived · ${s}`;
+      case 'trash': return `Deleted · ${s}`;
+      case 'spam': return `Marked as spam · ${s}`;
+      case 'markRead': return `Marked as read · ${s}`;
+      case 'markUnread': return `Marked as unread · ${s}`;
+      case 'snooze': return `Snoozed ${e.intent.ruleKey || ''} · ${s}`.trim();
+      case 'unsnooze': return `Unsnoozed · ${s}`;
+      default: return `${e.intent.type} · ${s}`;
+    }
+  }
+  async function loadRecentHistory(limit = 20) {
+    try {
+      const db = await getDB();
+      const all = await db.getAllFromIndex('journal', 'by_createdAt');
+      const latest = all.slice(-limit).reverse() as JournalEntry[];
+      const out: HistoryItem[] = [];
+      for (const e of latest) {
+        const thread = await db.get('threads', e.threadId);
+        const subj = (thread && (thread as any).lastMsgMeta?.subject) || '';
+        out.push({ label: describeIntent(e, subj) });
+      }
+      actionHistory = out;
+    } catch {}
+  }
 </script>
 
 <div class="topbar">
   <div class="left">
-    <SplitButton variant="filled" x="inner" y="down" onclick={() => undoLast(1)}>
+    <SplitButton variant="filled" x="inner" y="down" onclick={() => undoLast(1)} on:toggle={(e) => { if (e.detail) { loadRecentHistory(); } }}>
       {#snippet children()}
         <Icon icon={iconUndo} />
         <span class="label">Undo</span>
       {/snippet}
       {#snippet menu()}
         <Menu>
-          <MenuItem onclick={() => undoLast(1)}>Undo last</MenuItem>
-          <MenuItem onclick={() => undoLast(3)}>Undo last 3</MenuItem>
+          {#if actionHistory.length}
+            {#each actionHistory as item, idx}
+              <MenuItem onclick={() => undoLast(idx + 1)}>{item.label}</MenuItem>
+            {/each}
+          {:else}
+            <MenuItem disabled onclick={() => {}} >No actions to undo</MenuItem>
+          {/if}
         </Menu>
       {/snippet}
     </SplitButton>
 
-    <SplitButton variant="tonal" x="inner" y="down" onclick={() => redoLast(1)}>
+    <SplitButton variant="tonal" x="inner" y="down" onclick={() => redoLast(1)} on:toggle={(e) => { if (e.detail) { loadRecentHistory(); } }}>
       {#snippet children()}
         <Icon icon={iconRedo} />
         <span class="label">Redo</span>
       {/snippet}
       {#snippet menu()}
         <Menu>
-          <MenuItem onclick={() => redoLast(1)}>Redo last</MenuItem>
+          {#if actionHistory.length}
+            {#each actionHistory as item, idx}
+              <MenuItem onclick={() => redoLast(idx + 1)}>{item.label}</MenuItem>
+            {/each}
+          {:else}
+            <MenuItem disabled onclick={() => {}} >No actions to redo</MenuItem>
+          {/if}
         </Menu>
       {/snippet}
     </SplitButton>
