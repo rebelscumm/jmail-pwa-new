@@ -38,6 +38,15 @@
     try {
       const { syncNow } = await import('$lib/stores/queue');
       await syncNow();
+      // After flushing, immediately clear any trailing holds and reload inbox cache
+      try {
+        const { clearAllHolds } = await import('$lib/stores/holds');
+        clearAllHolds();
+      } catch {}
+      try {
+        const mod = await import('../../routes/inbox/+page.svelte');
+        if (typeof (mod as any).reloadFromCache === 'function') await (mod as any).reloadFromCache();
+      } catch {}
     } catch {}
     onSyncNow && onSyncNow();
   }

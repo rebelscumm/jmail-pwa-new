@@ -34,3 +34,11 @@ export function clearHold(threadId: string): void {
     // no-op
   }
 }
+
+export function clearAllHolds(): void {
+  try {
+    trailingHolds.set({});
+  } catch {
+    // no-op
+  }
+}
