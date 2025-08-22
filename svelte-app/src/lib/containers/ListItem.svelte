@@ -14,6 +14,7 @@
     leading?: Snippet;
     overline?: string;
     headline?: string;
+    headlineSnippet?: Snippet;
     supporting?: string;
     supportingSnippet?: Snippet;
     trailing?: Snippet;
@@ -30,6 +31,7 @@
   leading: Snippet | undefined,
   overline: string,
   headline: string,
+  headlineSnippet: Snippet | undefined,
   supporting: string,
   trailing: Snippet | undefined,
   supportingSnippet: Snippet | undefined,
@@ -43,7 +45,11 @@
     {#if overline}
       <p class="overline m3-font-label-small">{overline}</p>
     {/if}
-    <p class="headline m3-font-body-large">{headline}</p>
+    {#if headlineSnippet}
+      <p class="headline m3-font-body-large">{@render headlineSnippet()}</p>
+    {:else}
+      <p class="headline m3-font-body-large">{headline}</p>
+    {/if}
     {#if supportingSnippet}
       <div class="supporting m3-font-body-medium">{@render supportingSnippet()}</div>
     {:else if supporting}
@@ -62,6 +68,7 @@
     leading,
     overline = "",
     headline = "",
+    headlineSnippet,
     supporting = "",
     supportingSnippet,
     trailing,
@@ -71,24 +78,24 @@
   } = props}
   <label class="m3-container lines-{_lines}" class:unread={unread} {...extra}>
     <Layer />
-    {@render content(leading, overline, headline, supporting, trailing, supportingSnippet)}
+    {@render content(leading, overline, headline, headlineSnippet, supporting, trailing, supportingSnippet)}
   </label>
 {:else if "onclick" in props}
-  {@const { leading, overline = "", headline = "", supporting = "", supportingSnippet, trailing, unread = false, ...extra } = props}
+  {@const { leading, overline = "", headline = "", headlineSnippet, supporting = "", supportingSnippet, trailing, unread = false, ...extra } = props}
   <button type="button" class="m3-container lines-{_lines}" class:unread={unread} {...extra}>
     <Layer />
-    {@render content(leading, overline, headline, supporting, trailing, supportingSnippet)}
+    {@render content(leading, overline, headline, headlineSnippet, supporting, trailing, supportingSnippet)}
   </button>
 {:else if "href" in props}
-  {@const { leading, overline = "", headline = "", supporting = "", supportingSnippet, trailing, unread = false, ...extra } = props}
+  {@const { leading, overline = "", headline = "", headlineSnippet, supporting = "", supportingSnippet, trailing, unread = false, ...extra } = props}
   <a class="m3-container lines-{_lines}" class:unread={unread} {...extra}>
     <Layer />
-    {@render content(leading, overline, headline, supporting, trailing, supportingSnippet)}
+    {@render content(leading, overline, headline, headlineSnippet, supporting, trailing, supportingSnippet)}
   </a>
 {:else}
-  {@const { leading, overline = "", headline = "", supporting = "", supportingSnippet, trailing, unread = false, ...extra } = props}
+  {@const { leading, overline = "", headline = "", headlineSnippet, supporting = "", supportingSnippet, trailing, unread = false, ...extra } = props}
   <div class="m3-container lines-{_lines}" class:unread={unread} {...extra}>
-    {@render content(leading, overline, headline, supporting, trailing, supportingSnippet)}
+    {@render content(leading, overline, headline, headlineSnippet, supporting, trailing, supportingSnippet)}
   </div>
 {/if}
 
@@ -168,5 +175,20 @@
     color: rgb(var(--m3-scheme-on-secondary-container));
     vertical-align: middle;
     white-space: nowrap;
+  }
+  .headline :global(.badge) {
+    display: inline-block;
+    margin-left: 0.5rem;
+    padding: 0.125rem 0.375rem;
+    border-radius: var(--m3-util-rounding-extra-small);
+    background: rgb(var(--m3-scheme-secondary-container));
+    color: rgb(var(--m3-scheme-on-secondary-container));
+    vertical-align: middle;
+    white-space: nowrap;
+  }
+  .headline :global(.from) {
+    color: rgb(var(--m3-scheme-on-surface-variant));
+    margin-left: 0.5rem;
+    font-weight: 400;
   }
 </style>
