@@ -24,6 +24,7 @@
   import iconRefresh from '@ktibow/iconset-material-symbols/refresh';
   import iconLogout from '@ktibow/iconset-material-symbols/logout';
   import iconBack from '@ktibow/iconset-material-symbols/chevron-left';
+  import iconCopy from '@ktibow/iconset-material-symbols/content-copy-outline';
   let { onSyncNow, backHref, backLabel }: { onSyncNow?: () => void; backHref?: string; backLabel?: string } = $props();
   let overflowDetails: HTMLDetailsElement;
   let aboutOpen = $state(false);
@@ -150,6 +151,18 @@
       showSnackbar({ message: `Re-login failed: ${e instanceof Error ? e.message : e}`, closable: true });
     }
   }
+  async function doCopyDiagnostics() {
+    try {
+      const w = typeof window !== 'undefined' ? (window as any) : undefined;
+      if (w && typeof w.__copyViewerDiagnostics === 'function') {
+        await w.__copyViewerDiagnostics();
+        showSnackbar({ message: 'Diagnostics copied', closable: true });
+        return;
+      }
+    } catch (_) {}
+    const ok = await copyGmailDiagnosticsToClipboard({ reason: 'topbar_manual_copy' });
+    showSnackbar({ message: ok ? 'Diagnostics copied' : 'Failed to copy diagnostics', closable: true });
+  }
 </script>
 
 <div class="topbar">
@@ -222,6 +235,7 @@
         <MenuItem icon={iconSettings} onclick={() => (location.href = '/settings')}>Settings</MenuItem>
         <MenuItem icon={iconBackup} onclick={async()=>{ const m = await import('$lib/db/backups'); await m.createBackup(); await m.pruneOldBackups(4); }}>Create backup</MenuItem>
         <MenuItem icon={iconRefresh} onclick={() => { const u = new URL(window.location.href); u.searchParams.set('refresh', '1'); location.href = u.toString(); }}>Force update</MenuItem>
+        <MenuItem icon={iconCopy} onclick={doCopyDiagnostics}>Copy diagnostics</MenuItem>
         <MenuItem icon={iconLogout} onclick={doRelogin}>Re-login</MenuItem>
         <MenuItem icon={iconInfo} onclick={() => { aboutOpen = true; }}>About</MenuItem>
       </Menu>
