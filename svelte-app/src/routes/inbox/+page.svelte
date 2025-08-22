@@ -376,9 +376,9 @@
   <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.5rem; gap:0.5rem;">
     <h3 class="m3-font-title-medium" style="margin:0">Inbox</h3>
     <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
-      <Chip variant="general" icon={iconInbox} disabled>{inboxCount}</Chip>
-      <Chip variant="general" icon={iconMarkEmailUnread} disabled>{unreadCount}</Chip>
-      <Chip variant="general" icon={iconSnooze} disabled>{soonSnoozedCount}</Chip>
+      <Chip variant="general" icon={iconInbox} disabled title="Inbox threads">{inboxCount}</Chip>
+      <Chip variant="general" icon={iconMarkEmailUnread} disabled title="Unread threads">{unreadCount}</Chip>
+      <Chip variant="general" icon={iconSnooze} disabled title="Snoozed due in 24h">{soonSnoozedCount}</Chip>
       <Button variant="text" onclick={copyDiagnostics}>{copiedDiagOk ? 'Copied!' : 'Copy diagnostics'}</Button>
       <Button variant="outlined" disabled={!nextPageToken || syncing} onclick={loadMore}>
         {#if syncing}
