@@ -1,4 +1,4 @@
-import { ensureValidToken, acquireTokenForScopes, fetchTokenInfo } from '$lib/gmail/auth';
+import { ensureValidToken, fetchTokenInfo } from '$lib/gmail/auth';
 import type { GmailLabel, GmailMessage } from '$lib/types';
 
 const GMAIL_BASE = 'https://gmail.googleapis.com/gmail/v1/users/me';
@@ -198,34 +198,18 @@ export async function getMessageFull(id: string): Promise<GmailMessage> {
   try {
     data = await api<GmailMessageApiResponse>(`/messages/${id}?format=full`);
   } catch (e) {
-    const isMetadataScope403 = e instanceof GmailApiError && e.status === 403 && typeof e.message === 'string' && e.message.toLowerCase().includes('metadata scope');
-    if (isMetadataScope403) {
-      pushDiag({ type: 'scope_upgrade_needed', id, error: (e as Error).message });
+    const msg = e instanceof Error ? e.message : String(e);
+    const isScopeOrPermission = e instanceof GmailApiError && e.status === 403 && typeof msg === 'string' && (msg.toLowerCase().includes('metadata scope') || msg.toLowerCase().includes('insufficient') || msg.toLowerCase().includes('permission'));
+    if (isScopeOrPermission) {
+      pushDiag({ type: 'scope_upgrade_needed', id, error: msg });
       try {
         const before = await fetchTokenInfo();
-        pushDiag({ type: 'tokeninfo_before', id, tokenInfo: before });
+        pushDiag({ type: 'tokeninfo_snapshot', id, tokenInfo: before });
       } catch (_) {}
-      // Attempt to upgrade scopes interactively
-      const neededScopes = [
-        'https://www.googleapis.com/auth/gmail.readonly',
-        'https://www.googleapis.com/auth/gmail.modify'
-      ].join(' ');
-      const upgraded = await acquireTokenForScopes(neededScopes, 'consent').catch(() => false);
-      pushDiag({ type: 'scope_upgrade_result', id, upgraded });
-      if (upgraded) {
-        try {
-          const after = await fetchTokenInfo();
-          pushDiag({ type: 'tokeninfo_after', id, tokenInfo: after });
-        } catch (_) {}
-        // Retry once after upgrade
-        data = await api<GmailMessageApiResponse>(`/messages/${id}?format=full`);
-      } else {
-        // Re-throw original error after logging
-        throw e;
-      }
-    } else {
-      throw e;
+      // Do NOT auto-prompt. Surface a consistent error that the UI can handle.
+      throw new GmailApiError('Additional Gmail permissions are required to read this message body. Please grant access.', 403, { reason: 'scope_upgrade_required', id });
     }
+    throw e;
   }
   const headers: Record<string, string> = {};
   for (const h of data.payload?.headers || []) headers[h.name] = h.value;

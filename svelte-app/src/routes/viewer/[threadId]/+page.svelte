@@ -10,6 +10,7 @@
   import Divider from "$lib/utils/Divider.svelte";
   import LoadingIndicator from "$lib/forms/LoadingIndicator.svelte";
   import { getMessageFull, copyGmailDiagnosticsToClipboard } from "$lib/gmail/api";
+  import { acquireTokenForScopes } from "$lib/gmail/auth";
   import { aiSummarizeEmail, aiDraftReply, findUnsubscribeTarget, aiExtractUnsubscribeUrl } from "$lib/ai/providers";
   const threadId = $page.params.threadId;
   const currentThread = $derived($threads.find((t) => t.threadId === threadId));
@@ -68,6 +69,21 @@
       // eslint-disable-next-line no-console
       console.error('[Viewer] Message did not load body; see diagnostics.', { mid });
       await copyDiagnostics('download_no_body', mid);
+    }
+  }
+
+  async function grantAccess(mid?: string) {
+    try {
+      const scopes = [
+        'https://www.googleapis.com/auth/gmail.readonly',
+        'https://www.googleapis.com/auth/gmail.modify'
+      ].join(' ');
+      const ok = await acquireTokenForScopes(scopes, 'consent');
+      if (ok && mid) {
+        await downloadMessage(mid);
+      }
+    } catch (_) {
+      // ignore; user can retry
     }
   }
 
@@ -147,6 +163,7 @@
               <p class="m3-font-body-medium" style="margin:0; color:rgb(var(--m3-scheme-error))">Failed to load message: {errorMap[mid]}</p>
               <div style="display:flex; justify-content:flex-end; align-items:center; gap:0.5rem; margin-top:0.5rem;">
                 <Button variant="text" onclick={() => copyDiagnostics('viewer_manual_copy', mid)}>Copy diagnostics</Button>
+                <Button variant="text" onclick={() => grantAccess(mid)}>Grant access</Button>
                 <Button variant="text" onclick={() => downloadMessage(mid)}>Retry</Button>
               </div>
             {:else if m?.bodyHtml}
@@ -165,6 +182,7 @@
               {/if}
               <div style="display:flex; justify-content:flex-end; align-items:center; gap:0.5rem; margin-top:0.5rem;">
                 <Button variant="text" onclick={() => copyDiagnostics('viewer_manual_copy', mid)}>Copy diagnostics</Button>
+                <Button variant="text" onclick={() => grantAccess(mid)}>Grant access</Button>
                 <Button variant="text" onclick={() => downloadMessage(mid)}>Download message</Button>
               </div>
             {/if}
@@ -187,6 +205,7 @@
                   <LoadingIndicator size={24} />
                 {:else}
                   <Button variant="text" onclick={() => copyDiagnostics('viewer_manual_copy', mid)}>Copy diagnostics</Button>
+                  <Button variant="text" onclick={() => grantAccess(mid)}>Grant access</Button>
                   <Button variant="text" onclick={() => downloadMessage(mid)}>Download message</Button>
                 {/if}
               </div>
