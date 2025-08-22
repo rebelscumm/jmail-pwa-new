@@ -15,6 +15,9 @@
   import iconUndo from '@ktibow/iconset-material-symbols/undo';
   import iconRedo from '@ktibow/iconset-material-symbols/redo';
   import iconSync from '@ktibow/iconset-material-symbols/sync';
+  import iconSettings from '@ktibow/iconset-material-symbols/settings';
+  import iconUpdate from '@ktibow/iconset-material-symbols/update';
+  import iconBackup from '@ktibow/iconset-material-symbols/cloud-upload';
   let { onSyncNow }: { onSyncNow?: () => void } = $props();
   let overflowDetails: HTMLDetailsElement;
   function toggleOverflow(e: MouseEvent) {
@@ -176,9 +179,9 @@
       {/snippet}
       {#snippet menu()}
         <Menu>
-          <MenuItem onclick={doSync}>Sync now</MenuItem>
+          <MenuItem icon={iconSync} onclick={doSync}>Sync now</MenuItem>
           {#if $syncState.lastError}
-            <MenuItem onclick={onPendingChipClick}>Copy diagnostics</MenuItem>
+            <MenuItem icon={iconSync} onclick={onPendingChipClick}>Copy diagnostics</MenuItem>
           {/if}
         </Menu>
       {/snippet}
@@ -190,9 +193,18 @@
         </Button>
       </summary>
       <Menu>
-        <MenuItem onclick={() => (location.href = '/settings')}>Settings</MenuItem>
-        <MenuItem onclick={doSync}>Sync now</MenuItem>
-        <MenuItem onclick={async()=>{ const m = await import('$lib/db/backups'); await m.createBackup(); await m.pruneOldBackups(4); }}>Create backup</MenuItem>
+        <MenuItem icon={iconSettings} onclick={() => (location.href = '/settings')}>Settings</MenuItem>
+        <MenuItem icon={iconSync} onclick={doSync}>Sync now</MenuItem>
+        <MenuItem icon={iconBackup} onclick={async()=>{ const m = await import('$lib/db/backups'); await m.createBackup(); await m.pruneOldBackups(4); }}>Create backup</MenuItem>
+        <MenuItem icon={iconUpdate} onclick={() => {
+          try {
+            const url = new URL(window.location.href);
+            url.searchParams.set('refresh', '1');
+            window.location.href = url.toString();
+          } catch {
+            window.location.href = `${location.pathname}?refresh=1`;
+          }
+        }}>Force update</MenuItem>
       </Menu>
     </details>
   </div>
