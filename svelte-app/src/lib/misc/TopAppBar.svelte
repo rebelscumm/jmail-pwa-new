@@ -15,6 +15,9 @@
   import iconUndo from '@ktibow/iconset-material-symbols/undo';
   import iconRedo from '@ktibow/iconset-material-symbols/redo';
   import iconSync from '@ktibow/iconset-material-symbols/sync';
+  import Dialog from '$lib/containers/Dialog.svelte';
+  import iconInfo from '@ktibow/iconset-material-symbols/info';
+  import pkg from '../../../package.json';
   let { onSyncNow }: { onSyncNow?: () => void } = $props();
   let overflowDetails: HTMLDetailsElement;
   function toggleOverflow(e: MouseEvent) {
@@ -30,6 +33,10 @@
     } catch {}
     onSyncNow && onSyncNow();
   }
+
+  const appVersion = (pkg as { version: string }).version;
+  const buildId = (import.meta.env.VITE_BUILD || import.meta.env.GITHUB_SHA || import.meta.env.BUILD_ID || 'dev') as string;
+  let isAboutOpen = $state(false);
 
   let search = $state('');
   $effect(() => {
@@ -168,8 +175,20 @@
         <MenuItem onclick={doSync}>Sync now</MenuItem>
         <MenuItem onclick={async()=>{ const m = await import('$lib/db/backups'); await m.createBackup(); await m.pruneOldBackups(4); }}>Create backup</MenuItem>
         <MenuItem onclick={async()=>{ const m = await import('$lib/queue/ops'); await m.pruneDuplicateOps(); }}>Deduplicate</MenuItem>
+        <MenuItem onclick={() => { isAboutOpen = true; const d = overflowDetails; if (d) d.open = false; }}>About</MenuItem>
       </Menu>
     </details>
+    <Dialog icon={iconInfo} headline="About" open={isAboutOpen} onEsc={() => (isAboutOpen = false)}>
+      {#snippet children()}
+        <div class="m3-font-body-medium">
+          <div><strong>Version:</strong> {appVersion}</div>
+          <div><strong>Build:</strong> {buildId}</div>
+        </div>
+      {/snippet}
+      {#snippet buttons()}
+        <Button variant="text" onclick={() => (isAboutOpen = false)}>OK</Button>
+      {/snippet}
+    </Dialog>
   </div>
 </div>
 
