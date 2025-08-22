@@ -10,7 +10,7 @@
   import Divider from "$lib/utils/Divider.svelte";
   import LoadingIndicator from "$lib/forms/LoadingIndicator.svelte";
   import { getMessageFull, copyGmailDiagnosticsToClipboard } from "$lib/gmail/api";
-  import { acquireTokenForScopes } from "$lib/gmail/auth";
+  import { acquireTokenForScopes, SCOPES } from "$lib/gmail/auth";
   import { aiSummarizeEmail, aiDraftReply, findUnsubscribeTarget, aiExtractUnsubscribeUrl } from "$lib/ai/providers";
   const threadId = $page.params.threadId;
   const currentThread = $derived($threads.find((t) => t.threadId === threadId));
@@ -74,11 +74,7 @@
 
   async function grantAccess(mid?: string) {
     try {
-      const scopes = [
-        'https://www.googleapis.com/auth/gmail.readonly',
-        'https://www.googleapis.com/auth/gmail.modify'
-      ].join(' ');
-      const ok = await acquireTokenForScopes(scopes, 'consent');
+      const ok = await acquireTokenForScopes(SCOPES, 'consent');
       if (ok && mid) {
         await downloadMessage(mid);
       }

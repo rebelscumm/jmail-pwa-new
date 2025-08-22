@@ -114,7 +114,7 @@
         CLIENT_ID = CLIENT_ID || resolveGoogleClientId() as string;
         try { await initAuth(CLIENT_ID); } catch (_) {}
       }
-      await acquireTokenInteractive();
+      await acquireTokenInteractive('consent');
       await hydrate();
     } catch (e: unknown) {
       setApiError(e);

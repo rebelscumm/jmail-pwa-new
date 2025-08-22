@@ -40,7 +40,7 @@
         CLIENT_ID = CLIENT_ID || resolveGoogleClientId() as string;
         try { await initAuth(CLIENT_ID); } catch (_) {}
       }
-      await acquireTokenInteractive();
+      await acquireTokenInteractive('consent');
       hasAccount = true;
       // Navigate immediately; inbox page will hydrate
       window.location.href = `${base}/inbox`;
@@ -110,7 +110,7 @@
   <div style="display:grid; gap:1rem; max-width:28rem; margin: 10vh auto;">
     <h2 class="m3-font-headline-large" style="margin:0">Connect Gmail</h2>
     <p class="m3-font-body-medium" style="margin:0; color:rgb(var(--m3-scheme-on-surface-variant))">Sign in to your Google account to view and manage your inbox.</p>
-    <ListItem headline="Permissions" supporting="We request Gmail read/modify, labels, and metadata scopes to snooze and label threads." />
+    <ListItem headline="Permissions" supporting="We request Gmail read/modify and labels scopes to snooze and label threads." />
     <Button variant="filled" onclick={connect}>Sign in with Google</Button>
     {#if !ready}
       <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
