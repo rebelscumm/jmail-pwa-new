@@ -2,6 +2,7 @@
 // Browser-only; no secrets at rest.
 
 import { writable } from 'svelte/store';
+import { pushGmailDiag } from '$lib/gmail/diag';
 import type { AccountAuthMeta } from '$lib/types';
 
 type TokenResponse = {
@@ -39,7 +40,9 @@ function loadGis(): Promise<void> {
 
 export const SCOPES = [
   'https://www.googleapis.com/auth/gmail.modify',
-  'https://www.googleapis.com/auth/gmail.labels'
+  'https://www.googleapis.com/auth/gmail.labels',
+  // Include readonly explicitly to satisfy some providers/error heuristics
+  'https://www.googleapis.com/auth/gmail.readonly'
 ].join(' ');
 
 let tokenClient: google.accounts.oauth2.TokenClient | null = null;
@@ -48,6 +51,30 @@ let tokenClient: google.accounts.oauth2.TokenClient | null = null;
 let lastInitAt: string | undefined;
 let lastInitOk: boolean | undefined;
 let lastInitError: string | undefined;
+
+// Serialize all token client requests to avoid callback clobbering and timeouts
+let authLockActive = false;
+const authLockWaiters: Array<() => void> = [];
+async function withTokenClientLock<T>(fn: () => Promise<T>, meta?: Record<string, unknown>): Promise<T> {
+  const queuedAt = Date.now();
+  if (authLockActive) {
+    try { pushGmailDiag({ type: 'auth_lock_wait', queuedAt, queueLen: authLockWaiters.length + 1, ...(meta || {}) }); } catch (_) {}
+    await new Promise<void>((resolve) => authLockWaiters.push(resolve));
+  }
+  authLockActive = true;
+  try {
+    try { pushGmailDiag({ type: 'auth_lock_acquired', waitedMs: Date.now() - queuedAt, ...(meta || {}) }); } catch (_) {}
+    return await fn();
+  } finally {
+    authLockActive = false;
+    try { pushGmailDiag({ type: 'auth_lock_released', durationMs: Date.now() - queuedAt, ...(meta || {}) }); } catch (_) {}
+    // Wake all waiters so they contend again (cheap and simple fairness)
+    while (authLockWaiters.length) {
+      const next = authLockWaiters.shift();
+      try { next && next(); } catch (_) {}
+    }
+  }
+}
 
 declare global {
   interface Window {
@@ -79,10 +106,12 @@ export async function initAuth(clientId: string) {
     authState.update((s) => ({ ...s, ready: true }));
     lastInitOk = true;
     lastInitError = undefined;
+    pushGmailDiag({ type: 'auth_init_success', clientIdPresent: !!clientId, scopes: SCOPES });
   } catch (e) {
     lastInitOk = false;
     lastInitError = e instanceof Error ? e.message : String(e);
     authState.update((s) => ({ ...s, ready: false }));
+    pushGmailDiag({ type: 'auth_init_error', error: e instanceof Error ? e.message : String(e) });
     throw e;
   }
 }
@@ -112,89 +141,115 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label = 'timeout'): Pro
   });
 }
 
-export async function acquireTokenInteractive(prompt: 'none' | 'consent' | 'select_account' = 'consent'): Promise<void> {
+export async function acquireTokenInteractive(prompt: 'none' | 'consent' | 'select_account' = 'consent', reason?: string): Promise<void> {
   if (!tokenClient) throw new Error('Auth not initialized');
-  const token = await withTimeout(
-    new Promise<TokenResponse>((resolve, reject) => {
-      tokenClient!.callback = (res) => {
-        if ('error' in res) reject(new Error(res.error as string));
-        else resolve(res as unknown as TokenResponse);
-      };
-      // Default to 'consent' to ensure full scopes are granted on first login
-      tokenClient!.requestAccessToken({ prompt });
-    }),
-    30000,
-    'interactive_token'
-  );
-  const now = Date.now();
-  const expiryMs = now + (token.expires_in - 60) * 1000; // safety margin
-  authState.update((s) => ({ ...s, accessToken: token.access_token, expiryMs }));
-  try {
-    // Persist minimal token metadata for session continuity without storing secrets
-    const { getDB } = await import('$lib/db/indexeddb');
-    const db = await getDB();
-    const account = { sub: 'me', tokenExpiry: expiryMs } satisfies AccountAuthMeta;
-    await db.put('auth', account, account.sub);
-  } catch (_) {
-    // non-fatal
-  }
+  await withTokenClientLock(async () => {
+    let beforeInfo: any = undefined;
+    try { beforeInfo = await fetchTokenInfo(); } catch (_) {}
+    pushGmailDiag({ type: 'auth_popup_before', flow: 'interactive', prompt, reason, requestedScopes: SCOPES, tokenInfo: beforeInfo });
+    const token = await withTimeout(
+      new Promise<TokenResponse>((resolve, reject) => {
+        tokenClient!.callback = (res) => {
+          if ('error' in res) reject(new Error(res.error as string));
+          else resolve(res as unknown as TokenResponse);
+        };
+        // Default to 'consent' to ensure full scopes are granted on first login
+        tokenClient!.requestAccessToken({ prompt });
+      }),
+      30000,
+      'interactive_token'
+    );
+    const now = Date.now();
+    const expiryMs = now + (token.expires_in - 60) * 1000; // safety margin
+    authState.update((s) => ({ ...s, accessToken: token.access_token, expiryMs }));
+    let afterInfo: any = undefined;
+    try { afterInfo = await fetchTokenInfo(); } catch (_) {}
+    pushGmailDiag({ type: 'auth_popup_after', flow: 'interactive', prompt, reason, tokenInfo: afterInfo, expiresIn: token.expires_in });
+    try {
+      // Persist minimal token metadata for session continuity without storing secrets
+      const { getDB } = await import('$lib/db/indexeddb');
+      const db = await getDB();
+      const account = { sub: 'me', tokenExpiry: expiryMs } satisfies AccountAuthMeta;
+      await db.put('auth', account, account.sub);
+    } catch (_) {
+      // non-fatal
+    }
+  }, { flow: 'interactive', reason });
 }
 
 // Request additional scopes (e.g., to upgrade from metadata-only to readonly/modify)
-export async function acquireTokenForScopes(scopes: string, prompt: 'none' | 'consent' | 'select_account' = 'consent'): Promise<boolean> {
+export async function acquireTokenForScopes(scopes: string, prompt: 'none' | 'consent' | 'select_account' = 'consent', reason?: string): Promise<boolean> {
   if (!tokenClient) throw new Error('Auth not initialized');
-  const token = await withTimeout(
-    new Promise<TokenResponse>((resolve, reject) => {
-      tokenClient!.callback = (res) => {
-        if ('error' in res) reject(new Error(res.error as string));
-        else resolve(res as unknown as TokenResponse);
-      };
-      // @ts-expect-error: scope is allowed on OverridableTokenClientConfig
-      tokenClient!.requestAccessToken({ scope: scopes, prompt });
-    }),
-    15000,
-    'scope_upgrade'
-  ).catch(() => null);
-  if (!token) return false;
-  const now = Date.now();
-  const expiryMs = now + (token.expires_in - 60) * 1000;
-  authState.update((s) => ({ ...s, accessToken: token.access_token, expiryMs }));
-  try {
-    const { getDB } = await import('$lib/db/indexeddb');
-    const db = await getDB();
-    const account = { sub: 'me', tokenExpiry: expiryMs } satisfies AccountAuthMeta;
-    await db.put('auth', account, account.sub);
-  } catch (_) {}
-  return true;
+  return await withTokenClientLock(async () => {
+    let beforeInfo: any = undefined;
+    try { beforeInfo = await fetchTokenInfo(); } catch (_) {}
+    pushGmailDiag({ type: 'auth_popup_before', flow: 'scope_upgrade', prompt, reason, requestedScopes: scopes, tokenInfo: beforeInfo });
+    const token = await withTimeout(
+      new Promise<TokenResponse>((resolve, reject) => {
+        tokenClient!.callback = (res) => {
+          if ('error' in res) reject(new Error(res.error as string));
+          else resolve(res as unknown as TokenResponse);
+        };
+        tokenClient!.requestAccessToken({ scope: scopes, prompt });
+      }),
+      20000,
+      'scope_upgrade'
+    ).catch(() => null);
+    if (!token) return false;
+    const now = Date.now();
+    const expiryMs = now + (token.expires_in - 60) * 1000;
+    authState.update((s) => ({ ...s, accessToken: token.access_token, expiryMs }));
+    let afterInfo: any = undefined;
+    try { afterInfo = await fetchTokenInfo(); } catch (_) {}
+    pushGmailDiag({ type: 'auth_popup_after', flow: 'scope_upgrade', prompt, reason, tokenInfo: afterInfo, expiresIn: token.expires_in });
+    try {
+      const { getDB } = await import('$lib/db/indexeddb');
+      const db = await getDB();
+      const account = { sub: 'me', tokenExpiry: expiryMs } satisfies AccountAuthMeta;
+      await db.put('auth', account, account.sub);
+    } catch (_) {}
+    return true;
+  }, { flow: 'scope_upgrade', reason, requestedScopes: scopes });
 }
 
 export async function ensureValidToken(): Promise<string> {
   const state = getAuthState();
   if (state.accessToken && state.expiryMs && state.expiryMs > Date.now()) return state.accessToken;
   if (!tokenClient) throw new Error('Auth not initialized');
-  const token = await withTimeout(
-    new Promise<TokenResponse>((resolve, reject) => {
-      tokenClient!.callback = (res) => {
-        if ('error' in res) reject(new Error(res.error as string));
-        else resolve(res as unknown as TokenResponse);
-      };
-      // Try silent token acquisition; avoids popups on refresh. If it fails,
-      // callers should handle by prompting interactively.
-      tokenClient!.requestAccessToken({ prompt: 'none' });
-    }),
-    8000,
-    'silent_token'
-  );
-  const now = Date.now();
-  const expiryMs = now + (token.expires_in - 60) * 1000;
-  authState.update((s) => ({ ...s, accessToken: token.access_token, expiryMs }));
-  try {
-    const { getDB } = await import('$lib/db/indexeddb');
-    const db = await getDB();
-    const account = { sub: 'me', tokenExpiry: expiryMs } satisfies AccountAuthMeta;
-    await db.put('auth', account, account.sub);
-  } catch (_) {}
-  return token.access_token;
+  pushGmailDiag({ type: 'auth_silent_token_attempt' });
+  const accessToken = await withTokenClientLock(async () => {
+    let token: TokenResponse;
+    try {
+      token = await withTimeout(
+        new Promise<TokenResponse>((resolve, reject) => {
+          tokenClient!.callback = (res) => {
+            if ('error' in res) reject(new Error(res.error as string));
+            else resolve(res as unknown as TokenResponse);
+          };
+          // Try silent token acquisition; avoids popups on refresh. If it fails,
+          // callers should handle by prompting interactively.
+          tokenClient!.requestAccessToken({ prompt: 'none' });
+        }),
+        20000,
+        'silent_token'
+      );
+    } catch (e) {
+      pushGmailDiag({ type: 'auth_silent_token_error', error: e instanceof Error ? e.message : String(e) });
+      throw e;
+    }
+    const now = Date.now();
+    const expiryMs = now + (token.expires_in - 60) * 1000;
+    authState.update((s) => ({ ...s, accessToken: token.access_token, expiryMs }));
+    pushGmailDiag({ type: 'auth_silent_token_success', expiresIn: token.expires_in });
+    try {
+      const { getDB } = await import('$lib/db/indexeddb');
+      const db = await getDB();
+      const account = { sub: 'me', tokenExpiry: expiryMs } satisfies AccountAuthMeta;
+      await db.put('auth', account, account.sub);
+    } catch (_) {}
+    return token.access_token;
+  }, { flow: 'silent' });
+  return accessToken;
 }
 
 export function setAccount(meta: AccountAuthMeta) {
@@ -252,10 +307,16 @@ export function resolveGoogleClientId(): string | undefined {
 // Fetch current token's granted scopes (diagnostics only)
 export async function fetchTokenInfo(): Promise<{ scope?: string; expires_in?: string; aud?: string } | undefined> {
   try {
-    const token = await ensureValidToken();
+    // Diagnostics-only: avoid triggering token flows; use current state token if available
+    const state = getAuthState();
+    const token = state.accessToken;
+    if (!token) return undefined;
     const u = new URL('https://oauth2.googleapis.com/tokeninfo');
     u.searchParams.set('access_token', token);
-    const res = await fetch(u.toString());
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), 5000);
+    const res = await fetch(u.toString(), { signal: controller.signal });
+    clearTimeout(id);
     if (!res.ok) return undefined;
     const info = await res.json();
     return { scope: info.scope as string | undefined, expires_in: info.expires_in as string | undefined, aud: info.aud as string | undefined };

@@ -1,4 +1,5 @@
 import { ensureValidToken, fetchTokenInfo } from '$lib/gmail/auth';
+import { pushGmailDiag, getAndClearGmailDiagnostics } from '$lib/gmail/diag';
 import type { GmailLabel, GmailMessage } from '$lib/types';
 
 const GMAIL_BASE = 'https://gmail.googleapis.com/gmail/v1/users/me';
@@ -14,26 +15,8 @@ export class GmailApiError extends Error {
   }
 }
 
-// Lightweight diagnostics buffer for debugging API behavior in the browser.
-// Avoids storing secrets; logs only paths, statuses, and sanitized payload summaries.
-const __gmailDiagnostics: any[] = [];
-function pushDiag(entry: Record<string, unknown>) {
-  try {
-    const payload = { time: new Date().toISOString(), ...entry };
-    __gmailDiagnostics.push(payload);
-    // Also emit to console for immediate visibility in dev only
-    if (import.meta.env.DEV) {
-      // eslint-disable-next-line no-console
-      console.debug('[GmailAPI]', payload);
-    }
-  } catch (_) {}
-}
-
-export function getAndClearGmailDiagnostics(): any[] {
-  const copy = __gmailDiagnostics.slice();
-  __gmailDiagnostics.length = 0;
-  return copy;
-}
+// Re-export diagnostics getter for UI consumption
+export { getAndClearGmailDiagnostics } from '$lib/gmail/diag';
 
 export async function copyGmailDiagnosticsToClipboard(extra?: Record<string, unknown>): Promise<boolean> {
   try {
@@ -74,7 +57,7 @@ export async function copyGmailDiagnosticsToClipboard(extra?: Record<string, unk
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const token = await ensureValidToken();
-  pushDiag({ type: 'api_request', path, method: (init && 'method' in (init as any) && (init as any).method) ? (init as any).method : 'GET' });
+  pushGmailDiag({ type: 'api_request', path, method: (init && 'method' in (init as any) && (init as any).method) ? (init as any).method : 'GET' });
   const res = await fetch(`${GMAIL_BASE}${path}`, {
     ...init,
     headers: {
@@ -102,14 +85,14 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     } catch (_) {
       // ignore parse errors
     }
-    pushDiag({ type: 'api_error', path, status: res.status, message, contentType: res.headers.get('content-type') || undefined, details: sanitize(details) });
+    pushGmailDiag({ type: 'api_error', path, status: res.status, message, contentType: res.headers.get('content-type') || undefined, details: sanitize(details) });
     throw new GmailApiError(message, res.status, details);
   }
   // Some Gmail endpoints (e.g., batchModify) return 204 No Content.
   // Safely handle empty bodies and non-JSON responses.
   try {
     const text = await res.text();
-    pushDiag({ type: 'api_response', path, status: res.status, contentType: res.headers.get('content-type') || undefined, bodyLength: (text || '').length });
+    pushGmailDiag({ type: 'api_response', path, status: res.status, contentType: res.headers.get('content-type') || undefined, bodyLength: (text || '').length });
     if (!text) return undefined as unknown as T;
     try {
       return JSON.parse(text) as T;
@@ -136,9 +119,9 @@ export async function listInboxMessageIds(maxResults = 25, pageToken?: string): 
   );
   const ids = (data.messages || []).map((m) => m.id);
   if (!ids.length) {
-    pushDiag({ type: 'inbox_empty', fn: 'listInboxMessageIds', params: { maxResults, pageToken, labelIds: 'INBOX' }, data: summarizeListData(data) });
+    pushGmailDiag({ type: 'inbox_empty', fn: 'listInboxMessageIds', params: { maxResults, pageToken, labelIds: 'INBOX' }, data: summarizeListData(data) });
   } else {
-    pushDiag({ type: 'inbox_page', fn: 'listInboxMessageIds', params: { maxResults, pageToken, labelIds: 'INBOX' }, count: ids.length, nextPageToken: data.nextPageToken });
+    pushGmailDiag({ type: 'inbox_page', fn: 'listInboxMessageIds', params: { maxResults, pageToken, labelIds: 'INBOX' }, count: ids.length, nextPageToken: data.nextPageToken });
   }
   return { ids, nextPageToken: data.nextPageToken };
 }
@@ -201,37 +184,13 @@ export async function getMessageFull(id: string): Promise<GmailMessage> {
     const msg = e instanceof Error ? e.message : String(e);
     const isScopeOrPermission = e instanceof GmailApiError && e.status === 403 && typeof msg === 'string' && (msg.toLowerCase().includes('metadata scope') || msg.toLowerCase().includes('insufficient') || msg.toLowerCase().includes('permission'));
     if (isScopeOrPermission) {
-      pushDiag({ type: 'scope_upgrade_needed', id, error: msg });
+      pushGmailDiag({ type: 'scope_upgrade_needed', id, error: msg });
       try {
         const before = await fetchTokenInfo();
-        pushDiag({ type: 'tokeninfo_snapshot', id, tokenInfo: before });
+        pushGmailDiag({ type: 'tokeninfo_snapshot', id, tokenInfo: before });
       } catch (_) {}
-      // Attempt an automatic scope upgrade once, then retry.
-      try {
-        const { acquireTokenForScopes } = await import('$lib/gmail/auth');
-        const scopes = [
-          'https://www.googleapis.com/auth/gmail.readonly',
-          'https://www.googleapis.com/auth/gmail.modify'
-        ].join(' ');
-        const upgraded = await acquireTokenForScopes(scopes, 'consent');
-        pushDiag({ type: 'scope_upgrade_attempt', id, upgraded });
-        if (upgraded) {
-          try {
-            data = await api<GmailMessageApiResponse>(`/messages/${id}?format=full`);
-          } catch (retryErr) {
-            const rmsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
-            pushDiag({ type: 'scope_upgrade_retry_failed', id, error: rmsg });
-            throw retryErr;
-          }
-        }
-      } catch (upgradeErr) {
-        const uMsg = upgradeErr instanceof Error ? upgradeErr.message : String(upgradeErr);
-        pushDiag({ type: 'scope_upgrade_error', id, error: uMsg });
-      }
-      if (!data) {
-        // Do NOT auto-prompt further. Surface a consistent error that the UI can handle.
-        throw new GmailApiError('Additional Gmail permissions are required to read this message body. Please grant access.', 403, { reason: 'scope_upgrade_required', id });
-      }
+      // Do NOT auto-prompt further. Surface a consistent error that the UI can handle.
+      throw new GmailApiError('Additional Gmail permissions are required to read this message body. Please grant access.', 403, { reason: 'scope_upgrade_required', id });
     } else {
       throw e;
     }
@@ -292,7 +251,7 @@ export async function getMessageFull(id: string): Promise<GmailMessage> {
     return { ...out, diag: diagnostics };
   }
   const body = await extractText(data.payload);
-  pushDiag({
+  pushGmailDiag({
     type: 'message_full_extracted',
     id: data.id,
     threadId: data.threadId,
@@ -331,7 +290,7 @@ export async function sendMessageRaw(raw: string, threadId?: string): Promise<{ 
 // Quick profile ping to gauge account message/thread totals for diagnostics
 export async function getProfile(): Promise<{ emailAddress: string; messagesTotal: number; threadsTotal: number; historyId: string }> {
   const data = await api<{ emailAddress: string; messagesTotal: number; threadsTotal: number; historyId: string }>(`/profile`);
-  pushDiag({ type: 'profile', emailAddress: data.emailAddress, messagesTotal: data.messagesTotal, threadsTotal: data.threadsTotal });
+  pushGmailDiag({ type: 'profile', emailAddress: data.emailAddress, messagesTotal: data.messagesTotal, threadsTotal: data.threadsTotal });
   return data;
 }
 
@@ -345,7 +304,7 @@ export async function getLabel(labelId: string): Promise<GmailLabel & { id: stri
     threadsUnread?: number;
   };
   const data = await api<LabelResponse>(`/labels/${encodeURIComponent(labelId)}`);
-  pushDiag({ type: 'label', id: data.id, name: (data as any)?.name, messagesTotal: (data as any)?.messagesTotal, threadsTotal: (data as any)?.threadsTotal, messagesUnread: (data as any)?.messagesUnread, threadsUnread: (data as any)?.threadsUnread });
+  pushGmailDiag({ type: 'label', id: data.id, name: (data as any)?.name, messagesTotal: (data as any)?.messagesTotal, threadsTotal: (data as any)?.threadsTotal, messagesUnread: (data as any)?.messagesUnread, threadsUnread: (data as any)?.threadsUnread });
   return data as GmailLabel & { id: string };
 }
 

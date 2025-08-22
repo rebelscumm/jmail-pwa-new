@@ -74,7 +74,7 @@
 
   async function grantAccess(mid?: string) {
     try {
-      const ok = await acquireTokenForScopes(SCOPES, 'consent');
+      const ok = await acquireTokenForScopes(SCOPES, 'consent', 'viewer_grant_click');
       if (ok && mid) {
         await downloadMessage(mid);
       }

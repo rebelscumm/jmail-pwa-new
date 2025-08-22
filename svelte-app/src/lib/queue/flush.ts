@@ -7,6 +7,12 @@ import { copyGmailDiagnosticsToClipboard } from '$lib/gmail/api';
 import { applyRemoteLabels } from './intents';
 
 export async function flushOnce(now = Date.now()): Promise<void> {
+  // Ensure auth is initialized before attempting any Gmail API calls
+  try {
+    const { getAuthState } = await import('$lib/gmail/auth');
+    const state = getAuthState();
+    if (!state.ready) return;
+  } catch (_) {}
   const db = await getDB();
   const due = await getDueOps(now);
   if (!due.length) return;

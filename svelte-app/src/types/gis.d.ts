@@ -12,7 +12,7 @@ declare namespace google {
       };
       interface TokenClient {
         callback: (res: OAuth2TokenResponse) => void;
-        requestAccessToken: (options?: { prompt?: string; hint?: string }) => void;
+        requestAccessToken: (options?: { prompt?: string; hint?: string; scope?: string }) => void;
       }
       function initTokenClient(options: {
         client_id: string;

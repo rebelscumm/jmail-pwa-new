@@ -40,7 +40,7 @@
         CLIENT_ID = CLIENT_ID || resolveGoogleClientId() as string;
         try { await initAuth(CLIENT_ID); } catch (_) {}
       }
-      await acquireTokenInteractive('consent');
+      await acquireTokenInteractive('consent', 'connect_click');
       hasAccount = true;
       // Navigate immediately; inbox page will hydrate
       window.location.href = `${base}/inbox`;
