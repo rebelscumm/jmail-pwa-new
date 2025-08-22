@@ -3,6 +3,9 @@
   import Button from '$lib/buttons/Button.svelte';
   import SplitButton from '$lib/buttons/SplitButton.svelte';
   import Menu from '$lib/containers/Menu.svelte';
+  import MenuItem from '$lib/containers/MenuItem.svelte';
+  import Dialog from '$lib/containers/Dialog.svelte';
+  import DatePickerDocked from '$lib/forms/DatePickerDocked.svelte';
   import { archiveThread, trashThread, markRead, markUnread, undoLast } from '$lib/queue/intents';
   import { snoozeThreadByRule, manualUnsnoozeThread, isSnoozedThread } from '$lib/snooze/actions';
   import { settings } from '$lib/stores/settings';
@@ -38,6 +41,55 @@
   let snoozeMenuOpen = $state(false);
   let mappedKeys = $derived(Array.from(new Set(Object.keys($settings.labelMapping || {}).filter((k) => $settings.labelMapping[k]).map((k) => normalizeRuleKey(k)))));
   let defaultSnoozeKey = $derived(mappedKeys.includes('1h') ? '1h' : (mappedKeys[0] || null));
+  let datePickerOpen = $state(false);
+  let pickedDate = $state(''); // yyyy-mm-dd
+
+  function isMapped(ruleKey: string): boolean {
+    const norm = normalizeRuleKey(ruleKey);
+    return mappedKeys.includes(norm);
+  }
+
+  function openDatePicker() {
+    pickedDate = '';
+    datePickerOpen = true;
+  }
+
+  function applyPickedDate(dateStr: string) {
+    try {
+      if (!dateStr) return;
+      const today = new Date();
+      const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+      const selected = new Date(dateStr + 'T00:00:00');
+      const msPerDay = 24 * 60 * 60 * 1000;
+      const diffDays = Math.round((selected.getTime() - startOfToday.getTime()) / msPerDay);
+      if (diffDays < 1 || diffDays > 30) {
+        showSnackbar({ message: 'Pick between 1 and 30 days from today' });
+        return;
+      }
+      const key = `${diffDays}d`;
+      if (!isMapped(key)) {
+        showSnackbar({ message: `No snooze label configured for ${key}. Map it in Settings.` });
+        return;
+      }
+      datePickerOpen = false;
+      animateAndSnooze(key, `Snoozed ${key}`);
+    } catch (_) {
+      showSnackbar({ message: 'Failed to apply date' });
+    }
+  }
+
+  function dateValidator(dateStr: string): boolean {
+    try {
+      const today = new Date();
+      const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+      const d = new Date(dateStr + 'T00:00:00');
+      const msPerDay = 24 * 60 * 60 * 1000;
+      const diffDays = Math.round((d.getTime() - startOfToday.getTime()) / msPerDay);
+      return diffDays >= 1 && diffDays <= 30;
+    } catch {
+      return false;
+    }
+  }
   
   // Unified slide-out performer used by all trailing actions
   async function animateAndPerform(label: string, doIt: () => Promise<void>, isError = false): Promise<void> {
@@ -184,11 +236,19 @@
         {#snippet menu()}
           <div class="snooze-menu">
             <Menu>
-              {#if mappedKeys.length > 0}
-                <SnoozePanel onSelect={(k: string) => animateAndSnooze(k, 'Snoozed')} />
-              {:else}
-                <div style="padding:0.5rem 0.75rem; max-width: 18rem;" class="m3-font-body-small">No snooze labels configured. Map them in Settings.</div>
-              {/if}
+              <MenuItem disabled={!isMapped('1h')} onclick={() => animateAndSnooze('1h', 'Snoozed 1h')}>1h</MenuItem>
+              <MenuItem disabled={!isMapped('3h')} onclick={() => animateAndSnooze('3h', 'Snoozed 3h')}>3h</MenuItem>
+              <MenuItem disabled={!isMapped('2pm')} onclick={() => animateAndSnooze('2pm', 'Snoozed 2p')}>2p</MenuItem>
+              <MenuItem disabled={!isMapped('6am')} onclick={() => animateAndSnooze('6am', 'Snoozed 6a')}>6a</MenuItem>
+              <MenuItem disabled={!isMapped('7pm')} onclick={() => animateAndSnooze('7pm', 'Snoozed 7p')}>7p</MenuItem>
+              <MenuItem disabled={!isMapped('2d')} onclick={() => animateAndSnooze('2d', 'Snoozed 2d')}>2d</MenuItem>
+              <MenuItem disabled={!isMapped('4d')} onclick={() => animateAndSnooze('4d', 'Snoozed 4d')}>4d</MenuItem>
+              <MenuItem disabled={!isMapped('7d')} onclick={() => animateAndSnooze('7d', 'Snoozed 7d')}>7d</MenuItem>
+              <MenuItem disabled={!isMapped('14d')} onclick={() => animateAndSnooze('14d', 'Snoozed 14d')}>14d</MenuItem>
+              <MenuItem disabled={!isMapped('30d')} onclick={() => animateAndSnooze('30d', 'Snoozed 30d')}>30d</MenuItem>
+              <MenuItem disabled={!isMapped('mon')} onclick={() => animateAndSnooze('mon', 'Snoozed mon')}>mon</MenuItem>
+              <MenuItem disabled={!isMapped('fri')} onclick={() => animateAndSnooze('fri', 'Snoozed fri')}>fri</MenuItem>
+              <MenuItem onclick={() => openDatePicker()}>Pick date…</MenuItem>
             </Menu>
           </div>
         {/snippet}
@@ -200,6 +260,18 @@
 {#snippet trailingWithDate()}
   {@render trailing()}
 {/snippet}
+
+{#if datePickerOpen}
+  <Dialog close={() => (datePickerOpen = false)}>
+    <DatePickerDocked
+      date={pickedDate}
+      clearable={false}
+      dateValidator={dateValidator}
+      close={() => (datePickerOpen = false)}
+      setDate={(d) => applyPickedDate(d)}
+    />
+  </Dialog>
+{/if}
 
 <div class="swipe-wrapper" class:menu-open={snoozeMenuOpen}
      onpointerdown={onPointerDown}
