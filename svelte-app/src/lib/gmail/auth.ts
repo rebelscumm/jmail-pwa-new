@@ -205,7 +205,8 @@ export function resolveGoogleClientId(): string | undefined {
     const winId = typeof window !== 'undefined' ? ((window as any).__ENV__?.GOOGLE_CLIENT_ID || (window as any).__env?.GOOGLE_CLIENT_ID) : undefined;
     if (winId && String(winId).trim()) return String(winId).trim();
   } catch (_) {}
-  return undefined;
+  // Hardcoded fallback for this app (safe to embed; client IDs are not secrets)
+  return '49551890193-e6n262ccj95229ftp2dh6k9s2boo1kip.apps.googleusercontent.com';
 }
 
 // Fetch current token's granted scopes (diagnostics only)
