@@ -180,7 +180,24 @@
         if (!hadCache) loading = false;
       }
     })();
-    return () => unsub();
+    // Listen for global refresh requests
+    async function handleGlobalRefresh() {
+      try {
+        showSnackbar({ message: 'Refreshing inbox…' });
+        syncing = true;
+        await hydrate();
+        showSnackbar({ message: 'Inbox up to date', timeout: 3000 });
+      } catch (e) {
+        setApiError(e);
+        showSnackbar({ message: `Refresh failed: ${e instanceof Error ? e.message : e}`, closable: true });
+      } finally {
+        syncing = false;
+      }
+    }
+    window.addEventListener('jmail:refresh', handleGlobalRefresh);
+    // Expose for debugging/manual trigger
+    try { (window as any).__jmailRefresh = () => window.dispatchEvent(new CustomEvent('jmail:refresh')); } catch {}
+    return () => { window.removeEventListener('jmail:refresh', handleGlobalRefresh); unsub(); };
   });
 
   function setApiError(e: unknown) {

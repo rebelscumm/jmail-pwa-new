@@ -36,6 +36,9 @@
   }
   async function doSync() {
     try {
+      showSnackbar({ message: 'Syncing…' });
+    } catch {}
+    try {
       const { syncNow } = await import('$lib/stores/queue');
       await syncNow();
       // After flushing, immediately clear any trailing holds and reload inbox cache
@@ -47,6 +50,11 @@
         const mod = await import('../../routes/inbox/+page.svelte');
         if (typeof (mod as any).reloadFromCache === 'function') await (mod as any).reloadFromCache();
       } catch {}
+    } catch {}
+    try {
+      // Ask pages (e.g., inbox) to re-hydrate from server
+      window.dispatchEvent(new CustomEvent('jmail:refresh'));
+      showSnackbar({ message: 'Sync complete', timeout: 2500 });
     } catch {}
     onSyncNow && onSyncNow();
   }
