@@ -43,7 +43,7 @@
   const inboxCount = $derived(inboxThreads.length);
   const visibleThreadsCount = $derived(visibleThreads?.length || 0);
   const unreadCount = $derived(inboxThreads.filter((t) => (t.labelIds || []).includes('UNREAD')).length);
-  const soonSnoozedCount = $derived(() => {
+  const soonSnoozedCount = $derived.by(() => {
     try {
       const now = Date.now();
       const cutoff = now + 24 * 60 * 60 * 1000;
