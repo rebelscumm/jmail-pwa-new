@@ -63,6 +63,18 @@
   // Buffer to include last API entries in next copyDiagnostics call
   let __uiBufferedEntries: any[] = [];
 
+  export async function reloadFromCache() {
+    const db = await getDB();
+    const cachedThreads = await db.getAll('threads');
+    if (cachedThreads?.length) threadsStore.set(cachedThreads);
+    const cachedMessages = await db.getAll('messages');
+    if (cachedMessages?.length) {
+      const dict: Record<string, import('$lib/types').GmailMessage> = {};
+      for (const m of cachedMessages) dict[m.id] = m;
+      messagesStore.set(dict);
+    }
+  }
+
   onMount(() => {
     const unsub = authState.subscribe((s) => (ready = s.ready));
     (async () => {

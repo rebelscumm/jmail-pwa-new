@@ -11,6 +11,18 @@
   import { show as showSnackbar } from '$lib/containers/snackbar';
   import { fade } from 'svelte/transition';
   import { rules, DEFAULTS } from '$lib/snooze/rules';
+  // Lazy import to avoid circular or route coupling; fallback no-op if route not mounted
+  async function scheduleReload() {
+    try {
+      const delay = Math.max(0, Number($settings.trailingRefreshDelayMs || 5000));
+      setTimeout(async () => {
+        try {
+          const mod = await import('../../routes/inbox/+page.svelte');
+          if (typeof (mod as any).reloadFromCache === 'function') await (mod as any).reloadFromCache();
+        } catch (_) {}
+      }, delay);
+    } catch (_) {}
+  }
 
   let { thread }: { thread: import('$lib/types').GmailThread } = $props();
 
@@ -36,6 +48,8 @@
     await new Promise((r) => setTimeout(r, 180));
     await doIt();
     showSnackbar({ message: label, actions: { Undo: () => undoLast(1) } });
+    // Schedule a reload to refresh list after trailing action
+    scheduleReload();
   }
 
   function onPointerDown(e: PointerEvent) {

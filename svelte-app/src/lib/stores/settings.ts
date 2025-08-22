@@ -14,6 +14,7 @@ export type AppSettings = {
   aiModel?: string;
   aiPageFetchOptIn?: boolean;
   taskFilePath?: string;
+  trailingRefreshDelayMs?: number;
 };
 
 const DEFAULTS: AppSettings = {
@@ -21,7 +22,8 @@ const DEFAULTS: AppSettings = {
   roundMinutes: 5,
   unreadOnUnsnooze: true,
   labelMapping: {},
-  notifEnabled: false
+  notifEnabled: false,
+  trailingRefreshDelayMs: 5000
 };
 
 export const settings = writable<AppSettings>({ ...DEFAULTS });
