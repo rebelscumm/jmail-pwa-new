@@ -100,28 +100,64 @@ export async function recordIntent(threadId: string, intent: { type: string; add
 
 export async function undoLast(n = 1): Promise<void> {
   const db = await getDB();
-  const tx = db.transaction('journal', 'readwrite');
-  const idx = tx.store.index('by_createdAt');
-  const entries = await idx.getAll();
-  const toUndo = entries.slice(-n);
-  for (const e of toUndo.reverse()) {
-    await queueThreadModify(e.threadId, e.inverse.addLabelIds, e.inverse.removeLabelIds);
-    await tx.store.delete(e.id);
+  try {
+    // Read entries outside of a long-lived transaction to avoid auto-close issues
+    const entries = await db.getAllFromIndex('journal', 'by_createdAt');
+    const toUndo = entries.slice(-n).reverse();
+
+    const idsToDelete: string[] = [];
+    for (const e of toUndo) {
+      await queueThreadModify(e.threadId, e.inverse.addLabelIds, e.inverse.removeLabelIds);
+      idsToDelete.push(e.id);
+    }
+
+    if (idsToDelete.length) {
+      const txDel = db.transaction('journal', 'readwrite');
+      for (const id of idsToDelete) await txDel.store.delete(id);
+      await txDel.done;
+    }
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('[undoLast] error', err);
+    try {
+      const { copyGmailDiagnosticsToClipboard } = await import('$lib/gmail/api');
+      await copyGmailDiagnosticsToClipboard({
+        reason: 'undo_error',
+        message: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined,
+        undoCount: n,
+        lastUpdatedAt: Date.now()
+      });
+    } catch (_) {}
+    throw err;
   }
-  await tx.done;
 }
 
 export async function redoLast(n = 1): Promise<void> {
   const db = await getDB();
-  const tx = db.transaction('journal', 'readwrite');
-  const idx = tx.store.index('by_createdAt');
-  const entries = await idx.getAll();
-  const toRedo = entries.slice(-n);
-  for (const e of toRedo) {
-    await queueThreadModify(e.threadId, e.intent.addLabelIds, e.intent.removeLabelIds);
-    await recordIntent(e.threadId, e.intent, e.inverse);
+  try {
+    // Read entries first; do not keep a transaction open across awaits
+    const entries = await db.getAllFromIndex('journal', 'by_createdAt');
+    const toRedo = entries.slice(-n);
+    for (const e of toRedo) {
+      await queueThreadModify(e.threadId, e.intent.addLabelIds, e.intent.removeLabelIds);
+      await recordIntent(e.threadId, e.intent, e.inverse);
+    }
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('[redoLast] error', err);
+    try {
+      const { copyGmailDiagnosticsToClipboard } = await import('$lib/gmail/api');
+      await copyGmailDiagnosticsToClipboard({
+        reason: 'redo_error',
+        message: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined,
+        redoCount: n,
+        lastUpdatedAt: Date.now()
+      });
+    } catch (_) {}
+    throw err;
   }
-  await tx.done;
 }
 
 export async function applyRemoteLabels(

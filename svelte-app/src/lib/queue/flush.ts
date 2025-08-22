@@ -3,6 +3,7 @@ import { batchModify, sendMessageRaw } from '$lib/gmail/api';
 import type { QueuedOp } from '$lib/types';
 import { backoffDelay, getDueOps, pruneDuplicateOps } from './ops';
 import { refreshSyncState } from '$lib/stores/queue';
+import { copyGmailDiagnosticsToClipboard } from '$lib/gmail/api';
 import { applyRemoteLabels } from './intents';
 
 export async function flushOnce(now = Date.now()): Promise<void> {
@@ -25,6 +26,10 @@ export async function flushOnce(now = Date.now()): Promise<void> {
       o.lastError = e instanceof Error ? e.message : String(e);
       await tx.store.put(o);
       await tx.done;
+      // Attempt to copy diagnostics to clipboard to assist debugging
+      try {
+        await copyGmailDiagnosticsToClipboard({ reason: 'send_op_error', lastError: o.lastError, opId: o.id, attempts: o.attempts, pendingOps: (await db.getAll('ops')).length, lastUpdatedAt: Date.now() });
+      } catch (_) {}
     }
   }
 
@@ -70,6 +75,11 @@ export async function flushOnce(now = Date.now()): Promise<void> {
         } catch (_) {}
       }
       await tx.done;
+      // Clipboard diagnostics with summary
+      try {
+        const pending = await db.getAll('ops');
+        await copyGmailDiagnosticsToClipboard({ reason: 'batch_modify_error', lastError: (e instanceof Error ? e.message : String(e)), groupSize: ops.length, uniqueIds: ids.length, addLabelIds, removeLabelIds, pendingOps: pending.length, lastUpdatedAt: Date.now() });
+      } catch (_) {}
     }
   }
   await refreshSyncState().catch(() => {});

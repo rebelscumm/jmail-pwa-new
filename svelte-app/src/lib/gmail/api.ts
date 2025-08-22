@@ -1,4 +1,4 @@
-import { ensureValidToken } from '$lib/gmail/auth';
+import { ensureValidToken, acquireTokenForScopes, fetchTokenInfo } from '$lib/gmail/auth';
 import type { GmailLabel, GmailMessage } from '$lib/types';
 
 const GMAIL_BASE = 'https://gmail.googleapis.com/gmail/v1/users/me';
@@ -21,9 +21,11 @@ function pushDiag(entry: Record<string, unknown>) {
   try {
     const payload = { time: new Date().toISOString(), ...entry };
     __gmailDiagnostics.push(payload);
-    // Also emit to console for immediate visibility
-    // eslint-disable-next-line no-console
-    console.debug('[GmailAPI]', payload);
+    // Also emit to console for immediate visibility in dev only
+    if (import.meta.env && import.meta.env.DEV) {
+      // eslint-disable-next-line no-console
+      console.debug('[GmailAPI]', payload);
+    }
   } catch (_) {}
 }
 
@@ -35,8 +37,33 @@ export function getAndClearGmailDiagnostics(): any[] {
 
 export async function copyGmailDiagnosticsToClipboard(extra?: Record<string, unknown>): Promise<boolean> {
   try {
-    const data = { entries: getAndClearGmailDiagnostics(), ...(extra || {}) };
+    const entries = getAndClearGmailDiagnostics();
+    // Summarize current outbox to aid debugging
+    let outbox: any = undefined;
+    let tokenInfo: any = undefined;
+    try {
+      const { getDB } = await import('$lib/db/indexeddb');
+      const db = await getDB();
+      const ops = await db.getAll('ops');
+      outbox = {
+        count: ops.length,
+        sample: ops.slice(0, 10).map((o: any) => ({
+          id: o.id,
+          type: o.op?.type,
+          attempts: o.attempts,
+          nextAttemptAt: o.nextAttemptAt,
+          lastError: o.lastError,
+          scopeKey: o.scopeKey
+        }))
+      };
+    } catch (_) {}
+    try {
+      tokenInfo = await fetchTokenInfo();
+    } catch (_) {}
+    const data = { entries, outbox, tokenInfo, ...(extra || {}) };
     const text = JSON.stringify(data, null, 2);
+    // eslint-disable-next-line no-console
+    console.log('[GmailAPI] Diagnostics', data);
     if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
       await navigator.clipboard.writeText(text);
       return true;
@@ -47,6 +74,7 @@ export async function copyGmailDiagnosticsToClipboard(extra?: Record<string, unk
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const token = await ensureValidToken();
+  pushDiag({ type: 'api_request', path, method: (init && 'method' in (init as any) && (init as any).method) ? (init as any).method : 'GET' });
   const res = await fetch(`${GMAIL_BASE}${path}`, {
     ...init,
     headers: {
@@ -59,21 +87,39 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     let message = `Gmail API error ${res.status}`;
     let details: unknown;
     try {
-      const body = await res.json().catch(() => undefined);
-      if (body) {
-        details = body;
-        // Common Google error shape: { error: { code, message, status, errors } }
-        const googleMessage = (body as any)?.error?.message || (body as any)?.message;
-        if (googleMessage) message = googleMessage as string;
+      const text = await res.text();
+      if (text) {
+        try {
+          const body = JSON.parse(text);
+          details = body;
+          // Common Google error shape: { error: { code, message, status, errors } }
+          const googleMessage = (body as any)?.error?.message || (body as any)?.message;
+          if (googleMessage) message = googleMessage as string;
+        } catch (_) {
+          details = { nonJsonBody: text.slice(0, 256) };
+        }
       }
     } catch (_) {
       // ignore parse errors
     }
-    pushDiag({ type: 'api_error', path, status: res.status, message, details: sanitize(details) });
+    pushDiag({ type: 'api_error', path, status: res.status, message, contentType: res.headers.get('content-type') || undefined, details: sanitize(details) });
     throw new GmailApiError(message, res.status, details);
   }
-  const data = (await res.json()) as T;
-  return data;
+  // Some Gmail endpoints (e.g., batchModify) return 204 No Content.
+  // Safely handle empty bodies and non-JSON responses.
+  try {
+    const text = await res.text();
+    pushDiag({ type: 'api_response', path, status: res.status, contentType: res.headers.get('content-type') || undefined, bodyLength: (text || '').length });
+    if (!text) return undefined as unknown as T;
+    try {
+      return JSON.parse(text) as T;
+    } catch (_) {
+      // If the response isn't JSON, return undefined to avoid throwing
+      return undefined as unknown as T;
+    }
+  } catch (_) {
+    return undefined as unknown as T;
+  }
 }
 
 export async function listLabels(): Promise<GmailLabel[]> {
@@ -148,27 +194,108 @@ export async function getMessageFull(id: string): Promise<GmailMessage> {
     labelIds?: string[];
     payload?: { mimeType?: string; body?: { data?: string; size?: number }; parts?: any[]; headers?: { name: string; value: string }[] };
   };
-  const data = await api<GmailMessageApiResponse>(`/messages/${id}?format=full`);
+  let data: GmailMessageApiResponse | undefined;
+  try {
+    data = await api<GmailMessageApiResponse>(`/messages/${id}?format=full`);
+  } catch (e) {
+    const isMetadataScope403 = e instanceof GmailApiError && e.status === 403 && typeof e.message === 'string' && e.message.toLowerCase().includes('metadata scope');
+    if (isMetadataScope403) {
+      pushDiag({ type: 'scope_upgrade_needed', id, error: (e as Error).message });
+      try {
+        const before = await fetchTokenInfo();
+        pushDiag({ type: 'tokeninfo_before', id, tokenInfo: before });
+      } catch (_) {}
+      // Attempt to upgrade scopes interactively
+      const neededScopes = [
+        'https://www.googleapis.com/auth/gmail.readonly',
+        'https://www.googleapis.com/auth/gmail.modify'
+      ].join(' ');
+      const upgraded = await acquireTokenForScopes(neededScopes, 'consent').catch(() => false);
+      pushDiag({ type: 'scope_upgrade_result', id, upgraded });
+      if (upgraded) {
+        try {
+          const after = await fetchTokenInfo();
+          pushDiag({ type: 'tokeninfo_after', id, tokenInfo: after });
+        } catch (_) {}
+        // Retry once after upgrade
+        data = await api<GmailMessageApiResponse>(`/messages/${id}?format=full`);
+      } else {
+        // Re-throw original error after logging
+        throw e;
+      }
+    } else {
+      throw e;
+    }
+  }
   const headers: Record<string, string> = {};
   for (const h of data.payload?.headers || []) headers[h.name] = h.value;
   function decode(b64?: string): string | undefined {
     if (!b64) return undefined;
     try { return decodeURIComponent(escape(atob(b64.replace(/-/g, '+').replace(/_/g, '/')))); } catch { return undefined; }
   }
-  function extractText(payload: any): { text?: string; html?: string } {
-    if (!payload) return {};
+  async function getAttachmentData(messageId: string, attachmentId: string): Promise<string | undefined> {
+    type AttachmentResponse = { data?: string; size?: number };
+    try {
+      const res = await api<AttachmentResponse>(`/messages/${messageId}/attachments/${attachmentId}`);
+      return res?.data;
+    } catch (e) {
+      pushDiag({ type: 'attachment_fetch_error', fn: 'getMessageFull', id: messageId, attachmentId, error: e instanceof Error ? e.message : String(e) });
+      return undefined;
+    }
+  }
+  async function extractText(payload: any): Promise<{ text?: string; html?: string; diag: any }> {
+    if (!payload) return { diag: { reason: 'no_payload' } } as any;
     const out: { text?: string; html?: string } = {};
+    const diagnostics = { rootMimeType: payload?.mimeType, visited: 0, textParts: 0, htmlParts: 0, attachmentFetches: 0, structure: [] as Array<{ mimeType?: string; hasData?: boolean; hasAttachmentId?: boolean; parts?: number; size?: number }> };
     const stack = [payload];
     while (stack.length) {
       const p = stack.pop();
       if (!p) continue;
-      if (p.mimeType === 'text/plain' && p.body?.data) out.text = (out.text || '') + (decode(p.body.data) || '');
-      if (p.mimeType === 'text/html' && p.body?.data) out.html = (out.html || '') + (decode(p.body.data) || '');
+      diagnostics.visited++;
+      diagnostics.structure.push({ mimeType: p.mimeType, hasData: !!p?.body?.data, hasAttachmentId: !!p?.body?.attachmentId, parts: Array.isArray(p.parts) ? p.parts.length : undefined, size: p?.body?.size });
+      // Inline data
+      if (p.mimeType === 'text/plain') {
+        if (p.body?.data) {
+          out.text = (out.text || '') + (decode(p.body.data) || '');
+          diagnostics.textParts++;
+        } else if (p.body?.attachmentId) {
+          const adata = await getAttachmentData(id, p.body.attachmentId);
+          if (adata) {
+            out.text = (out.text || '') + (decode(adata) || '');
+            diagnostics.attachmentFetches++;
+          }
+        }
+      }
+      if (p.mimeType === 'text/html') {
+        if (p.body?.data) {
+          out.html = (out.html || '') + (decode(p.body.data) || '');
+          diagnostics.htmlParts++;
+        } else if (p.body?.attachmentId) {
+          const adata = await getAttachmentData(id, p.body.attachmentId);
+          if (adata) {
+            out.html = (out.html || '') + (decode(adata) || '');
+            diagnostics.attachmentFetches++;
+          }
+        }
+      }
       if (Array.isArray(p.parts)) for (const c of p.parts) stack.push(c);
     }
-    return out;
+    return { ...out, diag: diagnostics };
   }
-  const body = extractText(data.payload);
+  const body = await extractText(data.payload);
+  pushDiag({
+    type: 'message_full_extracted',
+    id: data.id,
+    threadId: data.threadId,
+    payloadMimeType: data.payload?.mimeType,
+    hasText: !!body.text,
+    hasHtml: !!body.html,
+    textLen: body.text?.length,
+    htmlLen: body.html?.length,
+    attachmentFetches: (body as any)?.diag?.attachmentFetches,
+    visitedParts: (body as any)?.diag?.visited,
+    structure: (body as any)?.diag?.structure
+  });
   const message: GmailMessage = {
     id: data.id,
     threadId: data.threadId,

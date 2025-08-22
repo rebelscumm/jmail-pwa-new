@@ -21,12 +21,14 @@
   import { refreshSyncState } from "$lib/stores/queue";
   import FAB from "$lib/buttons/FAB.svelte";
   import Snackbar from "$lib/containers/Snackbar.svelte";
+  import { register as registerSnackbar, show as showSnackbar } from "$lib/containers/snackbar";
   import iconCompose from "@ktibow/iconset-material-symbols/edit";
   import BottomSheet from "$lib/containers/BottomSheet.svelte";
   import TextField from "$lib/forms/TextField.svelte";
   import TextFieldMultiline from "$lib/forms/TextFieldMultiline.svelte";
   import Button from "$lib/buttons/Button.svelte";
   import { queueSendRaw } from "$lib/queue/intents";
+  import { copyGmailDiagnosticsToClipboard } from "$lib/gmail/api";
   
   if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').catch(() => {});
@@ -103,6 +105,39 @@
         }
       } catch (_) {}
     })();
+
+    // Global error reporting to snackbar with Copy action
+    try {
+      window.addEventListener('error', (e: ErrorEvent) => {
+        const message = e?.message || 'An unexpected error occurred';
+        showSnackbar({
+          message,
+          actions: {
+            Copy: async () => {
+              const ok = await copyGmailDiagnosticsToClipboard({ reason: 'window_error', message, stack: (e?.error as Error | undefined)?.stack });
+              showSnackbar({ message: ok ? 'Diagnostics copied' : 'Failed to copy diagnostics', closable: true });
+            }
+          },
+          closable: true,
+          timeout: 6000
+        });
+      });
+      window.addEventListener('unhandledrejection', (e: PromiseRejectionEvent) => {
+        const reason: unknown = (e && 'reason' in e) ? (e as any).reason : undefined;
+        const message = reason instanceof Error ? reason.message : String(reason || 'Unhandled promise rejection');
+        showSnackbar({
+          message,
+          actions: {
+            Copy: async () => {
+              const ok = await copyGmailDiagnosticsToClipboard({ reason: 'unhandled_rejection', message, stack: reason instanceof Error ? reason.stack : undefined });
+              showSnackbar({ message: ok ? 'Diagnostics copied' : 'Failed to copy diagnostics', closable: true });
+            }
+          },
+          closable: true,
+          timeout: 6000
+        });
+      });
+    } catch (_) {}
   }
 
   let { children }: { children: Snippet } = $props();
@@ -128,6 +163,8 @@
   let body = $state("");
   let snackbar: ReturnType<typeof Snackbar>;
   let isOffline = $state(false);
+
+  $effect(() => { if (snackbar) registerSnackbar(snackbar.show); });
 
   function makeRfc2822(): string {
     const boundary = `----Jmail-${Math.random().toString(36).slice(2)}`;
@@ -210,7 +247,9 @@
   .content {
     display: flex;
     flex-direction: column;
-    padding: 1rem;
+    padding: 0.75rem 1rem;
+    gap: 0.75rem;
+    min-width: 0;
   }
   @media (width < 52.5rem) {
     .container {
@@ -245,8 +284,10 @@
       }
     }
     .content {
-      padding: 1.5rem;
+      padding: 1.25rem 1.5rem;
+      gap: 1rem;
       grid-column: 2;
+      min-width: 0;
     }
   }
   .fab-holder {

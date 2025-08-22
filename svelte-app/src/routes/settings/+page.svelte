@@ -4,6 +4,7 @@
   import { listLabels } from '$lib/gmail/api';
   import type { GmailLabel } from '$lib/types';
   import { loadSettings, saveLabelMapping, settings, seedDefaultMapping, updateAppSettings } from '$lib/stores/settings';
+  import { normalizeRuleKey } from '$lib/snooze/rules';
   import type { AppSettings } from '$lib/stores/settings';
   import { createBackup, listBackups, pruneOldBackups, restoreBackup } from '$lib/db/backups';
 
@@ -20,6 +21,15 @@
   let _aiPageFetchOptIn = false;
   let _taskFilePath = '';
   let backups: { key: string; createdAt: number }[] = [];
+  // Human-friendly mapping UI state
+  let uiMapping: Record<string, string> = {};
+  const quickKeys = ['10m','30m','1h','2h','3h'];
+  const hourKeys = ['1h','2h','3h','4h','5h','6h','7h'];
+  const dayKeys = Array.from({ length: 30 }, (_, i) => `${i+1}d`);
+  const weekdayKeys = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+  const timeKeys = ['6am','2pm','7pm'];
+  const persistentKeys = ['Desktop','long-term'];
+  $: ruleKeys = [ ...new Set([ ...quickKeys, ...hourKeys, ...dayKeys, ...weekdayKeys, ...timeKeys, ...persistentKeys ]) ];
 
   onMount(async () => {
     await loadSettings();
@@ -34,6 +44,7 @@
     _aiPageFetchOptIn = !!s.aiPageFetchOptIn;
     _taskFilePath = s.taskFilePath || '';
     mappingJson = JSON.stringify(s.labelMapping, null, 2);
+    uiMapping = { ...s.labelMapping };
 
     const db = await getDB();
     const tx = db.transaction('labels');
@@ -64,8 +75,63 @@
     }
   }
 
+  async function saveUiMapping() {
+    // Validate IDs
+    const known = new Set(labels.map((l) => l.id));
+    for (const [k, v] of Object.entries(uiMapping)) {
+      if (v && !known.has(v)) throw new Error(`Unknown label id for ${k}: ${v}`);
+    }
+    await saveLabelMapping(uiMapping);
+    mappingJson = JSON.stringify(uiMapping, null, 2);
+    info = 'Saved!';
+  }
+
+  function autoMapFromLabelNames() {
+    if (!labels.length) {
+      info = 'No labels loaded. Click Refresh first.';
+      console.info('[AutoMap] No labels loaded.');
+      return;
+    }
+    const before = { ...uiMapping };
+    const next: Record<string, string> = { ...uiMapping };
+    let applied = 0;
+    const appliedPairs: Array<{ key: string; id: string; name: string }> = [];
+    for (const l of labels) {
+      const key = normalizeRuleKey(l.name);
+      if (ruleKeys.includes(key) && !next[key]) {
+        next[key] = l.id;
+        applied++;
+        appliedPairs.push({ key, id: l.id, name: l.name });
+      }
+    }
+    uiMapping = next;
+    mappingJson = JSON.stringify(uiMapping, null, 2);
+    info = applied ? `Auto-mapped ${applied} label(s).` : 'No matches found to auto-map.';
+    console.info('[AutoMap] Result', { applied, appliedPairs, ruleKeys, before, after: next });
+  }
+
   function copy(text: string) {
     navigator.clipboard.writeText(text);
+  }
+
+  function copyAutoMapDiagnostics() {
+    const rows = labels.map((l) => ({ id: l.id, name: l.name, type: l.type, normalized: normalizeRuleKey(l.name) }));
+    const preview: Record<string, string> = { ...uiMapping };
+    for (const l of labels) {
+      const key = normalizeRuleKey(l.name);
+      if (ruleKeys.includes(key) && !preview[key]) preview[key] = l.id;
+    }
+    const diag = {
+      labelsCount: labels.length,
+      ruleKeys,
+      labels: rows,
+      mappingBefore: uiMapping,
+      mappingAfterPreview: preview
+    };
+    const text = JSON.stringify(diag, null, 2);
+    console.info('[AutoMap] Diagnostics', diag);
+    navigator.clipboard.writeText(text);
+    info = 'Diagnostics copied to clipboard.';
   }
 
   async function seedMapping() {
@@ -124,6 +190,100 @@
     const file=input.files?.[0]; if(!file) return; file.text().then((t: string)=>mappingJson=t);
   }} />
   <button on:click={seedMapping}>Seed defaults</button>
+</div>
+
+<h3>Snooze Mapping (UI)</h3>
+<div style="display:flex; gap:1rem; flex-wrap:wrap;">
+  <div>
+    <h4 class="m3-font-title-small" style="margin:0 0 0.25rem 0">Quick</h4>
+    {#each quickKeys as k}
+      <div style="display:flex; align-items:center; gap:0.5rem; margin:0.125rem 0;">
+        <code style="min-width:3rem; display:inline-block;">{k}</code>
+        <select bind:value={uiMapping[k]}>
+          <option value="">— Unmapped —</option>
+          {#each labels as l}
+            <option value={l.id}>{l.name}</option>
+          {/each}
+        </select>
+      </div>
+    {/each}
+  </div>
+  <div>
+    <h4 class="m3-font-title-small" style="margin:0 0 0.25rem 0">Hours</h4>
+    {#each hourKeys as k}
+      <div style="display:flex; align-items:center; gap:0.5rem; margin:0.125rem 0;">
+        <code style="min-width:3rem; display:inline-block;">{k}</code>
+        <select bind:value={uiMapping[k]}>
+          <option value="">— Unmapped —</option>
+          {#each labels as l}
+            <option value={l.id}>{l.name}</option>
+          {/each}
+        </select>
+      </div>
+    {/each}
+  </div>
+  <div>
+    <h4 class="m3-font-title-small" style="margin:0 0 0.25rem 0">Days</h4>
+    {#each dayKeys as k}
+      <div style="display:flex; align-items:center; gap:0.5rem; margin:0.125rem 0;">
+        <code style="min-width:3rem; display:inline-block;">{k}</code>
+        <select bind:value={uiMapping[k]}>
+          <option value="">— Unmapped —</option>
+          {#each labels as l}
+            <option value={l.id}>{l.name}</option>
+          {/each}
+        </select>
+      </div>
+    {/each}
+  </div>
+  <div>
+    <h4 class="m3-font-title-small" style="margin:0 0 0.25rem 0">Weekdays</h4>
+    {#each weekdayKeys as k}
+      <div style="display:flex; align-items:center; gap:0.5rem; margin:0.125rem 0;">
+        <code style="min-width:5rem; display:inline-block;">{k}</code>
+        <select bind:value={uiMapping[k]}>
+          <option value="">— Unmapped —</option>
+          {#each labels as l}
+            <option value={l.id}>{l.name}</option>
+          {/each}
+        </select>
+      </div>
+    {/each}
+  </div>
+  <div>
+    <h4 class="m3-font-title-small" style="margin:0 0 0.25rem 0">Times</h4>
+    {#each timeKeys as k}
+      <div style="display:flex; align-items:center; gap:0.5rem; margin:0.125rem 0;">
+        <code style="min-width:3rem; display:inline-block;">{k}</code>
+        <select bind:value={uiMapping[k]}>
+          <option value="">— Unmapped —</option>
+          {#each labels as l}
+            <option value={l.id}>{l.name}</option>
+          {/each}
+        </select>
+      </div>
+    {/each}
+  </div>
+  <div>
+    <h4 class="m3-font-title-small" style="margin:0 0 0.25rem 0">Other</h4>
+    {#each persistentKeys as k}
+      <div style="display:flex; align-items:center; gap:0.5rem; margin:0.125rem 0;">
+        <code style="min-width:5rem; display:inline-block;">{k}</code>
+        <select bind:value={uiMapping[k]}>
+          <option value="">— Unmapped —</option>
+          {#each labels as l}
+            <option value={l.id}>{l.name}</option>
+          {/each}
+        </select>
+      </div>
+    {/each}
+  </div>
+</div>
+<div style="margin-top:0.5rem; display:flex; gap:0.5rem; align-items:center;">
+  <button on:click={autoMapFromLabelNames}>Auto-map from label names</button>
+  <button on:click={saveUiMapping}>Save Mapping (UI)</button>
+  <button on:click={copyAutoMapDiagnostics}>Copy auto-map diagnostics</button>
+  <small>Only mapped snoozes are shown elsewhere in the app.</small>
 </div>
 
 <h3>App Settings</h3>

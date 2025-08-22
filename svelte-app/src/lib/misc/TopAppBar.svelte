@@ -1,7 +1,28 @@
 <script lang="ts">
   import { syncState } from '$lib/stores/queue';
   import { undoLast, redoLast } from '$lib/queue/intents';
-  export let onSyncNow: (() => void) | undefined;
+  import Button from '$lib/buttons/Button.svelte';
+  import SplitButton from '$lib/buttons/SplitButton.svelte';
+  import TextField from '$lib/forms/TextField.svelte';
+  import Menu from '$lib/containers/Menu.svelte';
+  import MenuItem from '$lib/containers/MenuItem.svelte';
+  import Chip from '$lib/forms/Chip.svelte';
+  import Icon from '$lib/misc/_icon.svelte';
+  import { show as showSnackbar } from '$lib/containers/snackbar';
+  import { copyGmailDiagnosticsToClipboard } from '$lib/gmail/api';
+  import iconSearch from '@ktibow/iconset-material-symbols/search';
+  import iconMore from '@ktibow/iconset-material-symbols/more-vert';
+  import iconUndo from '@ktibow/iconset-material-symbols/undo';
+  import iconRedo from '@ktibow/iconset-material-symbols/redo';
+  import iconSync from '@ktibow/iconset-material-symbols/sync';
+  let { onSyncNow }: { onSyncNow?: () => void } = $props();
+  let overflowDetails: HTMLDetailsElement;
+  function toggleOverflow(e: MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    const d = overflowDetails || (e.currentTarget as HTMLElement).closest('details') as HTMLDetailsElement | null;
+    if (d) d.open = !d.open;
+  }
   async function doSync() {
     try {
       const { syncNow } = await import('$lib/stores/queue');
@@ -9,44 +30,100 @@
     } catch {}
     onSyncNow && onSyncNow();
   }
+
+  let search = $state('');
+  $effect(() => {
+    import('$lib/stores/search').then(m => m.searchQuery.set(search));
+  });
+
+  // Show snackbar when a new queue error surfaces; allow copying diagnostics
+  let lastShownError: string | undefined = $state();
+  $effect(() => {
+    const err = $syncState.lastError;
+    if (err && err !== lastShownError) {
+      lastShownError = err;
+      showSnackbar({
+        message: err,
+        actions: {
+          Copy: async () => {
+            const ok = await copyGmailDiagnosticsToClipboard({
+              reason: 'sync_error',
+              lastError: err,
+              pendingOps: $syncState.pendingOps,
+              lastUpdatedAt: $syncState.lastUpdatedAt
+            });
+            showSnackbar({ message: ok ? 'Diagnostics copied' : 'Failed to copy diagnostics', closable: true });
+          }
+        },
+        closable: true,
+        timeout: 6000
+      });
+    }
+  });
+
+  async function onPendingChipClick() {
+    if ($syncState.lastError) {
+      const ok = await copyGmailDiagnosticsToClipboard({
+        reason: 'user_clicked_pending_chip',
+        lastError: $syncState.lastError,
+        pendingOps: $syncState.pendingOps,
+        lastUpdatedAt: $syncState.lastUpdatedAt
+      });
+      showSnackbar({ message: ok ? 'Diagnostics copied' : 'Failed to copy diagnostics', closable: true });
+    }
+  }
 </script>
 
 <div class="topbar">
   <div class="left">
-    <div class="split">
-      <button type="button" class="primary" on:click={() => undoLast(1)}>Undo</button>
-      <details>
-        <summary title="More undo actions">▼</summary>
-        <div class="menu">
-          <button type="button" on:click={() => undoLast(1)}>Undo last</button>
-          <button type="button" on:click={() => undoLast(3)}>Undo last 3</button>
-        </div>
-      </details>
-    </div>
-    <div class="split">
-      <button type="button" class="primary" on:click={() => redoLast(1)}>Redo</button>
-      <details>
-        <summary title="More redo actions">▼</summary>
-        <div class="menu">
-          <button type="button" on:click={() => redoLast(1)}>Redo last</button>
-        </div>
-      </details>
-    </div>
+    <SplitButton variant="filled" x="inner" y="down" onclick={() => undoLast(1)}>
+      {#snippet children()}
+        <Icon icon={iconUndo} />
+        <span class="label">Undo</span>
+      {/snippet}
+      {#snippet menu()}
+        <Menu>
+          <MenuItem onclick={() => undoLast(1)}>Undo last</MenuItem>
+          <MenuItem onclick={() => undoLast(3)}>Undo last 3</MenuItem>
+        </Menu>
+      {/snippet}
+    </SplitButton>
+
+    <SplitButton variant="tonal" x="inner" y="down" onclick={() => redoLast(1)}>
+      {#snippet children()}
+        <Icon icon={iconRedo} />
+        <span class="label">Redo</span>
+      {/snippet}
+      {#snippet menu()}
+        <Menu>
+          <MenuItem onclick={() => redoLast(1)}>Redo last</MenuItem>
+        </Menu>
+      {/snippet}
+    </SplitButton>
   </div>
   <div class="right">
-    <input class="search" placeholder="Search" on:input={(e)=>import('$lib/stores/search').then(m=>m.searchQuery.set((e.currentTarget as HTMLInputElement).value))} />
-    <span class="chip" title={$syncState.lastError || ''}>
+    <div class="search-field">
+      <TextField label="Search" leadingIcon={iconSearch} bind:value={search} />
+    </div>
+    <Chip variant="assist" elevated={$syncState.pendingOps > 0} title={$syncState.lastError ? `Error: ${$syncState.lastError} — click to copy diagnostics` : ''} onclick={onPendingChipClick}>
       {$syncState.pendingOps ? `${$syncState.pendingOps} pending` : 'Synced'}
-    </span>
-    <button type="button" class="secondary" on:click={doSync}>Sync now</button>
-    <details class="overflow">
-      <summary aria-label="More actions">⋮</summary>
-      <div class="menu">
-        <a href="/settings">Settings</a>
-        <button type="button" on:click={doSync}>Sync now</button>
-        <button type="button" on:click={async()=>{ const m = await import('$lib/db/backups'); await m.createBackup(); await m.pruneOldBackups(4); }}>Create backup</button>
-        <button type="button" on:click={async()=>{ const m = await import('$lib/queue/ops'); await m.pruneDuplicateOps(); }}>Deduplicate</button>
-      </div>
+    </Chip>
+    <Button variant="outlined" iconType="left" onclick={doSync} aria-label="Sync now">
+      <Icon icon={iconSync} />
+      Sync now
+    </Button>
+    <details class="overflow" bind:this={overflowDetails}>
+      <summary aria-label="More actions" class="summary-btn" onclick={toggleOverflow}>
+        <Button variant="text" iconType="full" aria-label="More actions">
+          <Icon icon={iconMore} />
+        </Button>
+      </summary>
+      <Menu>
+        <MenuItem onclick={() => (location.href = '/settings')}>Settings</MenuItem>
+        <MenuItem onclick={doSync}>Sync now</MenuItem>
+        <MenuItem onclick={async()=>{ const m = await import('$lib/db/backups'); await m.createBackup(); await m.pruneOldBackups(4); }}>Create backup</MenuItem>
+        <MenuItem onclick={async()=>{ const m = await import('$lib/queue/ops'); await m.pruneDuplicateOps(); }}>Deduplicate</MenuItem>
+      </Menu>
     </details>
   </div>
 </div>
@@ -58,25 +135,19 @@
     justify-content: space-between;
     gap: 0.5rem;
     padding: 0.25rem 0;
+    flex-wrap: wrap;
   }
   .left, .right { display: flex; align-items: center; gap: 0.5rem; }
-  .split { display:flex; align-items:center; }
-  .split > button.primary { height:2.5rem; padding:0 1rem; border-radius:1.25rem; border:1px solid var(--m3-outline-variant); background: rgb(var(--m3-scheme-primary)); color: rgb(var(--m3-scheme-on-primary)); }
-  .split > details > summary { height:2.5rem; padding:0 0.75rem; border-radius:1.25rem; border:1px solid var(--m3-outline-variant); cursor:pointer; }
-  .split > details[open] > .menu { position:absolute; margin-top:0.25rem; background: rgb(var(--m3-scheme-surface)); border:1px solid var(--m3-outline-variant); border-radius:0.5rem; padding:0.25rem; display:flex; flex-direction:column; gap:0.25rem; }
-  .split .menu > button { padding:0.5rem 0.75rem; border-radius:0.5rem; border:none; background:transparent; text-align:left; }
-  .chip {
-    border: 1px solid var(--m3-outline);
-    border-radius: 999px;
-    padding: 0.25rem 0.5rem;
-    font-size: 0.875rem;
+  .label { margin-inline-start: 0.25rem; }
+  .search-field { flex: 1 1 12rem; min-width: 0; }
+  .search-field :global(.m3-container) {
+    min-width: 12rem;
+    width: 100%;
   }
-  .secondary { height:2.5rem; padding:0 1rem; border-radius:1.25rem; border:1px solid var(--m3-outline-variant); background: transparent; color: rgb(var(--m3-scheme-primary)); }
-  .search { height:2.5rem; padding:0 0.75rem; border-radius:1.25rem; border:1px solid var(--m3-outline-variant); background: transparent; }
   .overflow { position:relative; }
-  .overflow > summary { cursor:pointer; height:2.5rem; padding:0 0.75rem; border-radius:1.25rem; border:1px solid var(--m3-outline-variant); }
-  .overflow[open] .menu { position:absolute; right:0; margin-top:0.25rem; background: rgb(var(--m3-scheme-surface)); border:1px solid var(--m3-outline-variant); border-radius:0.5rem; padding:0.5rem; display:flex; flex-direction:column; gap:0.25rem; min-width: 12rem; }
-  .overflow .menu > a, .overflow .menu > button { text-align:left; border:none; background:transparent; padding:0.375rem 0.5rem; border-radius:0.375rem; }
+  .overflow > summary { list-style: none; }
+  .summary-btn { cursor: pointer; }
+  .overflow[open] > :global(.m3-container) { position:absolute; right:0; margin-top:0.25rem; }
 </style>
 
 

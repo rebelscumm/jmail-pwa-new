@@ -23,10 +23,11 @@
   import { searchQuery } from '$lib/stores/search';
   let debouncedQuery = $state('');
   $effect(() => { const id = setTimeout(() => debouncedQuery = $searchQuery, 300); return () => clearTimeout(id); });
+  const inboxThreads = $derived(($threadsStore || []).filter((t) => (t.labelIds || []).includes('INBOX')));
   const visibleThreads = $derived(
     !debouncedQuery
-      ? $threadsStore
-      : $threadsStore.filter((t) => {
+      ? inboxThreads
+      : inboxThreads.filter((t) => {
           const subj = (t.lastMsgMeta.subject || '').toLowerCase();
           const from = (t.lastMsgMeta.from || '').toLowerCase();
           const q = debouncedQuery.toLowerCase();
@@ -36,23 +37,25 @@
   const totalThreadsCount = $derived($threadsStore?.length || 0);
   const visibleThreadsCount = $derived(visibleThreads?.length || 0);
   $effect(() => {
-    // Log UI-level diagnostics whenever visible list or query changes
+    // Log UI-level diagnostics in dev builds only
     try {
-      const entries = getAndClearGmailDiagnostics();
-      // eslint-disable-next-line no-console
-      console.debug('[InboxUI]', {
-        time: new Date().toISOString(),
-        type: 'ui_state',
-        searchQuery: debouncedQuery,
-        threadsCount: totalThreadsCount,
-        visibleThreadsCount,
-        nextPageToken,
-        entries
-      });
-      // Re-push previously captured entries so copy includes them later
-      if (entries && entries.length) {
-        // put them back through copy helper by appending in copyDiagnostics
-        __uiBufferedEntries = entries;
+      if (import.meta.env.DEV) {
+        const entries = getAndClearGmailDiagnostics();
+        // eslint-disable-next-line no-console
+        console.debug('[InboxUI]', {
+          time: new Date().toISOString(),
+          type: 'ui_state',
+          searchQuery: debouncedQuery,
+          threadsCount: totalThreadsCount,
+          visibleThreadsCount,
+          nextPageToken,
+          entries
+        });
+        // Re-push previously captured entries so copy includes them later
+        if (entries && entries.length) {
+          // put them back through copy helper by appending in copyDiagnostics
+          __uiBufferedEntries = entries;
+        }
       }
     } catch (_) {}
   });
@@ -98,8 +101,8 @@
       apiErrorStatus = undefined;
       apiErrorMessage = String(e);
     }
-    // Best-effort automatic diagnostics copy (may be blocked without user gesture)
-    void copyDiagnostics();
+    // Best-effort automatic diagnostics copy only in dev (may be blocked without user gesture)
+    if (import.meta.env.DEV) void copyDiagnostics();
   }
 
   async function signIn() {
@@ -137,8 +140,8 @@
     labelsStore.set(remoteLabels);
 
     // Messages + Threads (first 25)
-    // Profile is useful to know if the account has any threads at all
-    try { await getProfile(); } catch (_) {}
+    // Optional profile ping only in dev for diagnostics
+    if (import.meta.env.DEV) { try { await getProfile(); } catch (_) {} }
     const page = await listInboxMessageIds(25);
     nextPageToken = page.nextPageToken;
     const msgs = await mapWithConcurrency(page.ids, 4, (id) => getMessageMetadata(id));

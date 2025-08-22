@@ -7,8 +7,8 @@
   import TransformChooser from './TransformChooser.svelte';
   import SchemeShowcase from './SchemeShowcase.svelte';
 
-  let sourceColor = $state(Hct.fromInt(0x6750a4).toInt());
-  let variant = $state<Variant>(Variant.TONAL_SPOT);
+  let sourceColor = $state(Hct.fromInt(0x1a73e8).toInt());
+  let variant = $state<Variant>(Variant.VIBRANT);
   let contrast = $state(0);
 
   let schemes: Record<Variant, { light: any; dark: any }> = $state({} as any);

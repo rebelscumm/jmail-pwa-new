@@ -4,6 +4,20 @@ import { redactPII, htmlToText } from './redact';
 
 export type AIResult = { text: string };
 
+async function safeParseJson(res: Response): Promise<any> {
+  try {
+    const text = await res.text();
+    if (!text) return {};
+    try {
+      return JSON.parse(text);
+    } catch (_) {
+      return {};
+    }
+  } catch (_) {
+    return {};
+  }
+}
+
 async function callOpenAI(prompt: string): Promise<AIResult> {
   const s = get(settings);
   const key = s.aiApiKey || '';
@@ -15,7 +29,7 @@ async function callOpenAI(prompt: string): Promise<AIResult> {
     body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], temperature: 0.2 })
   });
   if (!res.ok) throw new Error(`OpenAI error ${res.status}`);
-  const data = await res.json();
+  const data = await safeParseJson(res);
   const text = data?.choices?.[0]?.message?.content?.trim?.() || '';
   return { text };
 }
@@ -31,7 +45,7 @@ async function callAnthropic(prompt: string): Promise<AIResult> {
     body: JSON.stringify({ model, max_tokens: 400, messages: [{ role: 'user', content: prompt }] })
   });
   if (!res.ok) throw new Error(`Anthropic error ${res.status}`);
-  const data = await res.json();
+  const data = await safeParseJson(res);
   const text = data?.content?.[0]?.text?.trim?.() || '';
   return { text };
 }
@@ -47,7 +61,7 @@ async function callGemini(prompt: string): Promise<AIResult> {
     body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
   });
   if (!res.ok) throw new Error(`Gemini error ${res.status}`);
-  const data = await res.json();
+  const data = await safeParseJson(res);
   const text = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim?.() || '';
   return { text };
 }

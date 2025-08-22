@@ -14,6 +14,8 @@
     | HTMLButtonAttributes;
   type Props = {
     variant?: "elevated" | "filled" | "tonal" | "outlined" | "text";
+    // Optional semantic color. When set to "error", apply MD3 destructive colors.
+    color?: "default" | "error";
     square?: boolean;
     iconType?: "none" | "left" | "full";
     children: Snippet;
@@ -29,6 +31,7 @@
   {@const {
     variant = "filled",
     for: forItem,
+    color = "default",
     square = false,
     iconType = "none",
     children,
@@ -36,7 +39,7 @@
   } = props}
   <label
     for={forItem}
-    class="m3-container m3-font-label-large {variant} icon-{iconType}"
+    class="m3-container m3-font-label-large {variant} icon-{iconType} color-{color}"
     class:square
     {...extra}
   >
@@ -47,6 +50,7 @@
   {@const {
     variant = "filled",
     href,
+    color = "default",
     square = false,
     iconType = "none",
     children,
@@ -54,7 +58,7 @@
   } = props}
   <a
     {href}
-    class="m3-container m3-font-label-large {variant} icon-{iconType}"
+    class="m3-container m3-font-label-large {variant} icon-{iconType} color-{color}"
     class:square
     {...extra}
   >
@@ -62,9 +66,9 @@
     {@render children()}
   </a>
 {:else}
-  {@const { variant = "filled", square = false, iconType = "none", children, ...extra } = props}
+  {@const { variant = "filled", color = "default", square = false, iconType = "none", children, ...extra } = props}
   <button
-    class="m3-container m3-font-label-large {variant} icon-{iconType}"
+    class="m3-container m3-font-label-large {variant} icon-{iconType} color-{color}"
     class:square
     {...extra}
   >
@@ -156,6 +160,32 @@
     }
     &.text:not(:disabled, :global(input:disabled) + label) {
       color: rgb(var(--m3-scheme-primary));
+    }
+    /* Destructive styling using MD3 error roles */
+    &.color-error:not(:disabled, :global(input:disabled) + label) {
+      &.filled {
+        background-color: rgb(var(--m3-scheme-error));
+        color: rgb(var(--m3-scheme-on-error));
+      }
+      &.tonal {
+        background-color: rgb(var(--m3-scheme-error-container));
+        color: rgb(var(--m3-scheme-on-error-container));
+      }
+      &.outlined {
+        outline-color: rgb(var(--m3-scheme-error));
+        color: rgb(var(--m3-scheme-error));
+      }
+      &.text {
+        color: rgb(var(--m3-scheme-error));
+        /* Keep text buttons transparent for error color (no pink state layer) */
+        > :global(.tint) {
+          opacity: 0 !important;
+        }
+      }
+      &.elevated {
+        background-color: rgb(var(--m3-scheme-surface-container-low));
+        color: rgb(var(--m3-scheme-error));
+      }
     }
     @media (hover: hover) {
       &:is(.filled, .tonal):not(:disabled, label):hover {

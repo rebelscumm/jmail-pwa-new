@@ -17,6 +17,7 @@
     supporting?: string;
     trailing?: Snippet;
     lines?: number;
+    unread?: boolean;
   } & ActionProps = $props();
   let _lines = $derived(
     props.lines ||
@@ -59,28 +60,29 @@
     headline = "",
     supporting = "",
     trailing,
+    unread = false,
     label: _,
     ...extra
   } = props}
-  <label class="m3-container lines-{_lines}" {...extra}>
+  <label class="m3-container lines-{_lines}" class:unread={unread} {...extra}>
     <Layer />
     {@render content(leading, overline, headline, supporting, trailing)}
   </label>
 {:else if "onclick" in props}
-  {@const { leading, overline = "", headline = "", supporting = "", trailing, ...extra } = props}
-  <button type="button" class="m3-container lines-{_lines}" {...extra}>
+  {@const { leading, overline = "", headline = "", supporting = "", trailing, unread = false, ...extra } = props}
+  <button type="button" class="m3-container lines-{_lines}" class:unread={unread} {...extra}>
     <Layer />
     {@render content(leading, overline, headline, supporting, trailing)}
   </button>
 {:else if "href" in props}
-  {@const { leading, overline = "", headline = "", supporting = "", trailing, ...extra } = props}
-  <a class="m3-container lines-{_lines}" {...extra}>
+  {@const { leading, overline = "", headline = "", supporting = "", trailing, unread = false, ...extra } = props}
+  <a class="m3-container lines-{_lines}" class:unread={unread} {...extra}>
     <Layer />
     {@render content(leading, overline, headline, supporting, trailing)}
   </a>
 {:else}
-  {@const { leading, overline = "", headline = "", supporting = "", trailing, ...extra } = props}
-  <div class="m3-container lines-{_lines}" {...extra}>
+  {@const { leading, overline = "", headline = "", supporting = "", trailing, unread = false, ...extra } = props}
+  <div class="m3-container lines-{_lines}" class:unread={unread} {...extra}>
     {@render content(leading, overline, headline, supporting, trailing)}
   </div>
 {/if}
@@ -98,25 +100,27 @@
     background: transparent;
     color: inherit;
     -webkit-tap-highlight-color: transparent;
+    min-width: 0;
   }
   button.m3-container,
   label.m3-container {
     cursor: pointer;
   }
   .lines-1 {
-    height: 3.5rem;
+    min-height: 3.5rem;
   }
   .lines-2 {
-    height: 4.5rem;
+    min-height: 4.5rem;
   }
   .lines-3 {
-    height: 5.5rem;
+    min-height: 5.5rem;
     padding-top: 0.75rem;
     padding-bottom: 0.75rem;
     align-items: flex-start;
   }
   .body {
     flex-grow: 1;
+    min-width: 0;
   }
   .leading,
   .trailing {
@@ -139,5 +143,15 @@
   }
   .headline {
     color: rgb(var(--m3-scheme-on-surface));
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+  .m3-container.unread .headline {
+    font-weight: 700;
+  }
+  .supporting,
+  .overline {
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 </style>

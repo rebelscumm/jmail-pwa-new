@@ -3,6 +3,7 @@
   import type { Snippet } from "svelte";
   import Layer from "$lib/misc/Layer.svelte";
   import Icon from "$lib/misc/_icon.svelte";
+  import { createEventDispatcher } from 'svelte';
 
   let {
     variant,
@@ -20,16 +21,19 @@
     onclick: () => void;
   } = $props();
 
+  const dispatch = createEventDispatcher<{ toggle: boolean }>();
+
   const autoclose = (node: HTMLDetailsElement) => {
     const close = (e: Event) => {
       if (e.target instanceof Element && e.target.closest("summary")) return;
 
       node.open = false;
     };
-    window.addEventListener("click", close);
+    // Use capture so it still fires even if inner handlers stop propagation
+    window.addEventListener("click", close, true);
     return {
       destroy() {
-        window.removeEventListener("click", close);
+        window.removeEventListener("click", close, true);
       },
     };
   };
@@ -40,7 +44,7 @@
     <Layer />
     {@render children()}
   </button>
-  <details class="align-{x} align-{y}" use:autoclose>
+  <details class="align-{x} align-{y}" use:autoclose ontoggle={(e) => dispatch('toggle', (e.currentTarget as HTMLDetailsElement).open)}>
     <summary class="split">
       <Layer />
       <Icon icon={iconExpand} width="1.375rem" height="1.375rem" />

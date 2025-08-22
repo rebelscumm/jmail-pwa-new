@@ -91,20 +91,87 @@ export const rules: Record<string, SnoozeRule> = {
   'long-term': { labelName: 'long-term', resolver: () => null, persistent: true }
 };
 
-function normalizeRuleKey(ruleKey: string): string {
-  const k = ruleKey.trim();
-  // Normalize common aliases/cases
-  const lower = k.toLowerCase();
+export function normalizeRuleKey(ruleKey: string): string {
+  // Work on the leaf segment only (support nested labels like "Snooze/01 day" or "?jlmSnooze/zz-2Hour")
+  const kFull = ruleKey.trim();
+  const leaf = (kFull.split('/').pop() || kFull).trim();
+  // Normalize common aliases/cases against the leaf
+  const lower = leaf.toLowerCase();
+  // Weekdays (accept full or short names, any case)
+  const weekdayMap: Record<string, string> = {
+    mon: 'Monday', monday: 'Monday',
+    tue: 'Tuesday', tues: 'Tuesday', tuesday: 'Tuesday',
+    wed: 'Wednesday', weds: 'Wednesday', wednesday: 'Wednesday',
+    thu: 'Thursday', thur: 'Thursday', thurs: 'Thursday', thursday: 'Thursday',
+    fri: 'Friday', friday: 'Friday',
+    sat: 'Saturday', saturday: 'Saturday',
+    sun: 'Sunday', sunday: 'Sunday'
+  };
+  if (weekdayMap[lower as keyof typeof weekdayMap]) return weekdayMap[lower as keyof typeof weekdayMap];
+
+  // Specific times supported by the app: 6am, 2pm, 7pm
+  // Accept formats like "6am", "6 am", "06:00", "6:00", "2pm", "2 pm", "14:00", "19:00"
+  // am/pm variants
+  const ampm = lower.match(/^(\d{1,2})\s?(a|p)\s?m$/);
+  if (ampm) {
+    const hour = parseInt(ampm[1], 10);
+    const ap = ampm[2];
+    if (ap === 'a' && hour === 6) return '6am';
+    if (ap === 'p' && hour === 2) return '2pm';
+    if (ap === 'p' && hour === 7) return '7pm';
+  }
+  // 24h or hh:mm formats
+  const time24 = lower.match(/^(\d{1,2})(?::([0-5]\d))?$/);
+  if (time24) {
+    const hour = parseInt(time24[1], 10);
+    const minutes = time24[2] ? parseInt(time24[2], 10) : 0;
+    if (minutes === 0) {
+      if (hour === 6) return '6am';
+      if (hour === 14) return '2pm';
+      if (hour === 19) return '7pm';
+    }
+  }
+  const time24Colon = lower.match(/^(\d{1,2}):(\d{2})$/);
+  if (time24Colon) {
+    const hour = parseInt(time24Colon[1], 10);
+    const minutes = parseInt(time24Colon[2], 10);
+    if (minutes === 0) {
+      if (hour === 6) return '6am';
+      if (hour === 14) return '2pm';
+      if (hour === 19) return '7pm';
+    }
+  }
+  // Desktop / long-term variants
+  if (lower === 'desktop') return 'Desktop';
+  if (lower === 'long-term' || lower === 'long term' || lower === 'longterm') return 'long-term';
+  // Hours formats (support: 1hour, 01-hour, 1-hour, hour1, hour01, hour-01, plurals)
+  const hourMatch = lower.match(/^(?:zz-)?(?:(\d{1,2})\s?-?\s?hour(?:s)?|hour-?(\d{1,2}))$/);
+  if (hourMatch) {
+    const n = parseInt(hourMatch[1] || hourMatch[2] || '0', 10);
+    if (!Number.isNaN(n) && n > 0) return `${n}h`;
+  }
+  // Existing short aliases
   if (lower === 'zz-1hour' || lower === '1hour' || lower === '1 hr' || lower === '1 h') return '1h';
-  if (lower === 'zz-2hour' || lower === '2hour' || lower === '2 hr' || lower === '2 h' || lower === 'zz-2hour') return '2h';
-  if (lower === '3hour' || lower === '3 hr' || lower === '3 h' || lower === '3hour') return '3h';
-  if (/^\d{2}\sday(s)?$/i.test(k)) {
-    const num = parseInt(k.slice(0, 2), 10);
+  if (lower === 'zz-2hour' || lower === '2hour' || lower === '2 hr' || lower === '2 h') return '2h';
+  if (lower === '3hour' || lower === '3 hr' || lower === '3 h') return '3h';
+
+  // Day formats like "01 day", "02 days", "9 days"
+  if (/^\d{1,2}\sday(s)?$/i.test(leaf)) {
+    const num = parseInt(leaf.slice(0, 2), 10);
     return `${num}d`;
   }
-  if (/^day\d+$/i.test(k)) return `${k.slice(3)}d`;
-  if (/^zday\d+$/i.test(k)) return `${k.slice(4)}d`;
-  return k;
+  // dayN, zdayN → Nd
+  if (/^day\d+$/i.test(leaf)) return `${leaf.slice(3)}d`;
+  if (/^zday\d+$/i.test(leaf)) return `${leaf.slice(4)}d`;
+  // "0N days" where N is single digit
+  if (/^0\d\sday(s)?$/i.test(leaf)) {
+    const num = parseInt(leaf.slice(0, 2), 10);
+    return `${num}d`;
+  }
+  // "\d+ days" without leading zero
+  const daysMatch = lower.match(/^(\d{1,2})\s?day(?:s)?$/);
+  if (daysMatch) return `${parseInt(daysMatch[1], 10)}d`;
+  return leaf;
 }
 
 export function resolveRule(ruleKey: string, zone: string, defaults = DEFAULTS): Date | null {
