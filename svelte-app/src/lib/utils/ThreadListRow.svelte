@@ -11,6 +11,7 @@
   import { show as showSnackbar } from '$lib/containers/snackbar';
   import { fade } from 'svelte/transition';
   import { rules, DEFAULTS, normalizeRuleKey, resolveRule } from '$lib/snooze/rules';
+  import { holdThread, clearHold } from '$lib/stores/holds';
   // Lazy import to avoid circular or route coupling; fallback no-op if route not mounted
   async function scheduleReload() {
     try {
@@ -46,6 +47,11 @@
     animating = true;
     dx = 160;
     await new Promise((r) => setTimeout(r, 180));
+    // Place a hold to keep the thread visible until the user-configured delay elapses
+    try {
+      const delay = Math.max(0, Number($settings.trailingRefreshDelayMs || 5000));
+      holdThread(thread.threadId, delay);
+    } catch {}
     await doIt();
     showSnackbar({ message: label, actions: { Undo: () => undoLast(1) } });
     // Schedule a reload to refresh list after trailing action
@@ -123,6 +129,7 @@
     const last = pendingLabel || 'action';
     pendingLabel = null;
     pendingRemove = false;
+    try { clearHold(thread.threadId); } catch {}
     undoLast(1).then(() => {
       showSnackbar({ message: `Undid ${last}` });
     });
