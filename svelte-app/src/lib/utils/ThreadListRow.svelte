@@ -3,10 +3,12 @@
   import Button from '$lib/buttons/Button.svelte';
   import SplitButton from '$lib/buttons/SplitButton.svelte';
   import Menu from '$lib/containers/Menu.svelte';
+  import MenuItem from '$lib/containers/MenuItem.svelte';
+  import Dialog from '$lib/containers/Dialog.svelte';
+  import DatePickerDocked from '$lib/forms/DatePickerDocked.svelte';
   import { archiveThread, trashThread, markRead, markUnread, undoLast } from '$lib/queue/intents';
   import { snoozeThreadByRule, manualUnsnoozeThread, isSnoozedThread } from '$lib/snooze/actions';
   import { settings } from '$lib/stores/settings';
-  import SnoozePanel from '$lib/snooze/SnoozePanel.svelte';
   import { base } from '$app/paths';
   import { show as showSnackbar } from '$lib/containers/snackbar';
   import { fade } from 'svelte/transition';
@@ -39,6 +41,44 @@
   let snoozeMenuOpen = $state(false);
   let mappedKeys = $derived(Array.from(new Set(Object.keys($settings.labelMapping || {}).filter((k) => $settings.labelMapping[k]).map((k) => normalizeRuleKey(k)))));
   let defaultSnoozeKey = $derived(mappedKeys.includes('1h') ? '1h' : (mappedKeys[0] || null));
+
+  let dateDialogOpen = $state(false);
+  function isMapped(key: string): boolean {
+    try { return mappedKeys.includes(normalizeRuleKey(key)); } catch { return false; }
+  }
+  async function trySnooze(key: string): Promise<void> {
+    const k = normalizeRuleKey(key);
+    if (!isMapped(k)) {
+      showSnackbar({ message: 'No snooze labels configured. Map them in Settings.' });
+      return;
+    }
+    await animateAndSnooze(k, 'Snoozed');
+  }
+  function daysFromToday(dateStr: string): number {
+    try {
+      const now = new Date();
+      const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const chosen = new Date(dateStr + 'T00:00:00');
+      const diffMs = chosen.getTime() - startOfToday.getTime();
+      return Math.round(diffMs / 86400000);
+    } catch {
+      return 0;
+    }
+  }
+  function dateValidator(dateStr: string): boolean {
+    const n = daysFromToday(dateStr);
+    return n >= 1 && n <= 30 && isMapped(`${n}d`);
+  }
+  async function onDatePicked(dateStr: string): Promise<void> {
+    const n = daysFromToday(dateStr);
+    if (n < 1 || n > 30) return;
+    const key = `${n}d`;
+    if (!isMapped(key)) {
+      showSnackbar({ message: 'No snooze labels configured for that date. Map in Settings.' });
+      return;
+    }
+    await animateAndSnooze(key, 'Snoozed');
+  }
   
   // Unified slide-out performer used by all trailing actions
   async function animateAndPerform(label: string, doIt: () => Promise<void>, isError = false): Promise<void> {
@@ -192,7 +232,19 @@
           <div class="snooze-menu">
             <Menu>
               {#if mappedKeys.length > 0}
-                <SnoozePanel onSelect={(k: string) => animateAndSnooze(k, 'Snoozed')} />
+                <MenuItem disabled={!isMapped('1h')} onclick={() => trySnooze('1h')}>1h</MenuItem>
+                <MenuItem disabled={!isMapped('3h')} onclick={() => trySnooze('3h')}>3h</MenuItem>
+                <MenuItem disabled={!isMapped('2pm')} onclick={() => trySnooze('2pm')}>2p</MenuItem>
+                <MenuItem disabled={!isMapped('6am')} onclick={() => trySnooze('6am')}>6a</MenuItem>
+                <MenuItem disabled={!isMapped('7pm')} onclick={() => trySnooze('7pm')}>7p</MenuItem>
+                <MenuItem disabled={!isMapped('2d')} onclick={() => trySnooze('2d')}>2d</MenuItem>
+                <MenuItem disabled={!isMapped('4d')} onclick={() => trySnooze('4d')}>4d</MenuItem>
+                <MenuItem disabled={!isMapped('7d')} onclick={() => trySnooze('7d')}>7d</MenuItem>
+                <MenuItem disabled={!isMapped('14d')} onclick={() => trySnooze('14d')}>14d</MenuItem>
+                <MenuItem disabled={!isMapped('30d')} onclick={() => trySnooze('30d')}>30d</MenuItem>
+                <MenuItem disabled={!isMapped('Monday')} onclick={() => trySnooze('Monday')}>mon</MenuItem>
+                <MenuItem disabled={!isMapped('Friday')} onclick={() => trySnooze('Friday')}>fri</MenuItem>
+                <MenuItem onclick={() => { dateDialogOpen = true; }}>Pick date…</MenuItem>
               {:else}
                 <div style="padding:0.5rem 0.75rem; max-width: 18rem;" class="m3-font-body-small">No snooze labels configured. Map them in Settings.</div>
               {/if}
@@ -249,6 +301,21 @@
     />
   </div>
 </div>
+
+<Dialog headline="Pick date" bind:open={dateDialogOpen} closeOnClick={false}>
+  {#snippet children()}
+    <DatePickerDocked
+      date={''}
+      clearable={false}
+      dateValidator={dateValidator}
+      close={() => (dateDialogOpen = false)}
+      setDate={onDatePicked}
+    />
+  {/snippet}
+  {#snippet buttons()}
+    <Button variant="text" onclick={() => (dateDialogOpen = false)}>Close</Button>
+  {/snippet}
+</Dialog>
 
 <style>
   .swipe-wrapper {
