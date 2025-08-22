@@ -10,6 +10,7 @@
   import { base } from '$app/paths';
   import { show as showSnackbar } from '$lib/containers/snackbar';
   import { fade } from 'svelte/transition';
+  import { resolveRule } from '$lib/snooze/rules';
 
   let { thread }: { thread: import('$lib/types').GmailThread } = $props();
 
@@ -24,7 +25,23 @@
   let pendingLabel: string | null = $state(null);
   let snoozeMenuOpen = $state(false);
   let mappedKeys = $derived(Object.keys($settings.labelMapping || {}).filter((k) => $settings.labelMapping[k]));
-  let defaultSnoozeKey = $derived(mappedKeys.includes('1h') ? '1h' : (mappedKeys[0] || null));
+  // Choose the shortest available snooze by comparing next due times
+  let defaultSnoozeKey = $derived((() => {
+    if (!mappedKeys.length) return null as string | null;
+    try {
+      const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+      const now = Date.now();
+      let bestKey: string | null = null;
+      let bestDelta = Number.POSITIVE_INFINITY;
+      for (const k of mappedKeys) {
+        const due = resolveRule(k, zone, { anchorHour: $settings.anchorHour, roundMinutes: $settings.roundMinutes });
+        if (!due) continue; // skip persistent buckets
+        const delta = +due - now;
+        if (delta < bestDelta) { bestDelta = delta; bestKey = k; }
+      }
+      return bestKey || mappedKeys[0] || null;
+    } catch { return mappedKeys[0] || null; }
+  })());
   
   // Unified slide-out performer used by all trailing actions
   async function animateAndPerform(label: string, doIt: () => Promise<void>, isError = false): Promise<void> {
@@ -154,12 +171,6 @@
   </div>
 {/snippet}
 
-{#snippet trailingWithDate()}
-  {#if thread.lastMsgMeta?.date}
-    <span>{formatDateTime(thread.lastMsgMeta.date)}</span>
-  {/if}
-  {@render trailing()}
-{/snippet}
 
 <div class="swipe-wrapper" class:menu-open={snoozeMenuOpen}
      onpointerdown={onPointerDown}
@@ -182,11 +193,11 @@
   <div class="fg" style={`transform: translateX(${dx}px); transition: ${animating ? 'transform 180ms var(--m3-util-easing-fast)' : 'none'};`} in:fade={{ duration: 120 }} out:fade={{ duration: 180 }}>
     <ListItem
       headline={thread.lastMsgMeta.subject || '(no subject)'}
-      supporting={`${thread.lastMsgMeta.from || ''}`}
+      supporting={`${thread.lastMsgMeta.from || ''}${thread.lastMsgMeta?.date ? ` • ${formatDateTime(thread.lastMsgMeta.date)}` : ''}`}
       lines={3}
       unread={(thread.labelIds || []).includes('UNREAD')}
       href={`${base || ''}/viewer/${thread.threadId}`}
-      trailing={trailingWithDate}
+      trailing={trailing}
     />
   </div>
 </div>

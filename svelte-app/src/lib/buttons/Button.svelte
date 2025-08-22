@@ -177,10 +177,7 @@
       }
       &.text {
         color: rgb(var(--m3-scheme-error));
-        /* Keep text buttons transparent for error color (no pink state layer) */
-        > :global(.tint) {
-          opacity: 0 !important;
-        }
+        /* Use MD3 state layer for text buttons with error color (subtle on hover/press) */
       }
       &.elevated {
         background-color: rgb(var(--m3-scheme-surface-container-low));

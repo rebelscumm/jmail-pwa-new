@@ -6,7 +6,6 @@
   import TextField from '$lib/forms/TextField.svelte';
   import Menu from '$lib/containers/Menu.svelte';
   import MenuItem from '$lib/containers/MenuItem.svelte';
-  import Chip from '$lib/forms/Chip.svelte';
   import Icon from '$lib/misc/_icon.svelte';
   import { show as showSnackbar } from '$lib/containers/snackbar';
   import { copyGmailDiagnosticsToClipboard } from '$lib/gmail/api';
@@ -72,6 +71,15 @@
       showSnackbar({ message: ok ? 'Diagnostics copied' : 'Failed to copy diagnostics', closable: true });
     }
   }
+
+  function formatTime(ts?: number): string {
+    if (!ts) return '—';
+    try {
+      return new Date(ts).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    } catch {
+      return '—';
+    }
+  }
 </script>
 
 <div class="topbar">
@@ -105,13 +113,17 @@
     <div class="search-field">
       <TextField label="Search" leadingIcon={iconSearch} bind:value={search} />
     </div>
-    <Chip variant="assist" elevated={$syncState.pendingOps > 0} title={$syncState.lastError ? `Error: ${$syncState.lastError} — click to copy diagnostics` : ''} onclick={onPendingChipClick}>
-      {$syncState.pendingOps ? `${$syncState.pendingOps} pending` : 'Synced'}
-    </Chip>
-    <Button variant="outlined" iconType="left" onclick={doSync} aria-label="Sync now">
-      <Icon icon={iconSync} />
-      Sync now
-    </Button>
+    <SplitButton variant={$syncState.pendingOps > 0 ? 'tonal' : 'outlined'} x="inner" y="down" onclick={doSync} aria-label="Sync">
+      {#snippet children()}
+        <Icon icon={iconSync} />
+        <span class="label">{$syncState.pendingOps ? `${$syncState.pendingOps} pending` : `Synced • ${formatTime($syncState.lastUpdatedAt)}`}</span>
+      {/snippet}
+      {#snippet menu()}
+        <Menu>
+          <MenuItem onclick={doSync}>Sync now</MenuItem>
+        </Menu>
+      {/snippet}
+    </SplitButton>
     <details class="overflow" bind:this={overflowDetails}>
       <summary aria-label="More actions" class="summary-btn" onclick={toggleOverflow}>
         <Button variant="text" iconType="full" aria-label="More actions">

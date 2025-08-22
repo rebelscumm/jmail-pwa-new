@@ -102,6 +102,15 @@
     -webkit-tap-highlight-color: transparent;
     min-width: 0;
   }
+  /* Ensure anchor list items never use default link colors, so MD3 state layer isn't blue/purple */
+  a.m3-container,
+  a.m3-container:link,
+  a.m3-container:visited,
+  a.m3-container:hover,
+  a.m3-container:active {
+    color: inherit;
+    text-decoration: none;
+  }
   button.m3-container,
   label.m3-container {
     cursor: pointer;
