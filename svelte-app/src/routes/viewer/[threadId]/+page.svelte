@@ -10,6 +10,8 @@
   import Divider from "$lib/utils/Divider.svelte";
   import LoadingIndicator from "$lib/forms/LoadingIndicator.svelte";
   import { getMessageFull, copyGmailDiagnosticsToClipboard } from "$lib/gmail/api";
+  import { getThreadSummary } from "$lib/gmail/api";
+  import { getDB } from "$lib/db/indexeddb";
   import { acquireTokenForScopes, SCOPES, fetchTokenInfo, signOut, acquireTokenInteractive } from "$lib/gmail/auth";
   import { aiSummarizeEmail, aiDraftReply, findUnsubscribeTarget, aiExtractUnsubscribeUrl } from "$lib/ai/providers";
   const threadId = $page.params.threadId;
@@ -18,6 +20,8 @@
   let loadingMap: Record<string, boolean> = $state({});
   let errorMap: Record<string, string> = $state({});
   let autoTried: Record<string, boolean> = $state({});
+  let threadLoading: boolean = $state(false);
+  let threadError: string | null = $state(null);
   function formatDateTime(ts?: number | string): string {
     if (!ts) return '';
     const n = typeof ts === 'string' ? Number(ts) : ts;
@@ -93,6 +97,42 @@
       void copyDiagnostics('viewer_relogin_failed', mid, e);
     }
   }
+
+  // Fallback: if the thread is not present (e.g., deep link to an older thread), try to fetch a summary
+  $effect(async () => {
+    if (currentThread || threadLoading) return;
+    if (!threadId) return;
+    threadLoading = true;
+    threadError = null;
+    try {
+      const { thread, messages: metas } = await getThreadSummary(threadId);
+      // Persist to DB and hydrate stores
+      try {
+        const db = await getDB();
+        const txMsgs = db.transaction('messages', 'readwrite');
+        for (const m of metas) await txMsgs.store.put(m);
+        await txMsgs.done;
+        const txThreads = db.transaction('threads', 'readwrite');
+        await txThreads.store.put(thread);
+        await txThreads.done;
+      } catch (_) {}
+      // Update stores
+      threads.set([...(Array.isArray($threads) ? $threads : []), thread].reduce((acc, t) => {
+        const idx = acc.findIndex((x) => x.threadId === t.threadId);
+        if (idx >= 0) acc[idx] = t; else acc.push(t);
+        return acc;
+      }, [] as typeof $threads));
+      const dict: Record<string, import('$lib/types').GmailMessage> = { ...$messages };
+      for (const m of metas) dict[m.id] = m;
+      messages.set(dict);
+    } catch (e) {
+      threadError = e instanceof Error ? e.message : String(e);
+      // Best-effort: attach diagnostics
+      void copyDiagnostics('viewer_thread_fallback_failed', undefined, e);
+    } finally {
+      threadLoading = false;
+    }
+  });
 
   // Auto-load the first message's full content
   $effect(() => {
@@ -279,7 +319,14 @@
     </div>
   </div>
 {:else}
-  <p>Thread not loaded.</p>
+  {#if threadLoading}
+    <div style="display:flex; justify-content:center; padding:1rem;"><LoadingIndicator size={24} /></div>
+  {:else}
+    <p>Thread not loaded.</p>
+    {#if threadError}
+      <p class="m3-font-body-medium" style="margin:0; color:rgb(var(--m3-scheme-error))">{threadError}</p>
+    {/if}
+  {/if}
 {/if}
 
 <!-- page options moved to +page.ts -->
