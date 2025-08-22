@@ -137,7 +137,18 @@
     try {
       // Desktop: copy; user can paste into their task file
       await navigator.clipboard.writeText(line);
-      alert('Task line copied to clipboard.');
+      // Verify clipboard actually contains the line; if read is blocked or mismatch, fallback to showing the text
+      try {
+        const readBack = await navigator.clipboard.readText();
+        if (readBack === line) {
+          alert('Task line copied to clipboard.');
+        } else {
+          alert(line);
+        }
+      } catch (_) {
+        // If we cannot read the clipboard (permission), show the line for manual copy
+        alert(line);
+      }
     } catch { alert(line); }
   }
 </script>
