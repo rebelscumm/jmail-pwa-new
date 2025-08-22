@@ -6,6 +6,18 @@ import { messages as messagesStore, threads as threadsStore } from '$lib/stores/
 
 const ACCOUNT_SUB = 'me';
 
+type JournalEntry = {
+  id: string;
+  createdAt: number;
+  threadId: string;
+  intent: { type: string; addLabelIds: string[]; removeLabelIds: string[]; ruleKey?: string };
+  inverse: { addLabelIds: string[]; removeLabelIds: string[] };
+};
+
+// In-memory redo stack for the current session. When an entry is undone, we push it here.
+// Redo will re-apply from this stack and clear entries as they are re-applied.
+const undoneStack: JournalEntry[] = [];
+
 function applyLabels(list: string[], add: string[], remove: string[]): string[] {
   const set = new Set(list);
   for (const r of remove) set.delete(r);
@@ -92,10 +104,74 @@ export async function markUnread(threadId: string) {
   await recordIntent(threadId, { type: 'markUnread', addLabelIds: ['UNREAD'], removeLabelIds: [] }, { addLabelIds: [], removeLabelIds: ['UNREAD'] });
 }
 
-export async function recordIntent(threadId: string, intent: { type: string; addLabelIds: string[]; removeLabelIds: string[]; ruleKey?: string }, inverse: { addLabelIds: string[]; removeLabelIds: string[] }) {
+function formatIntentLabel(e: JournalEntry): string {
+  const t = e.intent.type;
+  switch (t) {
+    case 'archive':
+      return 'Archived';
+    case 'trash':
+      return 'Deleted';
+    case 'spam':
+      return 'Marked as spam';
+    case 'markRead':
+      return 'Marked read';
+    case 'markUnread':
+      return 'Marked unread';
+    case 'snooze':
+      return e.intent.ruleKey ? `Snoozed ${e.intent.ruleKey}` : 'Snoozed';
+    case 'unsnooze':
+      return 'Unsnoozed';
+    default:
+      return t;
+  }
+}
+
+async function buildEntryDescriptions(entries: JournalEntry[]): Promise<Array<{ id: string; createdAt: number; threadId: string; type: string; description: string }>> {
+  const db = await getDB();
+  // Preload threads involved to derive subjects
+  const threadsMap = new Map<string, GmailThread | undefined>();
+  for (const e of entries) {
+    if (!threadsMap.has(e.threadId)) {
+      threadsMap.set(e.threadId, await db.get('threads', e.threadId));
+    }
+  }
+  return entries.map((e) => {
+    const th = threadsMap.get(e.threadId);
+    const subject = th?.lastMsgMeta?.subject || '(no subject)';
+    const action = formatIntentLabel(e);
+    return {
+      id: e.id,
+      createdAt: e.createdAt,
+      threadId: e.threadId,
+      type: e.intent.type,
+      description: `${action} • ${subject}`
+    };
+  });
+}
+
+export async function getUndoHistory(limit = 10): Promise<Array<{ id: string; createdAt: number; threadId: string; type: string; description: string }>> {
+  const db = await getDB();
+  const entries = await db.getAllFromIndex('journal', 'by_createdAt');
+  const recent = entries.slice(-limit).reverse() as JournalEntry[]; // most recent first
+  return buildEntryDescriptions(recent);
+}
+
+export async function getRedoHistory(limit = 10): Promise<Array<{ id: string; createdAt: number; threadId: string; type: string; description: string }>> {
+  const recent = undoneStack.slice(-limit).reverse(); // most recently undone first
+  return buildEntryDescriptions(recent);
+}
+
+export async function recordIntent(
+  threadId: string,
+  intent: { type: string; addLabelIds: string[]; removeLabelIds: string[]; ruleKey?: string },
+  inverse: { addLabelIds: string[]; removeLabelIds: string[] },
+  options?: { source?: 'redo' | 'user' | 'system' }
+) {
   const db = await getDB();
   const entry = { id: crypto.randomUUID(), createdAt: Date.now(), threadId, intent, inverse };
   await db.put('journal', entry);
+  // Any new forward action should invalidate redo history unless it's from a redo
+  if (!options || options.source !== 'redo') undoneStack.length = 0;
 }
 
 export async function undoLast(n = 1): Promise<void> {
@@ -103,10 +179,12 @@ export async function undoLast(n = 1): Promise<void> {
   try {
     // Read entries outside of a long-lived transaction to avoid auto-close issues
     const entries = await db.getAllFromIndex('journal', 'by_createdAt');
-    const toUndo = entries.slice(-n).reverse();
+    const toUndo = entries.slice(-n).reverse() as JournalEntry[];
 
     const idsToDelete: string[] = [];
     for (const e of toUndo) {
+      // Track in redo stack
+      undoneStack.push(e);
       await queueThreadModify(e.threadId, e.inverse.addLabelIds, e.inverse.removeLabelIds);
       idsToDelete.push(e.id);
     }
@@ -134,15 +212,15 @@ export async function undoLast(n = 1): Promise<void> {
 }
 
 export async function redoLast(n = 1): Promise<void> {
-  const db = await getDB();
   try {
-    // Read entries first; do not keep a transaction open across awaits
-    const entries = await db.getAllFromIndex('journal', 'by_createdAt');
-    const toRedo = entries.slice(-n);
+    // Re-apply from the in-memory undone stack
+    const toRedo = undoneStack.slice(-n);
     for (const e of toRedo) {
       await queueThreadModify(e.threadId, e.intent.addLabelIds, e.intent.removeLabelIds);
-      await recordIntent(e.threadId, e.intent, e.inverse);
+      await recordIntent(e.threadId, e.intent, e.inverse, { source: 'redo' });
     }
+    // Remove the re-applied entries from the stack
+    if (n > 0) undoneStack.splice(undoneStack.length - Math.min(n, undoneStack.length), Math.min(n, undoneStack.length));
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error('[redoLast] error', err);

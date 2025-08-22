@@ -1,6 +1,6 @@
 <script lang="ts">
   import { syncState } from '$lib/stores/queue';
-  import { undoLast, redoLast } from '$lib/queue/intents';
+  import { undoLast, redoLast, getUndoHistory, getRedoHistory } from '$lib/queue/intents';
   import Button from '$lib/buttons/Button.svelte';
   import SplitButton from '$lib/buttons/SplitButton.svelte';
   import TextField from '$lib/forms/TextField.svelte';
@@ -101,31 +101,57 @@
       return '';
     }
   }
+
+  // Undo/Redo history state
+  type HistItem = { id: string; createdAt: number; threadId: string; type: string; description: string };
+  let undoItems: HistItem[] = $state([]);
+  let redoItems: HistItem[] = $state([]);
+  async function refreshUndo() { try { undoItems = await getUndoHistory(10); } catch {} }
+  async function refreshRedo() { try { redoItems = await getRedoHistory(10); } catch {} }
+  async function doUndo(n: number) {
+    await undoLast(n);
+    await Promise.all([refreshUndo(), refreshRedo()]);
+  }
+  async function doRedo(n: number) {
+    await redoLast(n);
+    await Promise.all([refreshUndo(), refreshRedo()]);
+  }
 </script>
 
 <div class="topbar">
   <div class="left">
-    <SplitButton variant="filled" x="inner" y="down" onclick={() => undoLast(1)}>
+    <SplitButton variant="filled" x="inner" y="down" onclick={() => doUndo(1)} on:toggle={(e) => { if (e.detail) refreshUndo(); }}>
       {#snippet children()}
         <Icon icon={iconUndo} />
         <span class="label">Undo</span>
       {/snippet}
       {#snippet menu()}
         <Menu>
-          <MenuItem onclick={() => undoLast(1)}>Undo last</MenuItem>
-          <MenuItem onclick={() => undoLast(3)}>Undo last 3</MenuItem>
+          {#if undoItems.length}
+            {#each undoItems as it, idx}
+              <MenuItem onclick={() => doUndo(idx + 1)}>{it.description}</MenuItem>
+            {/each}
+          {:else}
+            <MenuItem disabled={true} onclick={() => {}}>No actions to undo</MenuItem>
+          {/if}
         </Menu>
       {/snippet}
     </SplitButton>
 
-    <SplitButton variant="tonal" x="inner" y="down" onclick={() => redoLast(1)}>
+    <SplitButton variant="tonal" x="inner" y="down" onclick={() => doRedo(1)} on:toggle={(e) => { if (e.detail) refreshRedo(); }}>
       {#snippet children()}
         <Icon icon={iconRedo} />
         <span class="label">Redo</span>
       {/snippet}
       {#snippet menu()}
         <Menu>
-          <MenuItem onclick={() => redoLast(1)}>Redo last</MenuItem>
+          {#if redoItems.length}
+            {#each redoItems as it, idx}
+              <MenuItem onclick={() => doRedo(idx + 1)}>{it.description}</MenuItem>
+            {/each}
+          {:else}
+            <MenuItem disabled={true} onclick={() => {}}>No actions to redo</MenuItem>
+          {/if}
         </Menu>
       {/snippet}
     </SplitButton>
