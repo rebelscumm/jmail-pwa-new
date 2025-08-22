@@ -16,6 +16,7 @@
   import iconMarkEmailUnread from '@ktibow/iconset-material-symbols/mark-email-unread';
   import iconSnooze from '@ktibow/iconset-material-symbols/snooze';
   import { getLabel } from '$lib/gmail/api';
+  import { trailingHolds } from '$lib/stores/holds';
 
   let CLIENT_ID: string = import.meta.env.VITE_GOOGLE_CLIENT_ID as string;
 
@@ -29,7 +30,13 @@
   import { searchQuery } from '$lib/stores/search';
   let debouncedQuery = $state('');
   $effect(() => { const id = setTimeout(() => debouncedQuery = $searchQuery, 300); return () => clearTimeout(id); });
-  const inboxThreads = $derived(($threadsStore || []).filter((t) => (t.labelIds || []).includes('INBOX')));
+  let now = $state(Date.now());
+  onMount(() => { const id = setInterval(() => { now = Date.now(); }, 250); return () => clearInterval(id); });
+  const inboxThreads = $derived(($threadsStore || []).filter((t) => {
+    const inInbox = (t.labelIds || []).includes('INBOX');
+    const held = (($trailingHolds || {})[t.threadId] || 0) > now;
+    return inInbox || held;
+  }));
   const visibleThreads = $derived(
     !debouncedQuery
       ? inboxThreads
