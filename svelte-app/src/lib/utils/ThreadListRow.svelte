@@ -223,8 +223,16 @@
   </div>
   <div class="fg" style={`transform: translateX(${dx}px); transition: ${animating ? 'transform 180ms var(--m3-util-easing-fast)' : 'none'};`} in:fade={{ duration: 120 }} out:fade={{ duration: 180 }}>
     <ListItem
-      headline={(thread.lastMsgMeta.subject || '(no subject)') + (thread.lastMsgMeta?.date ? ` \u00B7 ${formatDateTime(thread.lastMsgMeta.date)}` : '')}
-      supporting={`${thread.lastMsgMeta.from || ''}`}
+      headline={(thread.lastMsgMeta.subject || '(no subject)')}
+      supportingSnippet={() => {
+        const parts: any[] = [];
+        parts.push(`${thread.lastMsgMeta.from || ''}`);
+        if (thread.lastMsgMeta?.date) {
+          parts.push(`<span class=\"badge\">${formatDateTime(thread.lastMsgMeta.date)}</span>`);
+        }
+        return parts.join(' ');
+      }}
+      supporting={''}
       lines={3}
       unread={(thread.labelIds || []).includes('UNREAD')}
       href={`${base || ''}/viewer/${thread.threadId}`}
