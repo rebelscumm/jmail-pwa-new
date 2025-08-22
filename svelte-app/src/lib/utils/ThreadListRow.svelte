@@ -13,7 +13,7 @@
   import { show as showSnackbar } from '$lib/containers/snackbar';
   import { fade } from 'svelte/transition';
   import { rules, DEFAULTS, normalizeRuleKey, resolveRule } from '$lib/snooze/rules';
-  import { holdThread, clearHold } from '$lib/stores/holds';
+  import { holdThread } from '$lib/stores/holds';
   // Lazy import to avoid circular or route coupling; fallback no-op if route not mounted
   async function scheduleReload() {
     try {
@@ -36,8 +36,6 @@
   let captured = $state(false);
   let downInInteractive = $state(false);
   let startTarget: HTMLElement | null = null;
-  let pendingRemove = $state(false);
-  let pendingLabel: string | null = $state(null);
   let snoozeMenuOpen = $state(false);
   let mappedKeys = $derived(Array.from(new Set(Object.keys($settings.labelMapping || {}).filter((k) => $settings.labelMapping[k]).map((k) => normalizeRuleKey(k)))));
   let defaultSnoozeKey = $derived(mappedKeys.includes('1h') ? '1h' : (mappedKeys[0] || null));
@@ -81,9 +79,7 @@
   }
   
   // Unified slide-out performer used by all trailing actions
-  async function animateAndPerform(label: string, doIt: () => Promise<void>, isError = false): Promise<void> {
-    pendingRemove = isError;
-    pendingLabel = label;
+  async function animateAndPerform(label: string, doIt: () => Promise<void>, _isError = false): Promise<void> {
     animating = true;
     dx = 160;
     await new Promise((r) => setTimeout(r, 180));
@@ -93,6 +89,10 @@
       holdThread(thread.threadId, delay);
     } catch {}
     await doIt();
+    // Return the row to its resting position; rely on snackbar for Undo per MD3
+    dx = 0;
+    await new Promise((r) => setTimeout(r, 180));
+    animating = false;
     showSnackbar({ message: label, actions: { Undo: () => undoLast(1) } });
     // Schedule a reload to refresh list after trailing action
     scheduleReload();
@@ -161,18 +161,6 @@
   
   async function animateAndSnooze(ruleKey: string, label = 'Snoozed'): Promise<void> {
     await animateAndPerform(label, () => snoozeThreadByRule(thread.threadId, ruleKey, { optimisticLocal: false }));
-  }
-  
-  function onUndoBgClick(e: MouseEvent) {
-    e.preventDefault();
-    e.stopPropagation();
-    const last = pendingLabel || 'action';
-    pendingLabel = null;
-    pendingRemove = false;
-    try { clearHold(thread.threadId); } catch {}
-    undoLast(1).then(() => {
-      showSnackbar({ message: `Undid ${last}` });
-    });
   }
   
   function formatDateTime(ts?: number): string {
@@ -272,17 +260,10 @@
      onpointermove={onPointerMove}
      onpointerup={onPointerUp}
 >
-  <div class="bg" aria-hidden="true" style={`pointer-events:${pendingLabel ? 'auto' : 'none'}`}> 
-    {#if pendingLabel || dx > 0}
-    <div class="left" style={`background:${pendingRemove ? 'rgb(var(--m3-scheme-error-container))' : 'rgb(var(--m3-scheme-secondary-container))'}; color:${pendingRemove ? 'rgb(var(--m3-scheme-on-error-container))' : 'rgb(var(--m3-scheme-on-secondary-container))'}`}>
-      {#if pendingLabel}
-        <div class="pending-wrap" role="status" aria-live="polite">
-          <span class="pending-label m3-font-label-large">{pendingLabel}</span>
-          <Button variant="text" class="undo-btn" onclick={onUndoBgClick}>Undo</Button>
-        </div>
-      {:else}
-        {dx > 40 ? 'Archive' : ''}
-      {/if}
+  <div class="bg" aria-hidden="true" style={`pointer-events:none`}>
+    {#if dx > 0}
+    <div class="left">
+      {dx > 40 ? 'Archive' : ''}
     </div>
     {/if}
     {#if dx < 0}
@@ -356,19 +337,7 @@
     box-shadow: var(--m3-util-elevation-1);
   }
   .pending-wrap { display: inline-flex; align-items: center; gap: 0.5rem; }
-  /* Make the inline Undo button MD3-compliant for container backgrounds */
-  .bg .left :global(.m3-container.undo-btn) {
-    --m3-button-shape: var(--m3-util-rounding-small);
-    height: 2rem;
-    padding: 0 0.5rem;
-    min-width: auto;
-    background: transparent;
-    color: inherit !important;
-    box-shadow: none;
-    border: none;
-    outline: none;
-    appearance: none;
-  }
+  /* Residue Undo button removed in favor of global snackbar per MD3 */
   .fg {
     position: relative;
     background: transparent;
