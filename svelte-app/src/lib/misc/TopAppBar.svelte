@@ -12,6 +12,7 @@
   import { copyGmailDiagnosticsToClipboard } from '$lib/gmail/api';
   import Dialog from '$lib/containers/Dialog.svelte';
   import { appVersion, buildId } from '$lib/utils/version';
+  import { signOut, acquireTokenInteractive, resolveGoogleClientId, initAuth } from '$lib/gmail/auth';
   import iconSearch from '@ktibow/iconset-material-symbols/search';
   import iconMore from '@ktibow/iconset-material-symbols/more-vert';
   import iconInfo from '@ktibow/iconset-material-symbols/info';
@@ -21,6 +22,7 @@
   import iconSettings from '@ktibow/iconset-material-symbols/settings';
   import iconBackup from '@ktibow/iconset-material-symbols/backup';
   import iconRefresh from '@ktibow/iconset-material-symbols/refresh';
+  import iconLogout from '@ktibow/iconset-material-symbols/logout';
   let { onSyncNow }: { onSyncNow?: () => void } = $props();
   let overflowDetails: HTMLDetailsElement;
   let aboutOpen = $state(false);
@@ -123,6 +125,17 @@
     await redoLast(n);
     await Promise.all([refreshUndo(), refreshRedo()]);
   }
+  async function doRelogin() {
+    try {
+      await signOut();
+      const cid = resolveGoogleClientId() || '';
+      if (cid) { try { await initAuth(cid); } catch (_) {} }
+      await acquireTokenInteractive('consent', 'topbar_relogin');
+      location.href = '/inbox';
+    } catch (e) {
+      showSnackbar({ message: `Re-login failed: ${e instanceof Error ? e.message : e}`, closable: true });
+    }
+  }
 </script>
 
 <div class="topbar">
@@ -190,6 +203,7 @@
         <MenuItem icon={iconSettings} onclick={() => (location.href = '/settings')}>Settings</MenuItem>
         <MenuItem icon={iconBackup} onclick={async()=>{ const m = await import('$lib/db/backups'); await m.createBackup(); await m.pruneOldBackups(4); }}>Create backup</MenuItem>
         <MenuItem icon={iconRefresh} onclick={() => { const u = new URL(window.location.href); u.searchParams.set('refresh', '1'); location.href = u.toString(); }}>Force update</MenuItem>
+        <MenuItem icon={iconLogout} onclick={doRelogin}>Re-login</MenuItem>
         <MenuItem icon={iconInfo} onclick={() => { aboutOpen = true; }}>About</MenuItem>
       </Menu>
     </details>

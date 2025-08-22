@@ -215,7 +215,14 @@ export async function acquireTokenForScopes(scopes: string, prompt: 'none' | 'co
 export async function ensureValidToken(): Promise<string> {
   const state = getAuthState();
   if (state.accessToken && state.expiryMs && state.expiryMs > Date.now()) return state.accessToken;
-  if (!tokenClient) throw new Error('Auth not initialized');
+  if (!tokenClient) {
+    // Attempt late init using resolved client ID to avoid "Auth not initialized" in lazy routes
+    try {
+      const cid = resolveGoogleClientId();
+      if (cid) await initAuth(cid);
+    } catch (_) {}
+    if (!tokenClient) throw new Error('Auth not initialized');
+  }
   pushGmailDiag({ type: 'auth_silent_token_attempt' });
   const accessToken = await withTokenClientLock(async () => {
     let token: TokenResponse;
@@ -323,5 +330,27 @@ export async function fetchTokenInfo(): Promise<{ scope?: string; expires_in?: s
   } catch (_) {
     return undefined;
   }
+}
+
+// Sign out flow: revoke current token (best-effort), clear local state and auth cache
+export async function signOut(): Promise<void> {
+  try {
+    const state = getAuthState();
+    const token = state.accessToken;
+    if (typeof window !== 'undefined' && (window as any)?.google?.accounts?.oauth2?.revoke && token) {
+      try {
+        await new Promise<void>((resolve) => {
+          (window as any).google.accounts.oauth2.revoke(token, () => resolve());
+        });
+        pushGmailDiag({ type: 'auth_revoked' });
+      } catch (_) {}
+    }
+    authState.update((s) => ({ ...s, accessToken: undefined, expiryMs: undefined, account: undefined }));
+    try {
+      const { getDB } = await import('$lib/db/indexeddb');
+      const db = await getDB();
+      await db.delete('auth', 'me');
+    } catch (_) {}
+  } catch (_) {}
 }
 

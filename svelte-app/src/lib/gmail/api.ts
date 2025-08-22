@@ -1,4 +1,4 @@
-import { ensureValidToken, fetchTokenInfo } from '$lib/gmail/auth';
+import { ensureValidToken, fetchTokenInfo, acquireTokenForScopes, SCOPES } from '$lib/gmail/auth';
 import { pushGmailDiag, getAndClearGmailDiagnostics } from '$lib/gmail/diag';
 import type { GmailLabel, GmailMessage } from '$lib/types';
 
@@ -57,7 +57,10 @@ export async function copyGmailDiagnosticsToClipboard(extra?: Record<string, unk
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const token = await ensureValidToken();
-  pushGmailDiag({ type: 'api_request', path, method: (init && 'method' in (init as any) && (init as any).method) ? (init as any).method : 'GET' });
+  const tokenFp = fingerprintToken(token);
+  let tokenInfoAtRequest: { scope?: string; expires_in?: string; aud?: string } | undefined;
+  try { tokenInfoAtRequest = await fetchTokenInfo(); } catch (_) {}
+  pushGmailDiag({ type: 'api_request', path, method: (init && 'method' in (init as any) && (init as any).method) ? (init as any).method : 'GET', tokenInfo: tokenInfoAtRequest, tokenFp });
   const res = await fetch(`${GMAIL_BASE}${path}`, {
     ...init,
     headers: {
@@ -85,14 +88,18 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     } catch (_) {
       // ignore parse errors
     }
-    pushGmailDiag({ type: 'api_error', path, status: res.status, message, contentType: res.headers.get('content-type') || undefined, details: sanitize(details) });
+    const body = sanitize(details);
+    // Detect Gmail's 403 FORBIDDEN variant that can occur with quota or restricted data
+    const statusText = (body as any)?.error?.status || (body as any)?.status;
+    const reason = Array.isArray((body as any)?.error?.errors) ? (body as any).error.errors.map((e: any) => e?.reason).join(',') : undefined;
+    pushGmailDiag({ type: 'api_error', path, status: res.status, message, contentType: res.headers.get('content-type') || undefined, details: body, tokenFp, statusText, reason });
     throw new GmailApiError(message, res.status, details);
   }
   // Some Gmail endpoints (e.g., batchModify) return 204 No Content.
   // Safely handle empty bodies and non-JSON responses.
   try {
     const text = await res.text();
-    pushGmailDiag({ type: 'api_response', path, status: res.status, contentType: res.headers.get('content-type') || undefined, bodyLength: (text || '').length });
+    pushGmailDiag({ type: 'api_response', path, status: res.status, contentType: res.headers.get('content-type') || undefined, bodyLength: (text || '').length, tokenFp });
     if (!text) return undefined as unknown as T;
     try {
       return JSON.parse(text) as T;
@@ -185,12 +192,35 @@ export async function getMessageFull(id: string): Promise<GmailMessage> {
     const isScopeOrPermission = e instanceof GmailApiError && e.status === 403 && typeof msg === 'string' && (msg.toLowerCase().includes('metadata scope') || msg.toLowerCase().includes('insufficient') || msg.toLowerCase().includes('permission'));
     if (isScopeOrPermission) {
       pushGmailDiag({ type: 'scope_upgrade_needed', id, error: msg });
+      let attemptUpgrade = true;
       try {
         const before = await fetchTokenInfo();
-        pushGmailDiag({ type: 'tokeninfo_snapshot', id, tokenInfo: before });
+        const hasBodyScopes = !!before?.scope && (before.scope.includes('gmail.readonly') || before.scope.includes('gmail.modify'));
+        pushGmailDiag({ type: 'tokeninfo_snapshot', id, tokenInfo: before, hasBodyScopes });
+        if (hasBodyScopes) attemptUpgrade = false;
       } catch (_) {}
-      // Do NOT auto-prompt further. Surface a consistent error that the UI can handle.
-      throw new GmailApiError('Additional Gmail permissions are required to read this message body. Please grant access.', 403, { reason: 'scope_upgrade_required', id });
+      if (attemptUpgrade) {
+        // Attempt an automatic scope upgrade and retry once
+        try {
+          const upgraded = await acquireTokenForScopes(SCOPES, 'consent', 'auto_scope_upgrade_getMessageFull');
+          pushGmailDiag({ type: 'scope_upgrade_attempt', id, upgraded });
+          if (upgraded) {
+            data = await api<GmailMessageApiResponse>(`/messages/${id}?format=full`);
+          }
+        } catch (uerr) {
+          pushGmailDiag({ type: 'scope_upgrade_failed', id, error: uerr instanceof Error ? uerr.message : String(uerr) });
+        }
+      } else {
+        pushGmailDiag({ type: 'scope_upgrade_skipped', id, reason: 'body_scopes_already_present' });
+      }
+      if (!data) {
+        // Do NOT auto-prompt further. Surface a consistent error that the UI can handle.
+        const reason = attemptUpgrade ? 'scope_upgrade_required' : 'scope_present_but_denied';
+        const message = attemptUpgrade
+          ? 'Additional Gmail permissions are required to read this message body. Please grant access.'
+          : 'Gmail returned 403 despite body scopes being present. Please retry once, or re-login.';
+        throw new GmailApiError(message, 403, { reason, id });
+      }
     } else {
       throw e;
     }
@@ -329,6 +359,20 @@ function sanitize(value: unknown) {
     return v;
   } catch (_) {
     return undefined;
+  }
+}
+
+// Non-cryptographic token fingerprint so we can correlate diagnostics across requests
+function fingerprintToken(token: string): string {
+  try {
+    let hash = 2166136261; // FNV-1a 32-bit offset basis
+    for (let i = 0; i < token.length; i++) {
+      hash ^= token.charCodeAt(i);
+      hash = (hash * 16777619) >>> 0; // multiply prime and keep uint32
+    }
+    return hash.toString(16).padStart(8, '0');
+  } catch (_) {
+    return 'na';
   }
 }
 

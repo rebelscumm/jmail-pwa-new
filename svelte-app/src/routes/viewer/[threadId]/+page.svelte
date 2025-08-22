@@ -10,13 +10,14 @@
   import Divider from "$lib/utils/Divider.svelte";
   import LoadingIndicator from "$lib/forms/LoadingIndicator.svelte";
   import { getMessageFull, copyGmailDiagnosticsToClipboard } from "$lib/gmail/api";
-  import { acquireTokenForScopes, SCOPES } from "$lib/gmail/auth";
+  import { acquireTokenForScopes, SCOPES, fetchTokenInfo, signOut, acquireTokenInteractive } from "$lib/gmail/auth";
   import { aiSummarizeEmail, aiDraftReply, findUnsubscribeTarget, aiExtractUnsubscribeUrl } from "$lib/ai/providers";
   const threadId = $page.params.threadId;
   const currentThread = $derived($threads.find((t) => t.threadId === threadId));
   function copyText(text: string) { navigator.clipboard.writeText(text); }
   let loadingMap: Record<string, boolean> = $state({});
   let errorMap: Record<string, string> = $state({});
+  let autoTried: Record<string, boolean> = $state({});
   function formatDateTime(ts?: number | string): string {
     if (!ts) return '';
     const n = typeof ts === 'string' ? Number(ts) : ts;
@@ -74,12 +75,22 @@
 
   async function grantAccess(mid?: string) {
     try {
-      const ok = await acquireTokenForScopes(SCOPES, 'consent', 'viewer_grant_click');
-      if (ok && mid) {
-        await downloadMessage(mid);
-      }
-    } catch (_) {
-      // ignore; user can retry
+      const info = await fetchTokenInfo();
+      const hasBodyScopes = !!info?.scope && (info.scope.includes('gmail.readonly') || info.scope.includes('gmail.modify'));
+      const ok = hasBodyScopes ? true : await acquireTokenForScopes(SCOPES, 'consent', 'viewer_grant_click');
+      if (ok && mid) await downloadMessage(mid);
+    } catch (_) {}
+  }
+
+  async function relogin(mid?: string) {
+    try {
+      await signOut();
+      await acquireTokenInteractive('consent', 'viewer_relogin');
+      if (mid) await downloadMessage(mid);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('[Viewer] Re-login failed', e);
+      void copyDiagnostics('viewer_relogin_failed', mid, e);
     }
   }
 
@@ -89,7 +100,8 @@
     const firstId = currentThread.messageIds?.[0];
     if (!firstId) return;
     const m = $messages[firstId];
-    if (!m?.bodyText && !m?.bodyHtml && !loadingMap[firstId]) {
+    if (!m?.bodyText && !m?.bodyHtml && !loadingMap[firstId] && !autoTried[firstId]) {
+      autoTried[firstId] = true;
       loadingMap[firstId] = true;
       getMessageFull(firstId)
         .then((full) => { messages.set({ ...$messages, [firstId]: full }); errorMap[firstId] = ''; })
@@ -180,6 +192,7 @@
               <div style="display:flex; justify-content:flex-end; align-items:center; gap:0.5rem; margin-top:0.5rem;">
                 <Button variant="text" onclick={() => copyDiagnostics('viewer_manual_copy', mid)}>Copy diagnostics</Button>
                 <Button variant="text" onclick={() => grantAccess(mid)}>Grant access</Button>
+                <Button variant="text" onclick={() => relogin(mid)}>Re-login</Button>
                 <Button variant="text" onclick={() => downloadMessage(mid)}>Retry</Button>
               </div>
             {:else if m?.bodyHtml}
@@ -199,6 +212,7 @@
               <div style="display:flex; justify-content:flex-end; align-items:center; gap:0.5rem; margin-top:0.5rem;">
                 <Button variant="text" onclick={() => copyDiagnostics('viewer_manual_copy', mid)}>Copy diagnostics</Button>
                 <Button variant="text" onclick={() => grantAccess(mid)}>Grant access</Button>
+                <Button variant="text" onclick={() => relogin(mid)}>Re-login</Button>
                 <Button variant="text" onclick={() => downloadMessage(mid)}>Download message</Button>
               </div>
             {/if}
@@ -222,6 +236,7 @@
                 {:else}
                   <Button variant="text" onclick={() => copyDiagnostics('viewer_manual_copy', mid)}>Copy diagnostics</Button>
                   <Button variant="text" onclick={() => grantAccess(mid)}>Grant access</Button>
+                  <Button variant="text" onclick={() => relogin(mid)}>Re-login</Button>
                   <Button variant="text" onclick={() => downloadMessage(mid)}>Download message</Button>
                 {/if}
               </div>
@@ -235,6 +250,7 @@
 
     <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
       <Button variant="text" onclick={() => copyDiagnostics('viewer_toolbar_copy')}>Copy diagnostics</Button>
+      <Button variant="text" onclick={() => relogin(currentThread.messageIds?.[0])}>Re-login</Button>
       <Button variant="text" onclick={() => archiveThread(currentThread.threadId).then(()=> showSnackbar({ message: 'Archived', actions: { Undo: () => undoLast(1) } }))}>Archive</Button>
       <Button variant="text" color="error" onclick={() => trashThread(currentThread.threadId).then(()=> showSnackbar({ message: 'Deleted', actions: { Undo: () => undoLast(1) } }))}>Delete</Button>
       <Button variant="text" onclick={() => spamThread(currentThread.threadId).then(()=> showSnackbar({ message: 'Marked as spam', actions: { Undo: () => undoLast(1) } }))}>Spam</Button>

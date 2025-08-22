@@ -11,7 +11,8 @@ export async function flushOnce(now = Date.now()): Promise<void> {
   try {
     const { getAuthState } = await import('$lib/gmail/auth');
     const state = getAuthState();
-    if (!state.ready) return;
+    // Only proceed if GIS client is ready AND we have a valid, unexpired token in state
+    if (!state.ready || !state.accessToken || !state.expiryMs || state.expiryMs <= Date.now()) return;
   } catch (_) {}
   const db = await getDB();
   const due = await getDueOps(now);
