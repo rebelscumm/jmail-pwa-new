@@ -86,7 +86,7 @@
   .holder {
     position: fixed;
     padding-bottom: 1rem;
-    bottom: var(--m3-util-bottom-offset);
+    bottom: max(calc(var(--m3-util-bottom-offset) - 1rem), 0.5rem);
     left: 50%;
     transform: translate(-50%, 0);
     z-index: 3;
