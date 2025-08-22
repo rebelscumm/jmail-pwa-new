@@ -222,7 +222,7 @@
             <Menu>
               {#if mappedKeys.length > 0}
                 <div class="list">
-                  {#each ['1h','2h','3h','2p','6a','7p','2d','4d','mon','fri','7d','14d','30d'] as item}
+                  {#each ['2p','6a','7p','2d','4d','mon','fri','7 day','14 day','30 days','1h','2h','3h'] as item}
                     {#if isMapped(toRuleKey(item))}
                       <Button variant="text" onclick={() => trySnooze(toRuleKey(item))}>{item}</Button>
                     {/if}
