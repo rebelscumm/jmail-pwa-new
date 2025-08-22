@@ -16,6 +16,7 @@
   import Switch from '$lib/forms/Switch.svelte';
   import Tabs from '$lib/nav/Tabs.svelte';
   import Radio from '$lib/forms/RadioAnim2.svelte';
+  import { goto } from '$app/navigation';
 
   let labels: GmailLabel[] = [];
   let mappingJson = '';
@@ -182,9 +183,33 @@
     await restoreBackup(key);
     info = `Restored ${key}.`;
   }
+
+  async function saveAll() {
+    if (currentTab === 'app') {
+      await saveAppSettings();
+    } else if (currentTab === 'mapping') {
+      await saveMapping();
+    } else {
+      info = 'Nothing to save on Backups tab.';
+    }
+  }
+
+  async function saveAndExit() {
+    await saveAll();
+    goto('/inbox');
+  }
+
+  function closeWithoutSaving() {
+    goto('/inbox');
+  }
 </script>
 
 <Tabs items={tabItems} bind:tab={currentTab} secondary />
+<div style="margin-top:0.5rem; display:flex; gap:0.5rem; justify-content:flex-end;">
+  <Button variant="filled" onclick={saveAll}>Save</Button>
+  <Button variant="filled" onclick={saveAndExit}>Save & Exit</Button>
+  <Button variant="text" onclick={closeWithoutSaving}>Close</Button>
+</div>
 
 {#if currentTab === 'app'}
   <h3 style="margin-top:1rem;">App Settings</h3>
