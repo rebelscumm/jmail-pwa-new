@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import type { Snippet } from 'svelte';
-  let { items, rowHeight = 64, overscan = 6, children }: { items: any[]; rowHeight?: number; overscan?: number; children: Snippet<[any, number]> } = $props();
+  let { items, rowHeight = 64, overscan = 6, children, getKey }: { items: any[]; rowHeight?: number; overscan?: number; children: Snippet<[any, number]>; getKey?: (item: any, index: number) => string | number } = $props();
   let container: HTMLDivElement | null = null;
   let height = 400;
   let scrollTop = 0;
@@ -96,7 +96,7 @@
 
 <div bind:this={container} onscroll={onScroll} style="overflow: auto; will-change: transform; contain: strict; height: 100%; min-height: 0;">
   <div style={`height:${total}px; position: relative;`}>
-    {#each slice as item, i}
+    {#each slice as item, i (getKey ? getKey(item, startIndex + i) : (startIndex + i))}
       {@const idx = startIndex + i}
       <div class="row" style={`position:absolute; top:${offsets[idx]}px; left:0; right:0; min-height:${rowHeight}px;`} use:measureRow={idx}>
         {@render children(item, idx)}

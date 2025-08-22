@@ -169,8 +169,8 @@
   <div class="bg" aria-hidden="true" style={`pointer-events:${pendingLabel ? 'auto' : 'none'}`}> 
     <div class="left" style={`background:${pendingRemove ? 'rgb(var(--m3-scheme-error-container))' : 'rgb(var(--m3-scheme-secondary-container))'}; color:${pendingRemove ? 'rgb(var(--m3-scheme-on-error-container))' : 'rgb(var(--m3-scheme-on-secondary-container))'}`}>
       {#if pendingLabel}
-        <div class="pending-wrap">
-          <span class="pending-label">{pendingLabel}</span>
+        <div class="pending-wrap" role="status" aria-live="polite">
+          <span class="pending-label m3-font-label-large">{pendingLabel}</span>
           <Button variant="text" class="undo-btn" onclick={onUndoBgClick}>Undo</Button>
         </div>
       {:else}
@@ -213,19 +213,21 @@
   .bg .left {
     background: rgb(var(--m3-scheme-secondary-container));
     padding: 0.25rem 0.5rem;
-    border-radius: 0.5rem;
+    border-radius: var(--m3-util-rounding-extra-small);
     min-width: 5rem;
     text-align: center;
     display: inline-flex;
     align-items: center;
     gap: 0.5rem;
+    box-shadow: var(--m3-util-elevation-1);
   }
   .bg .right {
     background: rgb(var(--m3-scheme-tertiary-container));
     padding: 0.25rem 0.5rem;
-    border-radius: 0.5rem;
+    border-radius: var(--m3-util-rounding-extra-small);
     min-width: 5rem;
     text-align: center;
+    box-shadow: var(--m3-util-elevation-1);
   }
   .pending-wrap { display: inline-flex; align-items: center; gap: 0.5rem; }
   /* Make the inline Undo button MD3-compliant for container backgrounds */
@@ -235,6 +237,8 @@
     background: transparent;
     color: inherit !important;
     box-shadow: none;
+    border-radius: var(--m3-util-rounding-small);
+    min-width: auto;
   }
   .fg {
     position: relative;

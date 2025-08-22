@@ -346,7 +346,7 @@
     </Card>
   {/if}
   <div style="height:70vh">
-    <VirtualList items={visibleThreads} rowHeight={68}>
+    <VirtualList items={visibleThreads} rowHeight={68} getKey={(t) => t.threadId}>
       {#snippet children(item: import('$lib/types').GmailThread)}
       <ThreadListRow thread={item} />
       {/snippet}
