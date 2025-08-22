@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { initAuth, acquireTokenInteractive, authState } from '$lib/gmail/auth';
+  import { initAuth, acquireTokenInteractive, authState, getAuthDiagnostics } from '$lib/gmail/auth';
   import { listLabels, listInboxMessageIds, getMessageMetadata, GmailApiError, getProfile, copyGmailDiagnosticsToClipboard, getAndClearGmailDiagnostics } from '$lib/gmail/api';
   import { labels as labelsStore } from '$lib/stores/labels';
   import { threads as threadsStore, messages as messagesStore } from '$lib/stores/threads';
@@ -109,10 +109,19 @@
     apiErrorMessage = null;
     apiErrorStatus = undefined;
     try {
+      if (!ready) {
+        try { await initAuth(CLIENT_ID); } catch (_) {}
+      }
       await acquireTokenInteractive();
       await hydrate();
     } catch (e: unknown) {
       setApiError(e);
+      try {
+        const diag = getAuthDiagnostics();
+        void copyDiagnostics();
+        // eslint-disable-next-line no-console
+        console.error('[Auth] Sign-in failed in inbox', { error: e instanceof Error ? e.message : String(e), diag });
+      } catch (_) {}
     }
   }
 
@@ -230,6 +239,9 @@
       const payload = {
         note: 'Gmail diagnostics snapshot',
         at: new Date().toISOString(),
+        ...getAuthDiagnostics(),
+        clientIdPresent: !!CLIENT_ID && String(CLIENT_ID).trim().length > 0,
+        clientIdPreview: CLIENT_ID ? String(CLIENT_ID).slice(0, 8) + '…' : undefined,
         threadsCount: totalThreadsCount,
         visibleThreadsCount,
         searchQuery: debouncedQuery,
@@ -285,7 +297,7 @@
       <div style="display:flex; gap:0.5rem; justify-content:flex-end; margin-top:0.75rem;">
         <Button variant="text" onclick={copyDiagnostics}>{copiedDiagOk ? 'Copied!' : 'Copy diagnostics'}</Button>
         <Button variant="text" href="https://myaccount.google.com/permissions">Review permissions</Button>
-        <Button variant="filled" disabled={!ready} onclick={signIn}>Sign in with Google</Button>
+        <Button variant="filled" onclick={signIn}>Sign in with Google</Button>
       </div>
     </Card>
   {:else if apiErrorMessage}
@@ -294,7 +306,7 @@
       <p class="m3-font-body-medium" style="margin:0; color:rgb(var(--m3-scheme-on-surface-variant))">{apiErrorMessage}</p>
       <div style="display:flex; gap:0.5rem; justify-content:flex-end; margin-top:0.75rem;">
         <Button variant="text" onclick={() => { apiErrorMessage = null; apiErrorStatus = undefined; }}>Dismiss</Button>
-        <Button variant="filled" disabled={!ready} onclick={signIn}>Try again</Button>
+        <Button variant="filled" onclick={signIn}>Try again</Button>
       </div>
     </Card>
   {/if}

@@ -46,6 +46,11 @@ const SCOPES = [
 
 let tokenClient: google.accounts.oauth2.TokenClient | null = null;
 
+// Lightweight diagnostics for auth initialization
+let lastInitAt: string | undefined;
+let lastInitOk: boolean | undefined;
+let lastInitError: string | undefined;
+
 declare global {
   interface Window {
     google: typeof google;
@@ -53,14 +58,30 @@ declare global {
 }
 
 export async function initAuth(clientId: string) {
-  await loadGis();
-  tokenClient = window.google.accounts.oauth2.initTokenClient({
-    client_id: clientId,
-    scope: SCOPES,
-    prompt: '',
-    callback: () => {}
-  });
-  authState.update((s) => ({ ...s, ready: true }));
+  lastInitAt = new Date().toISOString();
+  try {
+    if (!clientId || typeof clientId !== 'string' || clientId.trim().length === 0) {
+      throw new Error('Missing Google client ID (VITE_GOOGLE_CLIENT_ID)');
+    }
+    await loadGis();
+    if (!window?.google?.accounts?.oauth2) {
+      throw new Error('GIS loaded but window.google.accounts.oauth2 is unavailable');
+    }
+    tokenClient = window.google.accounts.oauth2.initTokenClient({
+      client_id: clientId,
+      scope: SCOPES,
+      prompt: '',
+      callback: () => {}
+    });
+    authState.update((s) => ({ ...s, ready: true }));
+    lastInitOk = true;
+    lastInitError = undefined;
+  } catch (e) {
+    lastInitOk = false;
+    lastInitError = e instanceof Error ? e.message : String(e);
+    authState.update((s) => ({ ...s, ready: false }));
+    throw e;
+  }
 }
 
 export async function acquireTokenInteractive(): Promise<void> {
@@ -144,6 +165,25 @@ export function getAuthState(): AuthState {
   let value: AuthState = { ready: false };
   authState.subscribe((v) => (value = v))();
   return value;
+}
+
+// Export a snapshot of current auth diagnostics for copy-to-clipboard flows
+export function getAuthDiagnostics(): Record<string, unknown> {
+  try {
+    return {
+      at: new Date().toISOString(),
+      ready: getAuthState().ready,
+      tokenClientReady: !!tokenClient,
+      gisScriptPresent: typeof document !== 'undefined' ? !!document.getElementById('gis-script') : undefined,
+      hasWindowGoogle: typeof window !== 'undefined' ? !!(window as any).google : undefined,
+      hasOauth2: typeof window !== 'undefined' ? !!(window as any).google?.accounts?.oauth2 : undefined,
+      lastInitAt,
+      lastInitOk,
+      lastInitError
+    };
+  } catch (_) {
+    return {};
+  }
 }
 
 // Fetch current token's granted scopes (diagnostics only)
