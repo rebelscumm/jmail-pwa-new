@@ -282,13 +282,16 @@
   .pending-wrap { display: inline-flex; align-items: center; gap: 0.5rem; }
   /* Make the inline Undo button MD3-compliant for container backgrounds */
   .bg .left :global(.m3-container.undo-btn) {
+    --m3-button-shape: var(--m3-util-rounding-small);
     height: 2rem;
     padding: 0 0.5rem;
+    min-width: auto;
     background: transparent;
     color: inherit !important;
     box-shadow: none;
-    border-radius: var(--m3-util-rounding-small);
-    min-width: auto;
+    border: none;
+    outline: none;
+    appearance: none;
   }
   .fg {
     position: relative;
