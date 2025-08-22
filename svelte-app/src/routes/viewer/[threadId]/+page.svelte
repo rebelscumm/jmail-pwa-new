@@ -145,11 +145,15 @@
 {#if currentThread}
   <div style="display:flex; flex-direction:column; gap:0.75rem; max-width:64rem; margin:0 auto;">
     <Card variant="elevated">
-      <h2 class="m3-font-title-large" style="margin:0;">{currentThread.lastMsgMeta.subject}</h2>
-      <p class="m3-font-body-medium" style="margin:0.25rem 0 0 0; color:rgb(var(--m3-scheme-on-surface-variant))">{currentThread.lastMsgMeta.from}</p>
-      {#if currentThread.lastMsgMeta?.date}
-        <p class="m3-font-body-small" style="margin:0.25rem 0 0 0; color:rgb(var(--m3-scheme-on-surface-variant))">{formatDateTime(currentThread.lastMsgMeta.date)}</p>
-      {/if}
+      <h2 class="m3-font-title-large" style="margin:0; display:flex; flex-wrap:wrap; align-items:baseline; gap:0.5rem;">
+        <span style="overflow-wrap:anywhere; word-break:break-word;">{currentThread.lastMsgMeta.subject}</span>
+        {#if currentThread.lastMsgMeta.from}
+          <span class="from">{currentThread.lastMsgMeta.from}</span>
+        {/if}
+        {#if currentThread.lastMsgMeta?.date}
+          <span class="badge">{formatDateTime(currentThread.lastMsgMeta.date)}</span>
+        {/if}
+      </h2>
     </Card>
 
     <div class="messages">
@@ -259,6 +263,18 @@
 <style>
   .messages {
     min-width: 0;
+  }
+  .from {
+    color: rgb(var(--m3-scheme-on-surface-variant));
+    font-weight: 400;
+  }
+  .badge {
+    display: inline-block;
+    padding: 0.125rem 0.375rem;
+    border-radius: var(--m3-util-rounding-extra-small);
+    background: rgb(var(--m3-scheme-secondary-container));
+    color: rgb(var(--m3-scheme-on-secondary-container));
+    white-space: nowrap;
   }
 </style>
 
