@@ -4,7 +4,7 @@ import { getDB } from '$lib/db/indexeddb';
 import { queueThreadModify, recordIntent } from '$lib/queue/intents';
 import type { GmailThread } from '$lib/types';
 
-export async function snoozeThreadByRule(threadId: string, ruleKey: string) {
+export async function snoozeThreadByRule(threadId: string, ruleKey: string, options?: { optimisticLocal?: boolean }) {
   const db = await getDB();
   const thread = await db.get('threads', threadId);
   if (!thread) return;
@@ -13,7 +13,7 @@ export async function snoozeThreadByRule(threadId: string, ruleKey: string) {
   if (!labelId) throw new Error(`No labelId mapped for rule ${ruleKey}`);
 
   // Label-driven snooze only: add snooze label and remove INBOX; external script handles due time/unsnooze
-  await queueThreadModify(threadId, [labelId], ['INBOX']);
+  await queueThreadModify(threadId, [labelId], ['INBOX'], options);
   await recordIntent(threadId, { type: 'snooze', addLabelIds: [labelId], removeLabelIds: ['INBOX'], ruleKey }, { addLabelIds: ['INBOX'], removeLabelIds: [labelId] });
 }
 
@@ -29,7 +29,7 @@ export function isSnoozedThread(thread: GmailThread): boolean {
   return (thread.labelIds || []).some((l) => snoozeIds.has(l));
 }
 
-export async function manualUnsnoozeThread(threadId: string) {
+export async function manualUnsnoozeThread(threadId: string, options?: { optimisticLocal?: boolean }) {
   const db = await getDB();
   const thread = (await db.get('threads', threadId)) as GmailThread | undefined;
   if (!thread) return;
@@ -39,7 +39,7 @@ export async function manualUnsnoozeThread(threadId: string) {
   const s = get(settings);
   const add: string[] = ['INBOX'];
   if (s.unreadOnUnsnooze) add.push('UNREAD');
-  await queueThreadModify(threadId, add, present);
+  await queueThreadModify(threadId, add, present, options);
   await recordIntent(
     threadId,
     { type: 'unsnooze', addLabelIds: add, removeLabelIds: present },

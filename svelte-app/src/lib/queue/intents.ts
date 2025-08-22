@@ -13,7 +13,7 @@ function applyLabels(list: string[], add: string[], remove: string[]): string[] 
   return Array.from(set);
 }
 
-async function updateLocalThreadAndMessages(
+export async function updateLocalThreadAndMessages(
   threadId: string,
   addLabelIds: string[],
   removeLabelIds: string[]
@@ -59,36 +59,38 @@ async function maybeEnqueue(
   return enqueueBatchModify(ACCOUNT_SUB, messageIds, addLabelIds, removeLabelIds, threadId);
 }
 
-export async function queueThreadModify(threadId: string, addLabelIds: string[], removeLabelIds: string[]) {
+export async function queueThreadModify(threadId: string, addLabelIds: string[], removeLabelIds: string[], options?: { optimisticLocal?: boolean }) {
   const db = await getDB();
   const thread = await db.get('threads', threadId);
   if (!thread) return;
-  await updateLocalThreadAndMessages(threadId, addLabelIds, removeLabelIds);
+  if (options?.optimisticLocal !== false) {
+    await updateLocalThreadAndMessages(threadId, addLabelIds, removeLabelIds);
+  }
   await maybeEnqueue(threadId, thread.messageIds, addLabelIds, removeLabelIds);
 }
 
-export async function archiveThread(threadId: string) {
-  await queueThreadModify(threadId, [], ['INBOX']);
+export async function archiveThread(threadId: string, options?: { optimisticLocal?: boolean }) {
+  await queueThreadModify(threadId, [], ['INBOX'], options);
   await recordIntent(threadId, { type: 'archive', addLabelIds: [], removeLabelIds: ['INBOX'] }, { addLabelIds: ['INBOX'], removeLabelIds: [] });
 }
 
-export async function spamThread(threadId: string) {
-  await queueThreadModify(threadId, ['SPAM'], ['INBOX']);
+export async function spamThread(threadId: string, options?: { optimisticLocal?: boolean }) {
+  await queueThreadModify(threadId, ['SPAM'], ['INBOX'], options);
   await recordIntent(threadId, { type: 'spam', addLabelIds: ['SPAM'], removeLabelIds: ['INBOX'] }, { addLabelIds: ['INBOX'], removeLabelIds: ['SPAM'] });
 }
 
-export async function trashThread(threadId: string) {
-  await queueThreadModify(threadId, ['TRASH'], ['INBOX']);
+export async function trashThread(threadId: string, options?: { optimisticLocal?: boolean }) {
+  await queueThreadModify(threadId, ['TRASH'], ['INBOX'], options);
   await recordIntent(threadId, { type: 'trash', addLabelIds: ['TRASH'], removeLabelIds: ['INBOX'] }, { addLabelIds: ['INBOX'], removeLabelIds: ['TRASH'] });
 }
 
-export async function markRead(threadId: string) {
-  await queueThreadModify(threadId, [], ['UNREAD']);
+export async function markRead(threadId: string, options?: { optimisticLocal?: boolean }) {
+  await queueThreadModify(threadId, [], ['UNREAD'], options);
   await recordIntent(threadId, { type: 'markRead', addLabelIds: [], removeLabelIds: ['UNREAD'] }, { addLabelIds: ['UNREAD'], removeLabelIds: [] });
 }
 
-export async function markUnread(threadId: string) {
-  await queueThreadModify(threadId, ['UNREAD'], []);
+export async function markUnread(threadId: string, options?: { optimisticLocal?: boolean }) {
+  await queueThreadModify(threadId, ['UNREAD'], [], options);
   await recordIntent(threadId, { type: 'markUnread', addLabelIds: ['UNREAD'], removeLabelIds: [] }, { addLabelIds: [], removeLabelIds: ['UNREAD'] });
 }
 

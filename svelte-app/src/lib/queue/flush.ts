@@ -49,6 +49,24 @@ export async function flushOnce(now = Date.now()): Promise<void> {
     const removeLabelIds = ops[0].op.removeLabelIds;
     try {
       await batchModify(ids, addLabelIds, removeLabelIds);
+      // After success, reconcile local labels per thread using server data (server wins)
+      try {
+        // Group by scopeKey (threadId)
+        const byThread = new Map<string, string[]>();
+        for (const o of ops) {
+          const arr = byThread.get(o.scopeKey) || [];
+          for (const id of o.op.ids) arr.push(id);
+          byThread.set(o.scopeKey, Array.from(new Set(arr)));
+        }
+        for (const [threadId, messageIds] of byThread) {
+          const labelsByMessage: Record<string, string[]> = {};
+          for (const id of messageIds) {
+            const m = await (await import('$lib/gmail/api')).getMessageMetadata(id);
+            labelsByMessage[id] = m.labelIds || [];
+          }
+          await applyRemoteLabels(threadId, labelsByMessage);
+        }
+      } catch (_) {}
       // Success: delete ops
       const tx = db.transaction('ops', 'readwrite');
       for (const o of ops) await tx.store.delete(o.id);

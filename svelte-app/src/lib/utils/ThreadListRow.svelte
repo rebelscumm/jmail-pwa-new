@@ -69,7 +69,7 @@
         await animateAndArchive();
       } else if (currentDx < -threshold) {
         // Swipe left: Quick snooze 1h
-        await animateAndPerform('Snoozed 1h', () => snoozeThreadByRule(thread.threadId, '1h'));
+        await animateAndPerform('Snoozed 1h', () => snoozeThreadByRule(thread.threadId, '1h', { optimisticLocal: false }));
       }
       // If swipe distance didn't cross threshold, do nothing (no navigation). Tap will be handled by <a>
     }
@@ -87,19 +87,19 @@
   }
 
   async function animateAndDelete(): Promise<void> {
-    await animateAndPerform('Deleted', () => trashThread(thread.threadId), true);
+    await animateAndPerform('Deleted', () => trashThread(thread.threadId, { optimisticLocal: false }), true);
   }
 
   async function animateAndArchive(): Promise<void> {
-    await animateAndPerform('Archived', () => archiveThread(thread.threadId));
+    await animateAndPerform('Archived', () => archiveThread(thread.threadId, { optimisticLocal: false }));
   }
 
   async function animateAndUnsnooze(): Promise<void> {
-    await animateAndPerform('Unsnoozed', () => manualUnsnoozeThread(thread.threadId));
+    await animateAndPerform('Unsnoozed', () => manualUnsnoozeThread(thread.threadId, { optimisticLocal: false }));
   }
 
   async function animateAndSnooze(ruleKey: string, label = 'Snoozed'): Promise<void> {
-    await animateAndPerform(label, () => snoozeThreadByRule(thread.threadId, ruleKey));
+    await animateAndPerform(label, () => snoozeThreadByRule(thread.threadId, ruleKey, { optimisticLocal: false }));
   }
 
   function onUndoBgClick(e: MouseEvent) {
@@ -137,7 +137,7 @@
     <Button variant="text" color="error" onclick={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); animateAndDelete(); }}>Delete</Button>
     <div class="snooze-wrap" role="button" tabindex="0" data-no-row-nav onclick={(e) => { if (!(e.target as Element)?.closest('summary')) { e.preventDefault(); } e.stopPropagation(); }} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { if (!(e.target as Element)?.closest('summary')) { e.preventDefault(); } e.stopPropagation(); } }}>
       {#if defaultSnoozeKey}
-      <SplitButton variant="outlined" x="right" y="down" onclick={() => { animateAndSnooze(defaultSnoozeKey, `Snoozed ${defaultSnoozeKey}`); }} on:toggle={(e) => { snoozeMenuOpen = e.detail as boolean; }}>
+      <SplitButton variant="outlined" x="right" y="down" onclick={() => { animateAndSnooze(defaultSnoozeKey, `Snoozed ${defaultSnoozeKey}`); }} on:toggle={(e) => { snoozeMenuOpen = (e.detail as boolean); }}>
         {#snippet children()}
           {defaultSnoozeKey}
         {/snippet}
