@@ -37,11 +37,9 @@ function loadGis(): Promise<void> {
   });
 }
 
-const SCOPES = [
+export const SCOPES = [
   'https://www.googleapis.com/auth/gmail.modify',
-  'https://www.googleapis.com/auth/gmail.readonly',
-  'https://www.googleapis.com/auth/gmail.labels',
-  'https://www.googleapis.com/auth/gmail.metadata'
+  'https://www.googleapis.com/auth/gmail.labels'
 ].join(' ');
 
 let tokenClient: google.accounts.oauth2.TokenClient | null = null;
@@ -114,7 +112,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label = 'timeout'): Pro
   });
 }
 
-export async function acquireTokenInteractive(): Promise<void> {
+export async function acquireTokenInteractive(prompt: 'none' | 'consent' | 'select_account' = 'consent'): Promise<void> {
   if (!tokenClient) throw new Error('Auth not initialized');
   const token = await withTimeout(
     new Promise<TokenResponse>((resolve, reject) => {
@@ -122,8 +120,8 @@ export async function acquireTokenInteractive(): Promise<void> {
         if ('error' in res) reject(new Error(res.error as string));
         else resolve(res as unknown as TokenResponse);
       };
-      // Use select_account to avoid forcing re-consent; GIS will still prompt if needed
-      tokenClient!.requestAccessToken({ prompt: 'select_account' });
+      // Default to 'consent' to ensure full scopes are granted on first login
+      tokenClient!.requestAccessToken({ prompt });
     }),
     30000,
     'interactive_token'
