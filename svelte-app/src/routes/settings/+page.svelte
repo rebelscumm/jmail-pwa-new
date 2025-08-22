@@ -14,6 +14,8 @@
   import TextFieldOutlinedMultiline from '$lib/forms/TextFieldOutlinedMultiline.svelte';
   import Checkbox from '$lib/forms/Checkbox.svelte';
   import Switch from '$lib/forms/Switch.svelte';
+  import Tabs from '$lib/nav/Tabs.svelte';
+  import Radio from '$lib/forms/RadioAnim2.svelte';
 
   let labels: GmailLabel[] = [];
   let mappingJson = '';
@@ -38,6 +40,14 @@
   const timeKeys = ['6am','2pm','7pm'];
   const persistentKeys = ['Desktop','long-term'];
   $: ruleKeys = [ ...new Set([ ...quickKeys, ...hourKeys, ...dayKeys, ...weekdayKeys, ...timeKeys, ...persistentKeys ]) ];
+
+  // Tabs
+  let currentTab: 'app' | 'mapping' | 'backups' = 'app';
+  const tabItems = [
+    { name: 'App', value: 'app' },
+    { name: 'Label Mapping', value: 'mapping' },
+    { name: 'Backups', value: 'backups' }
+  ];
 
   onMount(async () => {
     await loadSettings();
@@ -174,186 +184,195 @@
   }
 </script>
 
-<h3>Labels</h3>
-<Button variant="outlined" onclick={discoverLabels}>Refresh</Button>
-<Card variant="outlined" style="margin-top:0.5rem;">
-  <ul style="margin:0; padding-left:1rem;">
-    {#each labels as l}
-      <li style="margin:0.25rem 0;">
-        <code>{l.name}</code> — <small>{l.id} ({l.type})</small>
-        <Button variant="text" onclick={() => copy(`${l.name}: ${l.id}`)}>Copy</Button>
-      </li>
-    {/each}
-    {#if !labels.length}
-      <li>No labels cached yet.</li>
-    {/if}
-  </ul>
-</Card>
+<Tabs items={tabItems} bind:tab={currentTab} secondary />
 
-<h3 style="margin-top:1rem;">Label Mapping</h3>
-<TextFieldOutlinedMultiline label="Mapping (JSON)" bind:value={mappingJson} />
-<div style="margin-top:0.5rem; display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
-  <Button variant="filled" onclick={saveMapping}>Save</Button>
-  <span>{info}</span>
-  <Button variant="text" onclick={() => navigator.clipboard.writeText(mappingJson)}>Copy</Button>
-  <input type="file" accept="application/json" on:change={(e)=>{
-    const input = e.currentTarget as HTMLInputElement;
-    const file=input.files?.[0]; if(!file) return; file.text().then((t: string)=>mappingJson=t);
-  }} />
-  <Button variant="outlined" onclick={seedMapping}>Seed defaults</Button>
-</div>
-
-<h3 style="margin-top:1rem;">Snooze Mapping (UI)</h3>
-<div style="display:flex; gap:1rem; flex-wrap:wrap;">
-  <div>
-    <h4 class="m3-font-title-small" style="margin:0 0 0.25rem 0">Quick</h4>
-    {#each quickKeys as k}
-      <div style="display:flex; align-items:center; gap:0.5rem; margin:0.125rem 0;">
-        <code style="min-width:3rem; display:inline-block;">{k}</code>
-        <select bind:value={uiMapping[k]}>
-          <option value="">— Unmapped —</option>
-          {#each labels as l}
-            <option value={l.id}>{l.name}</option>
-          {/each}
-        </select>
-      </div>
-    {/each}
-  </div>
-  <div>
-    <h4 class="m3-font-title-small" style="margin:0 0 0.25rem 0">Hours</h4>
-    {#each hourKeys as k}
-      <div style="display:flex; align-items:center; gap:0.5rem; margin:0.125rem 0;">
-        <code style="min-width:3rem; display:inline-block;">{k}</code>
-        <select bind:value={uiMapping[k]}>
-          <option value="">— Unmapped —</option>
-          {#each labels as l}
-            <option value={l.id}>{l.name}</option>
-          {/each}
-        </select>
-      </div>
-    {/each}
-  </div>
-  <div>
-    <h4 class="m3-font-title-small" style="margin:0 0 0.25rem 0">Days</h4>
-    {#each dayKeys as k}
-      <div style="display:flex; align-items:center; gap:0.5rem; margin:0.125rem 0;">
-        <code style="min-width:3rem; display:inline-block;">{k}</code>
-        <select bind:value={uiMapping[k]}>
-          <option value="">— Unmapped —</option>
-          {#each labels as l}
-            <option value={l.id}>{l.name}</option>
-          {/each}
-        </select>
-      </div>
-    {/each}
-  </div>
-  <div>
-    <h4 class="m3-font-title-small" style="margin:0 0 0.25rem 0">Weekdays</h4>
-    {#each weekdayKeys as k}
-      <div style="display:flex; align-items:center; gap:0.5rem; margin:0.125rem 0;">
-        <code style="min-width:5rem; display:inline-block;">{k}</code>
-        <select bind:value={uiMapping[k]}>
-          <option value="">— Unmapped —</option>
-          {#each labels as l}
-            <option value={l.id}>{l.name}</option>
-          {/each}
-        </select>
-      </div>
-    {/each}
-  </div>
-  <div>
-    <h4 class="m3-font-title-small" style="margin:0 0 0.25rem 0">Times</h4>
-    {#each timeKeys as k}
-      <div style="display:flex; align-items:center; gap:0.5rem; margin:0.125rem 0;">
-        <code style="min-width:3rem; display:inline-block;">{k}</code>
-        <select bind:value={uiMapping[k]}>
-          <option value="">— Unmapped —</option>
-          {#each labels as l}
-            <option value={l.id}>{l.name}</option>
-          {/each}
-        </select>
-      </div>
-    {/each}
-  </div>
-  <div>
-    <h4 class="m3-font-title-small" style="margin:0 0 0.25rem 0">Other</h4>
-    {#each persistentKeys as k}
-      <div style="display:flex; align-items:center; gap:0.5rem; margin:0.125rem 0;">
-        <code style="min-width:5rem; display:inline-block;">{k}</code>
-        <select bind:value={uiMapping[k]}>
-          <option value="">— Unmapped —</option>
-          {#each labels as l}
-            <option value={l.id}>{l.name}</option>
-          {/each}
-        </select>
-      </div>
-    {/each}
-  </div>
-</div>
-<div style="margin-top:0.5rem; display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
-  <Button variant="outlined" onclick={autoMapFromLabelNames}>Auto-map from label names</Button>
-  <Button variant="filled" onclick={saveUiMapping}>Save Mapping (UI)</Button>
-  <Button variant="text" onclick={copyAutoMapDiagnostics}>Copy auto-map diagnostics</Button>
-  <small>Only mapped snoozes are shown elsewhere in the app.</small>
-</div>
-
-<h3 style="margin-top:1rem;">App Settings</h3>
-<Card variant="outlined">
-  <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap:0.75rem; align-items:center;">
-    <TextFieldOutlined label="Anchor hour (0-23)" type="number" min="0" max="23" bind:value={(_anchorHour as any)} />
-    <TextFieldOutlined label="Round minutes (1-60)" type="number" min="1" max="60" step="1" bind:value={(_roundMinutes as any)} />
-    <TextFieldOutlined label="Trailing refresh delay (ms)" type="number" min="0" step="100" bind:value={(_trailingRefreshDelayMs as any)} />
-    <label style="display:flex; align-items:center; gap:0.5rem;">
-      <input type="checkbox" bind:checked={_unreadOnUnsnooze} />
-      <Checkbox>Unread on unsnooze</Checkbox>
-    </label>
-    <label style="display:flex; align-items:center; gap:0.5rem;">
-      <input type="checkbox" bind:checked={_notifEnabled} />
-      <Switch />
-      <span class="m3-font-body-medium">Notifications enabled</span>
-    </label>
-  </div>
-  <fieldset style="margin-top:0.75rem; border:1px solid var(--m3-outline-variant); padding:0.5rem; border-radius:0.5rem;">
-    <legend>AI</legend>
+{#if currentTab === 'app'}
+  <h3 style="margin-top:1rem;">App Settings</h3>
+  <Card variant="outlined">
     <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap:0.75rem; align-items:center;">
-      <label>Provider
-        <select bind:value={_aiProvider}>
-          <option value="openai">OpenAI</option>
-          <option value="anthropic">Anthropic</option>
-          <option value="gemini">Gemini</option>
-        </select>
-      </label>
-      <TextFieldOutlined label="API Key" type="password" bind:value={_aiApiKey} placeholder="sk-..." />
-      <TextFieldOutlined label="Model" bind:value={_aiModel} placeholder="gpt-4o-mini / claude-3-haiku / gemini-1.5-flash" />
+      <TextFieldOutlined label="Anchor hour (0-23)" type="number" min="0" max="23" bind:value={(_anchorHour as any)} />
+      <TextFieldOutlined label="Round minutes (1-60)" type="number" min="1" max="60" step="1" bind:value={(_roundMinutes as any)} />
+      <TextFieldOutlined label="Trailing refresh delay (ms)" type="number" min="0" step="100" bind:value={(_trailingRefreshDelayMs as any)} />
       <label style="display:flex; align-items:center; gap:0.5rem;">
-        <input type="checkbox" bind:checked={_aiPageFetchOptIn} />
-        <Checkbox>Allow page fetch for link-only emails</Checkbox>
+        <input type="checkbox" bind:checked={_unreadOnUnsnooze} />
+        <Checkbox>Unread on unsnooze</Checkbox>
+      </label>
+      <label style="display:flex; align-items:center; gap:0.5rem;">
+        <input type="checkbox" bind:checked={_notifEnabled} />
+        <Switch />
+        <span class="m3-font-body-medium">Notifications enabled</span>
       </label>
     </div>
-  </fieldset>
-  <fieldset style="margin-top:0.75rem; border:1px solid var(--m3-outline-variant); padding:0.5rem; border-radius:0.5rem;">
-    <legend>Tasks</legend>
-    <TextFieldOutlined label="Desktop: task file path" bind:value={_taskFilePath} placeholder="C:\\path\\to\\tasks.md" />
-  </fieldset>
-  <div style="margin-top:0.75rem; display:flex; gap:0.5rem; justify-content:flex-end;">
-    <Button variant="filled" onclick={saveAppSettings}>Save Settings</Button>
-  </div>
-</Card>
+    <fieldset style="margin-top:0.75rem; border:1px solid var(--m3-outline-variant); padding:0.5rem; border-radius:0.5rem;">
+      <legend>AI</legend>
+      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap:0.75rem; align-items:center;">
+        <div>
+          <div class="m3-font-body-medium" style="margin-bottom:0.25rem;">Provider</div>
+          <div style="display:flex; gap:1rem; align-items:center;">
+            <label style="display:flex; align-items:center; gap:0.5rem;">
+              <input type="radio" name="aiProvider" value="openai" bind:group={_aiProvider} />
+              <Radio />
+              <span class="m3-font-body-medium">OpenAI</span>
+            </label>
+            <label style="display:flex; align-items:center; gap:0.5rem;">
+              <input type="radio" name="aiProvider" value="anthropic" bind:group={_aiProvider} />
+              <Radio />
+              <span class="m3-font-body-medium">Anthropic</span>
+            </label>
+            <label style="display:flex; align-items:center; gap:0.5rem;">
+              <input type="radio" name="aiProvider" value="gemini" bind:group={_aiProvider} />
+              <Radio />
+              <span class="m3-font-body-medium">Gemini</span>
+            </label>
+          </div>
+        </div>
+        <TextFieldOutlined label="API Key" type="password" bind:value={_aiApiKey} placeholder="sk-..." />
+        <TextFieldOutlined label="Model" bind:value={_aiModel} placeholder="gpt-4o-mini / claude-3-haiku / gemini-1.5-flash" />
+        <label style="display:flex; align-items:center; gap:0.5rem;">
+          <input type="checkbox" bind:checked={_aiPageFetchOptIn} />
+          <Checkbox>Allow page fetch for link-only emails</Checkbox>
+        </label>
+      </div>
+    </fieldset>
+    <fieldset style="margin-top:0.75rem; border:1px solid var(--m3-outline-variant); padding:0.5rem; border-radius:0.5rem;">
+      <legend>Tasks</legend>
+      <TextFieldOutlined label="Desktop: task file path" bind:value={_taskFilePath} placeholder="C:\\path\\to\\tasks.md" />
+    </fieldset>
+    <div style="margin-top:0.75rem; display:flex; gap:0.5rem; justify-content:flex-end;">
+      <Button variant="filled" onclick={saveAppSettings}>Save Settings</Button>
+    </div>
+  </Card>
+{/if}
 
-<h3 style="margin-top:1rem;">Backups</h3>
-<Card variant="outlined">
-  <div style="display:flex; gap:0.5rem; align-items:center; margin-bottom:0.5rem;">
-    <Button variant="outlined" onclick={makeBackup}>Create backup</Button>
+{#if currentTab === 'mapping'}
+  <h3 style="margin-top:1rem;">Label Mapping</h3>
+  <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap; margin-bottom:0.5rem;">
+    <Button variant="outlined" onclick={discoverLabels}>Refresh labels</Button>
+    <span class="m3-font-body-medium">{labels.length} labels cached</span>
   </div>
-  <ul style="margin:0; padding-left:1rem;">
-    {#each backups as b}
-      <li style="margin:0.25rem 0; display:flex; align-items:center; gap:0.5rem;">
-        <code>{b.key}</code> — {new Date(b.createdAt).toLocaleString()}
-        <Button variant="text" onclick={() => restore(b.key)}>Restore</Button>
-      </li>
-    {/each}
-    {#if !backups.length}
-      <li>No backups yet.</li>
-    {/if}
-  </ul>
-</Card>
+  <TextFieldOutlinedMultiline label="Mapping (JSON)" bind:value={mappingJson} />
+  <div style="margin-top:0.5rem; display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+    <Button variant="filled" onclick={saveMapping}>Save</Button>
+    <span>{info}</span>
+    <Button variant="text" onclick={() => navigator.clipboard.writeText(mappingJson)}>Copy</Button>
+    <input type="file" accept="application/json" on:change={(e)=>{
+      const input = e.currentTarget as HTMLInputElement;
+      const file=input.files?.[0]; if(!file) return; file.text().then((t: string)=>mappingJson=t);
+    }} />
+    <Button variant="outlined" onclick={seedMapping}>Seed defaults</Button>
+  </div>
+
+  <h3 style="margin-top:1rem;">Snooze Mapping (UI)</h3>
+  <div style="display:flex; gap:1rem; flex-wrap:wrap;">
+    <div>
+      <h4 class="m3-font-title-small" style="margin:0 0 0.25rem 0">Quick</h4>
+      {#each quickKeys as k}
+        <div style="display:flex; align-items:center; gap:0.5rem; margin:0.125rem 0;">
+          <code style="min-width:3rem; display:inline-block;">{k}</code>
+          <select bind:value={uiMapping[k]}>
+            <option value="">— Unmapped —</option>
+            {#each labels as l}
+              <option value={l.id}>{l.name}</option>
+            {/each}
+          </select>
+        </div>
+      {/each}
+    </div>
+    <div>
+      <h4 class="m3-font-title-small" style="margin:0 0 0.25rem 0">Hours</h4>
+      {#each hourKeys as k}
+        <div style="display:flex; align-items:center; gap:0.5rem; margin:0.125rem 0;">
+          <code style="min-width:3rem; display:inline-block;">{k}</code>
+          <select bind:value={uiMapping[k]}>
+            <option value="">— Unmapped —</option>
+            {#each labels as l}
+              <option value={l.id}>{l.name}</option>
+            {/each}
+          </select>
+        </div>
+      {/each}
+    </div>
+    <div>
+      <h4 class="m3-font-title-small" style="margin:0 0 0.25rem 0">Days</h4>
+      {#each dayKeys as k}
+        <div style="display:flex; align-items:center; gap:0.5rem; margin:0.125rem 0;">
+          <code style="min-width:3rem; display:inline-block;">{k}</code>
+          <select bind:value={uiMapping[k]}>
+            <option value="">— Unmapped —</option>
+            {#each labels as l}
+              <option value={l.id}>{l.name}</option>
+            {/each}
+          </select>
+        </div>
+      {/each}
+    </div>
+    <div>
+      <h4 class="m3-font-title-small" style="margin:0 0 0.25rem 0">Weekdays</h4>
+      {#each weekdayKeys as k}
+        <div style="display:flex; align-items:center; gap:0.5rem; margin:0.125rem 0;">
+          <code style="min-width:5rem; display:inline-block;">{k}</code>
+          <select bind:value={uiMapping[k]}>
+            <option value="">— Unmapped —</option>
+            {#each labels as l}
+              <option value={l.id}>{l.name}</option>
+            {/each}
+          </select>
+        </div>
+      {/each}
+    </div>
+    <div>
+      <h4 class="m3-font-title-small" style="margin:0 0 0.25rem 0">Times</h4>
+      {#each timeKeys as k}
+        <div style="display:flex; align-items:center; gap:0.5rem; margin:0.125rem 0;">
+          <code style="min-width:3rem; display:inline-block;">{k}</code>
+          <select bind:value={uiMapping[k]}>
+            <option value="">— Unmapped —</option>
+            {#each labels as l}
+              <option value={l.id}>{l.name}</option>
+            {/each}
+          </select>
+        </div>
+      {/each}
+    </div>
+    <div>
+      <h4 class="m3-font-title-small" style="margin:0 0 0.25rem 0">Other</h4>
+      {#each persistentKeys as k}
+        <div style="display:flex; align-items:center; gap:0.5rem; margin:0.125rem 0;">
+          <code style="min-width:5rem; display:inline-block;">{k}</code>
+          <select bind:value={uiMapping[k]}>
+            <option value="">— Unmapped —</option>
+            {#each labels as l}
+              <option value={l.id}>{l.name}</option>
+            {/each}
+          </select>
+        </div>
+      {/each}
+    </div>
+  </div>
+  <div style="margin-top:0.5rem; display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+    <Button variant="outlined" onclick={autoMapFromLabelNames}>Auto-map from label names</Button>
+    <Button variant="filled" onclick={saveUiMapping}>Save Mapping (UI)</Button>
+    <Button variant="text" onclick={copyAutoMapDiagnostics}>Copy auto-map diagnostics</Button>
+    <small>Only mapped snoozes are shown elsewhere in the app.</small>
+  </div>
+{/if}
+
+{#if currentTab === 'backups'}
+  <h3 style="margin-top:1rem;">Backups</h3>
+  <Card variant="outlined">
+    <div style="display:flex; gap:0.5rem; align-items:center; margin-bottom:0.5rem;">
+      <Button variant="outlined" onclick={makeBackup}>Create backup</Button>
+    </div>
+    <ul style="margin:0; padding-left:1rem;">
+      {#each backups as b}
+        <li style="margin:0.25rem 0; display:flex; align-items:center; gap:0.5rem;">
+          <code>{b.key}</code> — {new Date(b.createdAt).toLocaleString()}
+          <Button variant="text" onclick={() => restore(b.key)}>Restore</Button>
+        </li>
+      {/each}
+      {#if !backups.length}
+        <li>No backups yet.</li>
+      {/if}
+    </ul>
+  </Card>
+{/if}
