@@ -219,12 +219,13 @@
       <TextFieldOutlined label="Round minutes (1-60)" type="number" min="1" max="60" step="1" bind:value={(_roundMinutes as any)} />
       <TextFieldOutlined label="Trailing refresh delay (ms)" type="number" min="0" step="100" bind:value={(_trailingRefreshDelayMs as any)} />
       <label style="display:flex; align-items:center; gap:0.5rem;">
-        <input type="checkbox" bind:checked={_unreadOnUnsnooze} />
-        <Checkbox>Unread on unsnooze</Checkbox>
+        <Checkbox>
+          <input type="checkbox" bind:checked={_unreadOnUnsnooze} />
+        </Checkbox>
+        <span class="m3-font-body-medium">Unread on unsnooze</span>
       </label>
       <label style="display:flex; align-items:center; gap:0.5rem;">
-        <input type="checkbox" bind:checked={_notifEnabled} />
-        <Switch />
+        <Switch bind:checked={_notifEnabled} />
         <span class="m3-font-body-medium">Notifications enabled</span>
       </label>
     </div>
@@ -235,18 +236,21 @@
           <div class="m3-font-body-medium" style="margin-bottom:0.25rem;">Provider</div>
           <div style="display:flex; gap:1rem; align-items:center;">
             <label style="display:flex; align-items:center; gap:0.5rem;">
-              <input type="radio" name="aiProvider" value="openai" bind:group={_aiProvider} />
-              <Radio />
+              <Radio>
+                <input type="radio" name="aiProvider" value="openai" bind:group={_aiProvider} />
+              </Radio>
               <span class="m3-font-body-medium">OpenAI</span>
             </label>
             <label style="display:flex; align-items:center; gap:0.5rem;">
-              <input type="radio" name="aiProvider" value="anthropic" bind:group={_aiProvider} />
-              <Radio />
+              <Radio>
+                <input type="radio" name="aiProvider" value="anthropic" bind:group={_aiProvider} />
+              </Radio>
               <span class="m3-font-body-medium">Anthropic</span>
             </label>
             <label style="display:flex; align-items:center; gap:0.5rem;">
-              <input type="radio" name="aiProvider" value="gemini" bind:group={_aiProvider} />
-              <Radio />
+              <Radio>
+                <input type="radio" name="aiProvider" value="gemini" bind:group={_aiProvider} />
+              </Radio>
               <span class="m3-font-body-medium">Gemini</span>
             </label>
           </div>

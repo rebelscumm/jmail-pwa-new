@@ -264,13 +264,7 @@
   <p>Thread not loaded.</p>
 {/if}
 
-<script module lang="ts">
-  export const prerender = false;
-  export const ssr = false;
-  export const csr = true;
-  export const trailingSlash = 'ignore';
-  export const csrHash = true;
-</script>
+<!-- page options moved to +page.ts -->
 
 <style>
   .messages {

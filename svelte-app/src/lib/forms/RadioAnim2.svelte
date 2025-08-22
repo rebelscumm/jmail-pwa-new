@@ -8,12 +8,12 @@
     children,
     ...extra
   }: {
-    children: Snippet;
+    children?: Snippet;
   } & HTMLAttributes<HTMLDivElement> = $props();
 </script>
 
 <div class="m3-container" {...extra}>
-  {@render children()}
+  {@render children?.()}
   <div class="layer-container">
     <Layer />
     <div class="radio-circle"></div>
