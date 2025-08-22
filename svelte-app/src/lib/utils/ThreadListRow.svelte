@@ -10,7 +10,7 @@
   import { base } from '$app/paths';
   import { show as showSnackbar } from '$lib/containers/snackbar';
   import { fade } from 'svelte/transition';
-  import { rules, DEFAULTS } from '$lib/snooze/rules';
+  import { rules, DEFAULTS, normalizeRuleKey, resolveRule } from '$lib/snooze/rules';
   // Lazy import to avoid circular or route coupling; fallback no-op if route not mounted
   async function scheduleReload() {
     try {
@@ -36,7 +36,7 @@
   let pendingRemove = $state(false);
   let pendingLabel: string | null = $state(null);
   let snoozeMenuOpen = $state(false);
-  let mappedKeys = $derived(Object.keys($settings.labelMapping || {}).filter((k) => $settings.labelMapping[k]));
+  let mappedKeys = $derived(Array.from(new Set(Object.keys($settings.labelMapping || {}).filter((k) => $settings.labelMapping[k]).map((k) => normalizeRuleKey(k)))));
   let defaultSnoozeKey = $derived(mappedKeys.includes('1h') ? '1h' : (mappedKeys[0] || null));
   
   // Unified slide-out performer used by all trailing actions
@@ -144,15 +144,15 @@
 
   function pickShortestSnooze(keys: string[]): string | null {
     try {
-      const now = new Date();
+      const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
       let bestKey: string | null = null;
       let bestTime: number | null = null;
-      for (const k of keys) {
-        const r = rules[k];
-        if (!r || typeof r.resolver !== 'function') continue;
-        const dt = r.resolver(now, DEFAULTS);
-        if (!(dt instanceof Date) || isNaN(dt.getTime())) continue;
-        const t = dt.getTime();
+      for (const raw of keys) {
+        const k = normalizeRuleKey(raw);
+        const dt = resolveRule(k, zone, DEFAULTS);
+        if (!dt) continue;
+        const t = new Date(dt).getTime();
+        if (Number.isNaN(t)) continue;
         if (bestTime == null || t < bestTime) { bestTime = t; bestKey = k; }
       }
       return bestKey || (keys[0] || null);
@@ -177,20 +177,22 @@
     <Button variant="text" onclick={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); animateAndArchive(); }}>Archive</Button>
     <Button variant="text" color="error" onclick={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); animateAndDelete(); }}>Delete</Button>
     <div class="snooze-wrap" role="button" tabindex="0" data-no-row-nav onclick={(e) => { if (!(e.target as Element)?.closest('summary')) { e.preventDefault(); } e.stopPropagation(); }} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { if (!(e.target as Element)?.closest('summary')) { e.preventDefault(); } e.stopPropagation(); } }}>
-      {#if defaultSnoozeKey}
-      <SplitButton variant="outlined" x="right" y="down" onclick={() => { animateAndSnooze(defaultSnoozeKey, `Snoozed ${defaultSnoozeKey}`); }} on:toggle={(e) => { snoozeMenuOpen = (e.detail as boolean); }}>
+      <SplitButton variant="outlined" x="right" y="down" onclick={() => { if (defaultSnoozeKey) { animateAndSnooze(defaultSnoozeKey, `Snoozed ${defaultSnoozeKey}`); } else { showSnackbar({ message: 'No snooze labels configured. Map them in Settings.' }); } }} on:toggle={(e) => { snoozeMenuOpen = (e.detail as boolean); }}>
         {#snippet children()}
-          {defaultSnoozeKey}
+          {defaultSnoozeKey || 'Snooze'}
         {/snippet}
         {#snippet menu()}
           <div class="snooze-menu">
             <Menu>
-              <SnoozePanel onSelect={(k: string) => animateAndSnooze(k, 'Snoozed')} />
+              {#if mappedKeys.length > 0}
+                <SnoozePanel onSelect={(k: string) => animateAndSnooze(k, 'Snoozed')} />
+              {:else}
+                <div style="padding:0.5rem 0.75rem; max-width: 18rem;" class="m3-font-body-small">No snooze labels configured. Map them in Settings.</div>
+              {/if}
             </Menu>
           </div>
         {/snippet}
       </SplitButton>
-      {/if}
     </div>
   </div>
 {/snippet}
