@@ -3,7 +3,7 @@
   import Button from '$lib/buttons/Button.svelte';
   import SplitButton from '$lib/buttons/SplitButton.svelte';
   import Menu from '$lib/containers/Menu.svelte';
-  import MenuItem from '$lib/containers/MenuItem.svelte';
+  import SnoozePanel from '$lib/snooze/SnoozePanel.svelte';
   import Dialog from '$lib/containers/Dialog.svelte';
   import DatePickerDocked from '$lib/forms/DatePickerDocked.svelte';
   import { archiveThread, trashThread, markRead, markUnread, undoLast } from '$lib/queue/intents';
@@ -220,19 +220,10 @@
           <div class="snooze-menu">
             <Menu>
               {#if mappedKeys.length > 0}
-                <MenuItem disabled={!isMapped('1h')} onclick={() => trySnooze('1h')}>1h</MenuItem>
-                <MenuItem disabled={!isMapped('3h')} onclick={() => trySnooze('3h')}>3h</MenuItem>
-                <MenuItem disabled={!isMapped('2pm')} onclick={() => trySnooze('2pm')}>2p</MenuItem>
-                <MenuItem disabled={!isMapped('6am')} onclick={() => trySnooze('6am')}>6a</MenuItem>
-                <MenuItem disabled={!isMapped('7pm')} onclick={() => trySnooze('7pm')}>7p</MenuItem>
-                <MenuItem disabled={!isMapped('2d')} onclick={() => trySnooze('2d')}>2d</MenuItem>
-                <MenuItem disabled={!isMapped('4d')} onclick={() => trySnooze('4d')}>4d</MenuItem>
-                <MenuItem disabled={!isMapped('7d')} onclick={() => trySnooze('7d')}>7d</MenuItem>
-                <MenuItem disabled={!isMapped('14d')} onclick={() => trySnooze('14d')}>14d</MenuItem>
-                <MenuItem disabled={!isMapped('30d')} onclick={() => trySnooze('30d')}>30d</MenuItem>
-                <MenuItem disabled={!isMapped('Monday')} onclick={() => trySnooze('Monday')}>mon</MenuItem>
-                <MenuItem disabled={!isMapped('Friday')} onclick={() => trySnooze('Friday')}>fri</MenuItem>
-                <MenuItem onclick={() => { dateDialogOpen = true; }}>Pick date…</MenuItem>
+                <SnoozePanel onSelect={(k) => trySnooze(k)} />
+                <div class="footer">
+                  <Button variant="text" onclick={() => { dateDialogOpen = true; }}>Pick date…</Button>
+                </div>
               {:else}
                 <div style="padding:0.5rem 0.75rem; max-width: 18rem;" class="m3-font-body-small">No snooze labels configured. Map them in Settings.</div>
               {/if}
@@ -345,6 +336,7 @@
   }
   .actions { display:flex; flex-direction: column; gap:0.25rem; align-items:flex-end; }
   .snooze-menu :global(.m3-container) { padding: 0; }
+  .snooze-menu .footer { display:flex; justify-content:flex-end; padding: 0.25rem 0.5rem; border-top: 1px solid rgb(var(--m3-scheme-outline-variant)); }
   .leading-checkbox {
     display: inline-flex;
     align-items: center;
