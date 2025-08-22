@@ -11,7 +11,12 @@
   import Card from '$lib/containers/Card.svelte';
   import LoadingIndicator from '$lib/forms/LoadingIndicator.svelte';
   import Chip from '$lib/forms/Chip.svelte';
+  import Checkbox from '$lib/forms/Checkbox.svelte';
   import { snoozeByThread } from '$lib/stores/snooze';
+  import { archiveThread, trashThread, undoLast } from '$lib/queue/intents';
+  import { snoozeThreadByRule } from '$lib/snooze/actions';
+  import { settings } from '$lib/stores/settings';
+  import { show as showSnackbar } from '$lib/containers/snackbar';
   import iconInbox from '@ktibow/iconset-material-symbols/inbox';
   import iconMarkEmailUnread from '@ktibow/iconset-material-symbols/mark-email-unread';
   import iconSnooze from '@ktibow/iconset-material-symbols/snooze';
@@ -47,6 +52,44 @@
           return subj.includes(q) || from.includes(q);
         })
   );
+  // Selection state keyed by threadId
+  let selectedMap = $state<Record<string, true>>({});
+  const selectedCount = $derived(Object.keys(selectedMap).length);
+  const allVisibleSelected = $derived(visibleThreads.length > 0 && visibleThreads.every(t => selectedMap[t.threadId]));
+  function toggleSelectThread(threadId: string, next: boolean) {
+    if (next) selectedMap = { ...selectedMap, [threadId]: true };
+    else { const { [threadId]: _, ...rest } = selectedMap; selectedMap = rest; }
+  }
+  function selectAllVisible(next: boolean) {
+    if (next) {
+      const map: Record<string, true> = {};
+      for (const t of visibleThreads) map[t.threadId] = true;
+      selectedMap = map;
+    } else {
+      selectedMap = {};
+    }
+  }
+  async function bulkArchive() {
+    const ids = Object.keys(selectedMap);
+    if (!ids.length) return;
+    for (const id of ids) await archiveThread(id, { optimisticLocal: false });
+    selectedMap = {};
+    showSnackbar({ message: 'Archived', actions: { Undo: () => undoLast(ids.length) } });
+  }
+  async function bulkDelete() {
+    const ids = Object.keys(selectedMap);
+    if (!ids.length) return;
+    for (const id of ids) await trashThread(id, { optimisticLocal: false });
+    selectedMap = {};
+    showSnackbar({ message: 'Deleted', actions: { Undo: () => undoLast(ids.length) } });
+  }
+  async function bulkSnooze(ruleKey: string) {
+    const ids = Object.keys(selectedMap);
+    if (!ids.length) return;
+    for (const id of ids) await snoozeThreadByRule(id, ruleKey, { optimisticLocal: false });
+    selectedMap = {};
+    showSnackbar({ message: `Snoozed ${ruleKey}`, actions: { Undo: () => undoLast(ids.length) } });
+  }
   const totalThreadsCount = $derived($threadsStore?.length || 0);
   let inboxLabelStats = $state<{ messagesTotal?: number; messagesUnread?: number; threadsTotal?: number; threadsUnread?: number } | null>(null);
   const inboxCount = $derived(inboxLabelStats?.threadsTotal ?? inboxThreads.length);
@@ -346,6 +389,10 @@
     await Promise.all(workers);
     return results;
   }
+
+  const can10m = $derived(Object.keys($settings.labelMapping || {}).some((k)=>k==='10m' && $settings.labelMapping[k]));
+  const can3h = $derived(Object.keys($settings.labelMapping || {}).some((k)=>k==='3h' && $settings.labelMapping[k]));
+  const can1d = $derived(Object.keys($settings.labelMapping || {}).some((k)=>k==='1d' && $settings.labelMapping[k]));
 </script>
 
 {#if loading}
@@ -396,6 +443,29 @@
       </Button>
     </div>
   </div>
+
+  {#if selectedCount > 0}
+    <Card variant="elevated" style="margin: 0 0 0.5rem 0;">
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem; flex-wrap:wrap;">
+        <div class="m3-font-body-medium" style="display:flex; align-items:center; gap:0.5rem;">
+          <label class="m3-font-body-medium" style="display:flex; align-items:center; gap:0.5rem;">
+            <Checkbox>
+              <input type="checkbox" checked={allVisibleSelected} onchange={(e: Event) => selectAllVisible((e.currentTarget as HTMLInputElement).checked)} />
+            </Checkbox>
+            Select all ({selectedCount})
+          </label>
+        </div>
+        <div style="display:flex; gap:0.5rem; align-items:center;">
+          <Button variant="text" onclick={bulkArchive}>Archive</Button>
+          <Button variant="text" color="error" onclick={bulkDelete}>Delete</Button>
+          <Button variant="text" onclick={() => bulkSnooze('10m')} disabled={!can10m}>10m</Button>
+          <Button variant="text" onclick={() => bulkSnooze('3h')} disabled={!can3h}>3h</Button>
+          <Button variant="text" onclick={() => bulkSnooze('1d')} disabled={!can1d}>1d</Button>
+        </div>
+      </div>
+    </Card>
+  {/if}
+
   {#if (!visibleThreads || visibleThreads.length === 0)}
     <Card variant="outlined" style="max-width:36rem; margin: 0 auto 1rem;">
       <h3 class="m3-font-title-medium" style="margin:0 0 0.25rem 0">No threads to display</h3>
@@ -415,9 +485,11 @@
   <div style="height:70vh">
     <VirtualList items={visibleThreads} rowHeight={68} getKey={(t) => t.threadId}>
       {#snippet children(item: import('$lib/types').GmailThread)}
-      <ThreadListRow thread={item} />
+      <ThreadListRow thread={item} selected={!!selectedMap[item.threadId]} onToggleSelected={(next) => toggleSelectThread(item.threadId, next)} />
       {/snippet}
     </VirtualList>
   </div>
 {/if}
+
+<style></style>
 
