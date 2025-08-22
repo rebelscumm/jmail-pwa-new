@@ -7,6 +7,13 @@
   import { normalizeRuleKey } from '$lib/snooze/rules';
   import type { AppSettings } from '$lib/stores/settings';
   import { createBackup, listBackups, pruneOldBackups, restoreBackup } from '$lib/db/backups';
+  import Card from '$lib/containers/Card.svelte';
+  import Button from '$lib/buttons/Button.svelte';
+  import TextField from '$lib/forms/TextField.svelte';
+  import TextFieldOutlined from '$lib/forms/TextFieldOutlined.svelte';
+  import TextFieldOutlinedMultiline from '$lib/forms/TextFieldOutlinedMultiline.svelte';
+  import Checkbox from '$lib/forms/Checkbox.svelte';
+  import Switch from '$lib/forms/Switch.svelte';
 
   let labels: GmailLabel[] = [];
   let mappingJson = '';
@@ -20,6 +27,7 @@
   let _aiModel = '';
   let _aiPageFetchOptIn = false;
   let _taskFilePath = '';
+  let _trailingRefreshDelayMs = 5000;
   let backups: { key: string; createdAt: number }[] = [];
   // Human-friendly mapping UI state
   let uiMapping: Record<string, string> = {};
@@ -43,6 +51,7 @@
     _aiModel = s.aiModel || '';
     _aiPageFetchOptIn = !!s.aiPageFetchOptIn;
     _taskFilePath = s.taskFilePath || '';
+    _trailingRefreshDelayMs = Number(s.trailingRefreshDelayMs || 5000);
     mappingJson = JSON.stringify(s.labelMapping, null, 2);
     uiMapping = { ...s.labelMapping };
 
@@ -142,7 +151,7 @@
   }
 
   async function saveAppSettings() {
-    await updateAppSettings({ anchorHour: _anchorHour, roundMinutes: _roundMinutes, unreadOnUnsnooze: _unreadOnUnsnooze, notifEnabled: _notifEnabled, aiProvider: _aiProvider, aiApiKey: _aiApiKey, aiModel: _aiModel, aiPageFetchOptIn: _aiPageFetchOptIn, taskFilePath: _taskFilePath });
+    await updateAppSettings({ anchorHour: _anchorHour, roundMinutes: _roundMinutes, unreadOnUnsnooze: _unreadOnUnsnooze, notifEnabled: _notifEnabled, aiProvider: _aiProvider, aiApiKey: _aiApiKey, aiModel: _aiModel, aiPageFetchOptIn: _aiPageFetchOptIn, taskFilePath: _taskFilePath, trailingRefreshDelayMs: Math.max(0, Number(_trailingRefreshDelayMs || 0)) });
     if (_notifEnabled && 'Notification' in window) {
       const p = await Notification.requestPermission();
       if (p !== 'granted') {
@@ -166,33 +175,35 @@
 </script>
 
 <h3>Labels</h3>
-<button on:click={discoverLabels}>Refresh</button>
-<ul>
-  {#each labels as l}
-    <li>
-      <code>{l.name}</code> — <small>{l.id} ({l.type})</small>
-      <button on:click={() => copy(`${l.name}: ${l.id}`)}>Copy</button>
-    </li>
-  {/each}
-  {#if !labels.length}
-    <li>No labels cached yet.</li>
-  {/if}
+<Button variant="outlined" onclick={discoverLabels}>Refresh</Button>
+<Card variant="outlined" style="margin-top:0.5rem;">
+  <ul style="margin:0; padding-left:1rem;">
+    {#each labels as l}
+      <li style="margin:0.25rem 0;">
+        <code>{l.name}</code> — <small>{l.id} ({l.type})</small>
+        <Button variant="text" onclick={() => copy(`${l.name}: ${l.id}`)}>Copy</Button>
+      </li>
+    {/each}
+    {#if !labels.length}
+      <li>No labels cached yet.</li>
+    {/if}
   </ul>
+</Card>
 
-<h3>Label Mapping</h3>
-<textarea bind:value={mappingJson} rows={10} style="width:100%"></textarea>
-<div>
-  <button on:click={saveMapping}>Save</button>
+<h3 style="margin-top:1rem;">Label Mapping</h3>
+<TextFieldOutlinedMultiline label="Mapping (JSON)" bind:value={mappingJson} />
+<div style="margin-top:0.5rem; display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+  <Button variant="filled" onclick={saveMapping}>Save</Button>
   <span>{info}</span>
-  <button on:click={() => navigator.clipboard.writeText(mappingJson)}>Copy</button>
+  <Button variant="text" onclick={() => navigator.clipboard.writeText(mappingJson)}>Copy</Button>
   <input type="file" accept="application/json" on:change={(e)=>{
     const input = e.currentTarget as HTMLInputElement;
     const file=input.files?.[0]; if(!file) return; file.text().then((t: string)=>mappingJson=t);
   }} />
-  <button on:click={seedMapping}>Seed defaults</button>
+  <Button variant="outlined" onclick={seedMapping}>Seed defaults</Button>
 </div>
 
-<h3>Snooze Mapping (UI)</h3>
+<h3 style="margin-top:1rem;">Snooze Mapping (UI)</h3>
 <div style="display:flex; gap:1rem; flex-wrap:wrap;">
   <div>
     <h4 class="m3-font-title-small" style="margin:0 0 0.25rem 0">Quick</h4>
@@ -279,51 +290,70 @@
     {/each}
   </div>
 </div>
-<div style="margin-top:0.5rem; display:flex; gap:0.5rem; align-items:center;">
-  <button on:click={autoMapFromLabelNames}>Auto-map from label names</button>
-  <button on:click={saveUiMapping}>Save Mapping (UI)</button>
-  <button on:click={copyAutoMapDiagnostics}>Copy auto-map diagnostics</button>
+<div style="margin-top:0.5rem; display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+  <Button variant="outlined" onclick={autoMapFromLabelNames}>Auto-map from label names</Button>
+  <Button variant="filled" onclick={saveUiMapping}>Save Mapping (UI)</Button>
+  <Button variant="text" onclick={copyAutoMapDiagnostics}>Copy auto-map diagnostics</Button>
   <small>Only mapped snoozes are shown elsewhere in the app.</small>
 </div>
 
-<h3>App Settings</h3>
-<div>
-  <label>Anchor hour <input type="number" min="0" max="23" bind:value={_anchorHour} /></label>
-  <label>Round minutes <input type="number" min="1" max="60" step="1" bind:value={_roundMinutes} /></label>
-  <label><input type="checkbox" bind:checked={_unreadOnUnsnooze} /> Unread on unsnooze</label>
-  <label><input type="checkbox" bind:checked={_notifEnabled} /> Notifications enabled</label>
-  <fieldset style="border:1px solid var(--m3-outline-variant); padding:0.5rem; border-radius:0.5rem;">
-    <legend>AI</legend>
-    <label>Provider
-      <select bind:value={_aiProvider}>
-        <option value="openai">OpenAI</option>
-        <option value="anthropic">Anthropic</option>
-        <option value="gemini">Gemini</option>
-      </select>
+<h3 style="margin-top:1rem;">App Settings</h3>
+<Card variant="outlined">
+  <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap:0.75rem; align-items:center;">
+    <TextFieldOutlined label="Anchor hour (0-23)" type="number" min="0" max="23" bind:value={(_anchorHour as any)} />
+    <TextFieldOutlined label="Round minutes (1-60)" type="number" min="1" max="60" step="1" bind:value={(_roundMinutes as any)} />
+    <TextFieldOutlined label="Trailing refresh delay (ms)" type="number" min="0" step="100" bind:value={(_trailingRefreshDelayMs as any)} />
+    <label style="display:flex; align-items:center; gap:0.5rem;">
+      <input type="checkbox" bind:checked={_unreadOnUnsnooze} />
+      <Checkbox>Unread on unsnooze</Checkbox>
     </label>
-    <label>API Key <input type="password" bind:value={_aiApiKey} placeholder="sk-..." /></label>
-    <label>Model <input bind:value={_aiModel} placeholder="gpt-4o-mini / claude-3-haiku / gemini-1.5-flash" /></label>
-    <label><input type="checkbox" bind:checked={_aiPageFetchOptIn} /> Allow page fetch for link-only emails</label>
+    <label style="display:flex; align-items:center; gap:0.5rem;">
+      <input type="checkbox" bind:checked={_notifEnabled} />
+      <Switch />
+      <span class="m3-font-body-medium">Notifications enabled</span>
+    </label>
+  </div>
+  <fieldset style="margin-top:0.75rem; border:1px solid var(--m3-outline-variant); padding:0.5rem; border-radius:0.5rem;">
+    <legend>AI</legend>
+    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap:0.75rem; align-items:center;">
+      <label>Provider
+        <select bind:value={_aiProvider}>
+          <option value="openai">OpenAI</option>
+          <option value="anthropic">Anthropic</option>
+          <option value="gemini">Gemini</option>
+        </select>
+      </label>
+      <TextFieldOutlined label="API Key" type="password" bind:value={_aiApiKey} placeholder="sk-..." />
+      <TextFieldOutlined label="Model" bind:value={_aiModel} placeholder="gpt-4o-mini / claude-3-haiku / gemini-1.5-flash" />
+      <label style="display:flex; align-items:center; gap:0.5rem;">
+        <input type="checkbox" bind:checked={_aiPageFetchOptIn} />
+        <Checkbox>Allow page fetch for link-only emails</Checkbox>
+      </label>
+    </div>
   </fieldset>
-  <fieldset style="border:1px solid var(--m3-outline-variant); padding:0.5rem; border-radius:0.5rem;">
+  <fieldset style="margin-top:0.75rem; border:1px solid var(--m3-outline-variant); padding:0.5rem; border-radius:0.5rem;">
     <legend>Tasks</legend>
-    <label>Desktop: task file path <input bind:value={_taskFilePath} placeholder="C:\\path\\to\\tasks.md" /></label>
+    <TextFieldOutlined label="Desktop: task file path" bind:value={_taskFilePath} placeholder="C:\\path\\to\\tasks.md" />
   </fieldset>
-  <button on:click={saveAppSettings}>Save Settings</button>
-</div>
+  <div style="margin-top:0.75rem; display:flex; gap:0.5rem; justify-content:flex-end;">
+    <Button variant="filled" onclick={saveAppSettings}>Save Settings</Button>
+  </div>
+</Card>
 
-<h3>Backups</h3>
-<div>
-  <button on:click={makeBackup}>Create backup</button>
-  <ul>
+<h3 style="margin-top:1rem;">Backups</h3>
+<Card variant="outlined">
+  <div style="display:flex; gap:0.5rem; align-items:center; margin-bottom:0.5rem;">
+    <Button variant="outlined" onclick={makeBackup}>Create backup</Button>
+  </div>
+  <ul style="margin:0; padding-left:1rem;">
     {#each backups as b}
-      <li>
+      <li style="margin:0.25rem 0; display:flex; align-items:center; gap:0.5rem;">
         <code>{b.key}</code> — {new Date(b.createdAt).toLocaleString()}
-        <button on:click={() => restore(b.key)}>Restore</button>
+        <Button variant="text" onclick={() => restore(b.key)}>Restore</Button>
       </li>
     {/each}
     {#if !backups.length}
       <li>No backups yet.</li>
     {/if}
   </ul>
-</div>
+</Card>
