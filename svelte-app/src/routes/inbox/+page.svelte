@@ -45,20 +45,21 @@
   const inboxCount = $derived(inboxLabelStats?.threadsTotal ?? inboxThreads.length);
   const visibleThreadsCount = $derived(visibleThreads?.length || 0);
   const unreadCount = $derived(inboxLabelStats?.threadsUnread ?? inboxThreads.filter((t) => (t.labelIds || []).includes('UNREAD')).length);
-  const soonSnoozedCount = $derived(() => {
-    try {
-      const now = Date.now();
-      const cutoff = now + 24 * 60 * 60 * 1000;
-      const map = $snoozeByThread || {};
-      let count = 0;
-      for (const info of Object.values(map)) {
-        if (info && typeof info.dueAtUtc === 'number' && info.dueAtUtc <= cutoff) count++;
+  const soonSnoozedCount = $derived(
+    (() => {
+      try {
+        const cutoff = Date.now() + 24 * 60 * 60 * 1000;
+        const map = $snoozeByThread || {};
+        let count = 0;
+        for (const info of Object.values(map)) {
+          if (info && typeof info.dueAtUtc === 'number' && info.dueAtUtc <= cutoff) count++;
+        }
+        return count;
+      } catch {
+        return 0;
       }
-      return count;
-    } catch {
-      return 0;
-    }
-  });
+    })()
+  );
   $effect(() => {
     // Log UI-level diagnostics in dev builds only
     try {
