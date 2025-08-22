@@ -48,7 +48,7 @@ svg += `
     fill="white"
     text-anchor="middle"
     dominant-baseline="middle"
-  >M3 Svelte</text>
+  >Jmail</text>
 </svg>`;
 
 await Deno.writeTextFile("static/og.svg", svg);

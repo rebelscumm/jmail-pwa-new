@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <clipPath id="round">
+      <rect x="32" y="32" width="960" height="960" rx="200" ry="200"/>
+    </clipPath>
+  </defs>
+  <rect x="0" y="0" width="1024" height="1024" fill="#f2e9e1"/>
+  <g clip-path="url(#round)">
+    <rect x="0" y="0" width="512" height="512" fill="#ea4335"/>
+    <rect x="512" y="0" width="512" height="512" fill="#fbbc05"/>
+    <rect x="0" y="512" width="512" height="512" fill="#1a73e8"/>
+    <rect x="512" y="512" width="512" height="512" fill="#34a853"/>
+  </g>
+  <g>
+    <rect x="192" y="256" width="640" height="512" rx="48" ry="48" fill="#fff7f0"/>
+    <path d="M224 720l288-216 288 216" fill="none" stroke="#f4b400" stroke-width="36" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M320 360l192 136 192-136" fill="none" stroke="#f4b400" stroke-width="36" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M456 432v-104h72v144c0 34-6 61-20 81-14 20-35 30-63 30-25 0-45-7-59-21-14-14-23-35-26-64l68-7c2 20 10 30 23 30 9 0 16-4 20-12s5-22 5-40z" fill="#ea4335"/>
+  </g>
+</svg>
+
+

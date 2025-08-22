@@ -48,6 +48,31 @@
   }
 
   if (typeof window !== 'undefined') {
+    // Support ?refresh to force a clean reload without caches/service worker
+    try {
+      const currentUrl = new URL(window.location.href);
+      if (currentUrl.searchParams.has('refresh')) {
+        (async () => {
+          try {
+            if ('caches' in window) {
+              const cacheKeys = await caches.keys();
+              await Promise.all(cacheKeys.map((key) => caches.delete(key)));
+            }
+            if ('serviceWorker' in navigator) {
+              const regs = await navigator.serviceWorker.getRegistrations();
+              await Promise.all(regs.map((r) => r.unregister()));
+            }
+          } catch (_) {
+            // ignore
+          } finally {
+            currentUrl.searchParams.delete('refresh');
+            const cleanPath = currentUrl.pathname + (currentUrl.search || '') + currentUrl.hash;
+            window.location.replace(cleanPath || '/');
+          }
+        })();
+      }
+    } catch (_) {}
+
     startFlushLoop();
     // Load settings at app start
     import('$lib/stores/settings').then((m)=>m.loadSettings());
@@ -57,14 +82,12 @@
     import('$lib/stores/snooze').then((m)=>m.loadSnoozes());
 
     // Offline banner
-    const updateBanner = () => {
-      const el = document.querySelector('#offline-banner');
-      if (!el) return;
-      el.classList.toggle('visible', !navigator.onLine);
+    const updateOfflineState = () => {
+      isOffline = !navigator.onLine;
     };
-    window.addEventListener('online', updateBanner);
-    window.addEventListener('offline', updateBanner);
-    setTimeout(updateBanner, 0);
+    window.addEventListener('online', updateOfflineState);
+    window.addEventListener('offline', updateOfflineState);
+    setTimeout(updateOfflineState, 0);
 
     // Ensure first-run shows connect wizard at root
     (async () => {
@@ -104,9 +127,10 @@
   let subject = $state("");
   let body = $state("");
   let snackbar: ReturnType<typeof Snackbar>;
+  let isOffline = $state(false);
 
   function makeRfc2822(): string {
-    const boundary = `----jmail-${Math.random().toString(36).slice(2)}`;
+    const boundary = `----Jmail-${Math.random().toString(36).slice(2)}`;
     const headers = [
       `To: ${to}`,
       `Subject: ${subject}`,
@@ -134,6 +158,12 @@
   }
 </script>
 
+<svelte:head>
+  <title>Jmail</title>
+  <meta name="application-name" content="Jmail" />
+  <meta property="og:title" content="Jmail" />
+</svelte:head>
+
 {@html `<style>${$styling}</style>`}
 <div class="container">
   {#if normalizePath(base || "/") !== normalizePath(page.url.pathname)}
@@ -154,12 +184,16 @@
     </div>
   {/if}
   <div class="content">
-    <TopAppBar onSyncNow={() => refreshSyncState()} />
-    <div id="offline-banner" class="offline">You are offline. Actions will be queued.</div>
+    {#if normalizePath(base || "/") !== normalizePath(page.url.pathname)}
+      <TopAppBar onSyncNow={() => refreshSyncState()} />
+      <div id="offline-banner" class="offline" class:visible={isOffline}>You are offline. Actions will be queued.</div>
+    {/if}
     {@render children()}
-    <div class="fab-holder">
-      <FAB color="primary" icon={iconCompose} onclick={() => (showCompose = true)} />
-    </div>
+    {#if normalizePath(base || "/") !== normalizePath(page.url.pathname)}
+      <div class="fab-holder">
+        <FAB color="primary" icon={iconCompose} onclick={() => (showCompose = true)} />
+      </div>
+    {/if}
     <Snackbar bind:this={snackbar} />
   </div>
 </div>
@@ -233,7 +267,7 @@
   .offline.visible { display: block; }
 </style>
 
-{#if showCompose}
+{#if normalizePath(base || "/") !== normalizePath(page.url.pathname) && showCompose}
   <BottomSheet close={() => (showCompose = false)}>
     <div style="display:grid; gap:0.5rem; padding-bottom:1rem;">
       <h3 class="m3-font-title-medium" style="margin:0.25rem 0 0 0">New message</h3>

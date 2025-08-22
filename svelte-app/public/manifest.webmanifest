@@ -1,12 +1,24 @@
 {
-  "name": "M3 Svelte",
-  "short_name": "M3",
+  "name": "Jmail",
+  "short_name": "Jmail",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "background_color": "#121212",
   "theme_color": "#1f1f1f",
   "icons": [
+    {
+      "src": "favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-maskable.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    },
     {
       "src": "favicon.png",
       "sizes": "192x192",
@@ -18,6 +30,18 @@
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "splash-light.svg",
+      "type": "image/svg+xml",
+      "form_factor": "wide"
+    },
+    {
+      "src": "splash-dark.svg",
+      "type": "image/svg+xml",
+      "form_factor": "wide"
     }
   ]
 }
