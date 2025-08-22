@@ -191,6 +191,7 @@
      onpointerup={onPointerUp}
 >
   <div class="bg" aria-hidden="true" style={`pointer-events:${pendingLabel ? 'auto' : 'none'}`}> 
+    {#if pendingLabel || dx > 0}
     <div class="left" style={`background:${pendingRemove ? 'rgb(var(--m3-scheme-error-container))' : 'rgb(var(--m3-scheme-secondary-container))'}; color:${pendingRemove ? 'rgb(var(--m3-scheme-on-error-container))' : 'rgb(var(--m3-scheme-on-secondary-container))'}`}>
       {#if pendingLabel}
         <div class="pending-wrap" role="status" aria-live="polite">
@@ -201,7 +202,10 @@
         {dx > 40 ? 'Archive' : ''}
       {/if}
     </div>
+    {/if}
+    {#if dx < 0}
     <div class="right">{dx < -40 ? '1h' : ''}</div>
+    {/if}
   </div>
   <div class="fg" style={`transform: translateX(${dx}px); transition: ${animating ? 'transform 180ms var(--m3-util-easing-fast)' : 'none'};`} in:fade={{ duration: 120 }} out:fade={{ duration: 180 }}>
     <ListItem
