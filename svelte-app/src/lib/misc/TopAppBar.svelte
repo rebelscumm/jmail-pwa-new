@@ -18,6 +18,9 @@
   import iconUndo from '@ktibow/iconset-material-symbols/undo';
   import iconRedo from '@ktibow/iconset-material-symbols/redo';
   import iconSync from '@ktibow/iconset-material-symbols/sync';
+  import iconSettings from '@ktibow/iconset-material-symbols/settings';
+  import iconBackup from '@ktibow/iconset-material-symbols/backup';
+  import iconRefresh from '@ktibow/iconset-material-symbols/refresh';
   let { onSyncNow }: { onSyncNow?: () => void } = $props();
   let overflowDetails: HTMLDetailsElement;
   let aboutOpen = $state(false);
@@ -194,10 +197,11 @@
         </Button>
       </summary>
       <Menu>
-        <MenuItem onclick={() => (location.href = '/settings')}>Settings</MenuItem>
-        <MenuItem onclick={doSync}>Sync now</MenuItem>
-        <MenuItem onclick={async()=>{ const m = await import('$lib/db/backups'); await m.createBackup(); await m.pruneOldBackups(4); }}>Create backup</MenuItem>
-        <MenuItem onclick={() => { aboutOpen = true; }}>About</MenuItem>
+        <MenuItem icon={iconSettings} onclick={() => (location.href = '/settings')}>Settings</MenuItem>
+        <MenuItem icon={iconSync} onclick={doSync}>Sync now</MenuItem>
+        <MenuItem icon={iconBackup} onclick={async()=>{ const m = await import('$lib/db/backups'); await m.createBackup(); await m.pruneOldBackups(4); }}>Create backup</MenuItem>
+        <MenuItem icon={iconRefresh} onclick={() => { const u = new URL(window.location.href); u.searchParams.set('refresh', '1'); location.href = u.toString(); }}>Force update</MenuItem>
+        <MenuItem icon={iconInfo} onclick={() => { aboutOpen = true; }}>About</MenuItem>
       </Menu>
     </details>
     <Dialog icon={iconInfo} headline="About" bind:open={aboutOpen} closeOnClick={false}>
