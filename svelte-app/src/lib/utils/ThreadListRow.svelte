@@ -24,8 +24,8 @@
     } catch (_) {}
   }
 
-  let { thread }: { thread: import('$lib/types').GmailThread } = $props();
-
+  let { thread, selected = false, onToggleSelected = undefined }: { thread: import('$lib/types').GmailThread; selected?: boolean; onToggleSelected?: ((next: boolean, ev: Event) => void) | undefined } = $props();
+  
   let dx = $state(0);
   let startX = $state(0);
   let dragging = $state(false);
@@ -51,7 +51,7 @@
     // Schedule a reload to refresh list after trailing action
     scheduleReload();
   }
-
+  
   function onPointerDown(e: PointerEvent) {
     startTarget = e.target as HTMLElement;
     downInInteractive = !!startTarget?.closest(
@@ -63,7 +63,7 @@
     startX = e.clientX;
     // Do not capture immediately; only capture after small movement to allow native click
   }
-
+  
   async function onPointerUp(e: PointerEvent) {
     if (!dragging) return;
     if (downInInteractive) {
@@ -90,7 +90,7 @@
     }
     setTimeout(() => (animating = false), 180);
   }
-
+  
   function onPointerMove(e: PointerEvent) {
     if (!dragging || downInInteractive) return;
     const delta = e.clientX - startX;
@@ -100,23 +100,23 @@
     }
     dx = Math.max(Math.min(delta, 160), -160);
   }
-
+  
   async function animateAndDelete(): Promise<void> {
     await animateAndPerform('Deleted', () => trashThread(thread.threadId, { optimisticLocal: false }), true);
   }
-
+  
   async function animateAndArchive(): Promise<void> {
     await animateAndPerform('Archived', () => archiveThread(thread.threadId, { optimisticLocal: false }));
   }
-
+  
   async function animateAndUnsnooze(): Promise<void> {
     await animateAndPerform('Unsnoozed', () => manualUnsnoozeThread(thread.threadId, { optimisticLocal: false }));
   }
-
+  
   async function animateAndSnooze(ruleKey: string, label = 'Snoozed'): Promise<void> {
     await animateAndPerform(label, () => snoozeThreadByRule(thread.threadId, ruleKey, { optimisticLocal: false }));
   }
-
+  
   function onUndoBgClick(e: MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
@@ -127,7 +127,7 @@
       showSnackbar({ message: `Undid ${last}` });
     });
   }
-
+  
   function formatDateTime(ts?: number): string {
     if (!ts) return '';
     try {
@@ -141,7 +141,7 @@
       return '';
     }
   }
-
+  
   function pickShortestSnooze(keys: string[]): string | null {
     try {
       const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
@@ -160,7 +160,7 @@
       return keys[0] || null;
     }
   }
-
+  
   $effect(() => {
     if (mappedKeys && mappedKeys.length) {
       const shortest = pickShortestSnooze(mappedKeys);
@@ -201,6 +201,13 @@
   {@render trailing()}
 {/snippet}
 
+{#snippet selectionLeading()}
+  <label class="leading-checkbox">
+    <input type="checkbox" checked={selected} onclick={(e: Event) => { e.preventDefault(); e.stopPropagation(); onToggleSelected?.(!selected, e); }} onchange={(e: Event) => { e.preventDefault(); e.stopPropagation(); }} />
+    <span class="checkbox-box" aria-hidden="true"></span>
+  </label>
+{/snippet}
+
 <div class="swipe-wrapper" class:menu-open={snoozeMenuOpen}
      onpointerdown={onPointerDown}
      onpointermove={onPointerMove}
@@ -225,6 +232,7 @@
   </div>
   <div class="fg" style={`transform: translateX(${dx}px); transition: ${animating ? 'transform 180ms var(--m3-util-easing-fast)' : 'none'};`} in:fade={{ duration: 120 }} out:fade={{ duration: 180 }}>
     <ListItem
+      leading={onToggleSelected ? selectionLeading : undefined}
       headline={`${(thread.lastMsgMeta.subject || '(no subject)')}${(thread.lastMsgMeta.from ? ' — ' + thread.lastMsgMeta.from : '')}${(thread.lastMsgMeta?.date ? ' • ' + formatDateTime(thread.lastMsgMeta.date) : '')}`}
       supporting={''}
       lines={3}
@@ -294,6 +302,29 @@
   }
   .actions { display:flex; flex-direction: column; gap:0.25rem; align-items:flex-end; }
   .snooze-menu :global(.m3-container) { padding: 0; }
+  .leading-checkbox {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    position: relative;
+    cursor: pointer;
+  }
+  .leading-checkbox > input { position: absolute; opacity: 0; pointer-events: none; }
+  .leading-checkbox .checkbox-box {
+    width: 1.125rem;
+    height: 1.125rem;
+    border-radius: 0.25rem;
+    border: 2px solid rgb(var(--m3-scheme-outline));
+    background: transparent;
+    box-sizing: border-box;
+  }
+  :global(.leading-checkbox input:checked) + .checkbox-box {
+    background: selecteditem;
+    border-color: selecteditem !important;
+    box-shadow: inset 0 0 0 2px rgb(var(--m3-scheme-on-primary));
+  }
 </style>
 
 
