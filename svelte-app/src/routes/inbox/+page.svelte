@@ -287,6 +287,9 @@
 {#if loading}
   <div style="display:grid; place-items:center; height:70vh;">
     <LoadingIndicator />
+    <div style="margin-top:0.75rem;">
+      <Button variant="text" onclick={copyDiagnostics}>{copiedDiagOk ? 'Copied!' : 'Copy diagnostics'}</Button>
+    </div>
   </div>
 {:else}
   {#if apiErrorStatus === 403}

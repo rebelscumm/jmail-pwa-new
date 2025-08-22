@@ -89,16 +89,45 @@ export async function initAuth(clientId: string) {
   }
 }
 
+// Utility to add timeouts to async flows that can stall in some browsers/ad-blockers
+function withTimeout<T>(promise: Promise<T>, ms: number, label = 'timeout'): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const id = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error(`Operation ${label} exceeded ${ms}ms`));
+    }, ms);
+    promise
+      .then((v) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(id);
+        resolve(v);
+      })
+      .catch((e) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(id);
+        reject(e);
+      });
+  });
+}
+
 export async function acquireTokenInteractive(): Promise<void> {
   if (!tokenClient) throw new Error('Auth not initialized');
-  const token = await new Promise<TokenResponse>((resolve, reject) => {
-    tokenClient!.callback = (res) => {
-      if ('error' in res) reject(new Error(res.error as string));
-      else resolve(res as unknown as TokenResponse);
-    };
-    // Use select_account to avoid forcing re-consent; GIS will still prompt if needed
-    tokenClient!.requestAccessToken({ prompt: 'select_account' });
-  });
+  const token = await withTimeout(
+    new Promise<TokenResponse>((resolve, reject) => {
+      tokenClient!.callback = (res) => {
+        if ('error' in res) reject(new Error(res.error as string));
+        else resolve(res as unknown as TokenResponse);
+      };
+      // Use select_account to avoid forcing re-consent; GIS will still prompt if needed
+      tokenClient!.requestAccessToken({ prompt: 'select_account' });
+    }),
+    30000,
+    'interactive_token'
+  );
   const now = Date.now();
   const expiryMs = now + (token.expires_in - 60) * 1000; // safety margin
   authState.update((s) => ({ ...s, accessToken: token.access_token, expiryMs }));
@@ -116,14 +145,18 @@ export async function acquireTokenInteractive(): Promise<void> {
 // Request additional scopes (e.g., to upgrade from metadata-only to readonly/modify)
 export async function acquireTokenForScopes(scopes: string, prompt: 'none' | 'consent' | 'select_account' = 'consent'): Promise<boolean> {
   if (!tokenClient) throw new Error('Auth not initialized');
-  const token = await new Promise<TokenResponse>((resolve, reject) => {
-    tokenClient!.callback = (res) => {
-      if ('error' in res) reject(new Error(res.error as string));
-      else resolve(res as unknown as TokenResponse);
-    };
-    // @ts-expect-error: scope is allowed on OverridableTokenClientConfig
-    tokenClient!.requestAccessToken({ scope: scopes, prompt });
-  }).catch(() => null);
+  const token = await withTimeout(
+    new Promise<TokenResponse>((resolve, reject) => {
+      tokenClient!.callback = (res) => {
+        if ('error' in res) reject(new Error(res.error as string));
+        else resolve(res as unknown as TokenResponse);
+      };
+      // @ts-expect-error: scope is allowed on OverridableTokenClientConfig
+      tokenClient!.requestAccessToken({ scope: scopes, prompt });
+    }),
+    15000,
+    'scope_upgrade'
+  ).catch(() => null);
   if (!token) return false;
   const now = Date.now();
   const expiryMs = now + (token.expires_in - 60) * 1000;
@@ -141,15 +174,19 @@ export async function ensureValidToken(): Promise<string> {
   const state = getAuthState();
   if (state.accessToken && state.expiryMs && state.expiryMs > Date.now()) return state.accessToken;
   if (!tokenClient) throw new Error('Auth not initialized');
-  const token = await new Promise<TokenResponse>((resolve, reject) => {
-    tokenClient!.callback = (res) => {
-      if ('error' in res) reject(new Error(res.error as string));
-      else resolve(res as unknown as TokenResponse);
-    };
-    // Try silent token acquisition; avoids popups on refresh. If it fails,
-    // callers should handle by prompting interactively.
-    tokenClient!.requestAccessToken({ prompt: 'none' });
-  });
+  const token = await withTimeout(
+    new Promise<TokenResponse>((resolve, reject) => {
+      tokenClient!.callback = (res) => {
+        if ('error' in res) reject(new Error(res.error as string));
+        else resolve(res as unknown as TokenResponse);
+      };
+      // Try silent token acquisition; avoids popups on refresh. If it fails,
+      // callers should handle by prompting interactively.
+      tokenClient!.requestAccessToken({ prompt: 'none' });
+    }),
+    8000,
+    'silent_token'
+  );
   const now = Date.now();
   const expiryMs = now + (token.expires_in - 60) * 1000;
   authState.update((s) => ({ ...s, accessToken: token.access_token, expiryMs }));
