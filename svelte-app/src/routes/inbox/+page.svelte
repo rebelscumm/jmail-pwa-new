@@ -10,6 +10,11 @@
   import Button from '$lib/buttons/Button.svelte';
   import Card from '$lib/containers/Card.svelte';
   import LoadingIndicator from '$lib/forms/LoadingIndicator.svelte';
+  import Chip from '$lib/forms/Chip.svelte';
+  import { snoozeByThread } from '$lib/stores/snooze';
+  import iconInbox from '@ktibow/iconset-material-symbols/inbox';
+  import iconMarkEmailUnread from '@ktibow/iconset-material-symbols/mark-email-unread';
+  import iconSnooze from '@ktibow/iconset-material-symbols/snooze';
 
   let CLIENT_ID: string = (import.meta as any)?.env?.VITE_GOOGLE_CLIENT_ID as string;
 
@@ -35,7 +40,23 @@
         })
   );
   const totalThreadsCount = $derived($threadsStore?.length || 0);
+  const inboxCount = $derived(inboxThreads.length);
   const visibleThreadsCount = $derived(visibleThreads?.length || 0);
+  const unreadCount = $derived(inboxThreads.filter((t) => (t.labelIds || []).includes('UNREAD')).length);
+  const soonSnoozedCount = $derived(() => {
+    try {
+      const now = Date.now();
+      const cutoff = now + 24 * 60 * 60 * 1000;
+      const map = $snoozeByThread || {};
+      let count = 0;
+      for (const info of Object.values(map)) {
+        if (info && typeof info.dueAtUtc === 'number' && info.dueAtUtc <= cutoff) count++;
+      }
+      return count;
+    } catch {
+      return 0;
+    }
+  });
   $effect(() => {
     // Log UI-level diagnostics in dev builds only
     try {
@@ -318,7 +339,10 @@
 
   <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.5rem; gap:0.5rem;">
     <h3 class="m3-font-title-medium" style="margin:0">Inbox</h3>
-    <div style="display:flex; gap:0.5rem; align-items:center;">
+    <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+      <Chip variant="general" icon={iconInbox} disabled>{inboxCount}</Chip>
+      <Chip variant="general" icon={iconMarkEmailUnread} disabled>{unreadCount}</Chip>
+      <Chip variant="general" icon={iconSnooze} disabled>{soonSnoozedCount}</Chip>
       <Button variant="text" onclick={copyDiagnostics}>{copiedDiagOk ? 'Copied!' : 'Copy diagnostics'}</Button>
       <Button variant="outlined" disabled={!nextPageToken || syncing} onclick={loadMore}>
         {#if syncing}
