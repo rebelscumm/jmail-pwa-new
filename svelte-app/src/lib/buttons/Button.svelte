@@ -177,10 +177,6 @@
       }
       &.text {
         color: rgb(var(--m3-scheme-error));
-        /* Keep text buttons transparent for error color (no pink state layer) */
-        > :global(.tint) {
-          opacity: 0 !important;
-        }
       }
       &.elevated {
         background-color: rgb(var(--m3-scheme-surface-container-low));

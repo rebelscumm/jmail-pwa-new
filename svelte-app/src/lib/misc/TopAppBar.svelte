@@ -85,6 +85,22 @@
     window.addEventListener('click', handleWindowClick);
     return () => window.removeEventListener('click', handleWindowClick);
   });
+
+  function formatLastSync(ts?: number): string {
+    if (!ts) return '';
+    try {
+      const diff = Date.now() - ts;
+      const mins = Math.floor(diff / 60000);
+      if (mins < 1) return 'just now';
+      if (mins < 60) return `${mins}m ago`;
+      const hours = Math.floor(mins / 60);
+      if (hours < 24) return `${hours}h ago`;
+      const days = Math.floor(hours / 24);
+      return `${days}d ago`;
+    } catch {
+      return '';
+    }
+  }
 </script>
 
 <div class="topbar">
@@ -118,13 +134,29 @@
     <div class="search-field">
       <TextField label="Search" leadingIcon={iconSearch} bind:value={search} />
     </div>
-    <Chip variant="assist" elevated={$syncState.pendingOps > 0} title={$syncState.lastError ? `Error: ${$syncState.lastError} — click to copy diagnostics` : ''} onclick={onPendingChipClick}>
-      {$syncState.pendingOps ? `${$syncState.pendingOps} pending` : 'Synced'}
-    </Chip>
-    <Button variant="outlined" iconType="left" onclick={doSync} aria-label="Sync now">
-      <Icon icon={iconSync} />
-      Sync now
-    </Button>
+    <SplitButton variant="outlined" x="inner" y="down" onclick={doSync}>
+      {#snippet children()}
+        <Icon icon={iconSync} />
+        <span class="label">
+          {#if $syncState.pendingOps > 0}
+            {$syncState.pendingOps} pending
+          {:else}
+            Synced
+          {/if}
+        </span>
+        {#if !$syncState.pendingOps}
+          <span class="last-sync m3-font-label-small">• {formatLastSync($syncState.lastUpdatedAt)}</span>
+        {/if}
+      {/snippet}
+      {#snippet menu()}
+        <Menu>
+          <MenuItem onclick={doSync}>Sync now</MenuItem>
+          {#if $syncState.lastError}
+            <MenuItem onclick={onPendingChipClick}>Copy diagnostics</MenuItem>
+          {/if}
+        </Menu>
+      {/snippet}
+    </SplitButton>
     <details class="overflow" bind:this={overflowDetails}>
       <summary aria-label="More actions" class="summary-btn" onclick={toggleOverflow}>
         <Button variant="text" iconType="full" aria-label="More actions">
@@ -161,6 +193,7 @@
   .overflow > summary { list-style: none; }
   .summary-btn { cursor: pointer; }
   .overflow[open] > :global(.m3-container) { position:absolute; right:0; margin-top:0.25rem; }
+  .last-sync { color: rgb(var(--m3-scheme-on-surface-variant)); margin-inline-start: 0.25rem; }
 </style>
 
 
