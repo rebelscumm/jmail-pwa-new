@@ -15,6 +15,7 @@
     overline?: string;
     headline?: string;
     supporting?: string;
+    supportingSnippet?: Snippet;
     trailing?: Snippet;
     lines?: number;
     unread?: boolean;
@@ -31,6 +32,7 @@
   headline: string,
   supporting: string,
   trailing: Snippet | undefined,
+  supportingSnippet: Snippet | undefined,
 )}
   {#if leading}
     <div class="leading">
@@ -42,7 +44,9 @@
       <p class="overline m3-font-label-small">{overline}</p>
     {/if}
     <p class="headline m3-font-body-large">{headline}</p>
-    {#if supporting}
+    {#if supportingSnippet}
+      <div class="supporting m3-font-body-medium">{@render supportingSnippet()}</div>
+    {:else if supporting}
       <p class="supporting m3-font-body-medium">{supporting}</p>
     {/if}
   </div>
@@ -59,6 +63,7 @@
     overline = "",
     headline = "",
     supporting = "",
+    supportingSnippet,
     trailing,
     unread = false,
     label: _,
@@ -66,24 +71,24 @@
   } = props}
   <label class="m3-container lines-{_lines}" class:unread={unread} {...extra}>
     <Layer />
-    {@render content(leading, overline, headline, supporting, trailing)}
+    {@render content(leading, overline, headline, supporting, trailing, supportingSnippet)}
   </label>
 {:else if "onclick" in props}
-  {@const { leading, overline = "", headline = "", supporting = "", trailing, unread = false, ...extra } = props}
+  {@const { leading, overline = "", headline = "", supporting = "", supportingSnippet, trailing, unread = false, ...extra } = props}
   <button type="button" class="m3-container lines-{_lines}" class:unread={unread} {...extra}>
     <Layer />
-    {@render content(leading, overline, headline, supporting, trailing)}
+    {@render content(leading, overline, headline, supporting, trailing, supportingSnippet)}
   </button>
 {:else if "href" in props}
-  {@const { leading, overline = "", headline = "", supporting = "", trailing, unread = false, ...extra } = props}
+  {@const { leading, overline = "", headline = "", supporting = "", supportingSnippet, trailing, unread = false, ...extra } = props}
   <a class="m3-container lines-{_lines}" class:unread={unread} {...extra}>
     <Layer />
-    {@render content(leading, overline, headline, supporting, trailing)}
+    {@render content(leading, overline, headline, supporting, trailing, supportingSnippet)}
   </a>
 {:else}
-  {@const { leading, overline = "", headline = "", supporting = "", trailing, unread = false, ...extra } = props}
+  {@const { leading, overline = "", headline = "", supporting = "", supportingSnippet, trailing, unread = false, ...extra } = props}
   <div class="m3-container lines-{_lines}" class:unread={unread} {...extra}>
-    {@render content(leading, overline, headline, supporting, trailing)}
+    {@render content(leading, overline, headline, supporting, trailing, supportingSnippet)}
   </div>
 {/if}
 
@@ -153,5 +158,15 @@
   .overline {
     overflow-wrap: anywhere;
     word-break: break-word;
+  }
+  .supporting :global(.badge) {
+    display: inline-block;
+    margin-left: 0.375rem;
+    padding: 0.125rem 0.375rem;
+    border-radius: var(--m3-util-rounding-extra-small);
+    background: rgb(var(--m3-scheme-secondary-container));
+    color: rgb(var(--m3-scheme-on-secondary-container));
+    vertical-align: middle;
+    white-space: nowrap;
   }
 </style>
