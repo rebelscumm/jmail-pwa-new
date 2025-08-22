@@ -2,7 +2,7 @@
   import type { Snippet } from 'svelte';
   import { get } from 'svelte/store';
   import { settings } from '$lib/stores/settings';
-  import { resolveRule } from '$lib/snooze/rules';
+  import { resolveRule, normalizeRuleKey } from '$lib/snooze/rules';
   import Chip from '$lib/forms/Chip.svelte';
 
   export let onSelect: (ruleKey: string) => void;
@@ -32,7 +32,7 @@
   const weekdaysAll = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
   const timesAll = ['6am','2pm','7pm'];
 
-  $: mapped = new Set(Object.keys($settings.labelMapping || {}).filter((k) => $settings.labelMapping[k]));
+  $: mapped = new Set(Object.keys($settings.labelMapping || {}).filter((k) => $settings.labelMapping[k]).map((k) => normalizeRuleKey(k)));
   function onlyMapped(list: string[]): string[] { return list.filter((k) => mapped.has(k)); }
   $: quick = onlyMapped(quickAll);
   $: hours = onlyMapped(hoursAll);
