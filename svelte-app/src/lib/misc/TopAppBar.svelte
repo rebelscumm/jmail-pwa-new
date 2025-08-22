@@ -167,29 +167,19 @@
     <div class="search-field">
       <TextField label="Search" leadingIcon={iconSearch} bind:value={search} />
     </div>
-    <SplitButton variant="outlined" x="inner" y="down" onclick={doSync}>
+    <Button variant="outlined" iconType="left" onclick={doSync}>
       {#snippet children()}
         <Icon icon={iconSync} />
         <span class="label">
           {#if $syncState.pendingOps > 0}
             {$syncState.pendingOps} pending
-          {:else}
-            Synced
           {/if}
         </span>
         {#if !$syncState.pendingOps}
-          <span class="last-sync m3-font-label-small">• {formatLastSync($syncState.lastUpdatedAt)}</span>
+          <span class="last-sync m3-font-label-small">{formatLastSync($syncState.lastUpdatedAt)}</span>
         {/if}
       {/snippet}
-      {#snippet menu()}
-        <Menu>
-          <MenuItem onclick={doSync}>Sync now</MenuItem>
-          {#if $syncState.lastError}
-            <MenuItem onclick={onPendingChipClick}>Copy diagnostics</MenuItem>
-          {/if}
-        </Menu>
-      {/snippet}
-    </SplitButton>
+    </Button>
     <details class="overflow" bind:this={overflowDetails}>
       <summary aria-label="More actions" class="summary-btn" onclick={toggleOverflow}>
         <Button variant="text" iconType="full" aria-label="More actions">
