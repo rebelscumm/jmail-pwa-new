@@ -223,14 +223,7 @@
   </div>
   <div class="fg" style={`transform: translateX(${dx}px); transition: ${animating ? 'transform 180ms var(--m3-util-easing-fast)' : 'none'};`} in:fade={{ duration: 120 }} out:fade={{ duration: 180 }}>
     <ListItem
-      headline={() => {
-        const subject = thread.lastMsgMeta.subject || '(no subject)';
-        const from = thread.lastMsgMeta.from || '';
-        const dateStr = thread.lastMsgMeta?.date ? formatDateTime(thread.lastMsgMeta.date) : '';
-        const fromPart = from ? ` — ${from}` : '';
-        const datePart = dateStr ? ` • ${dateStr}` : '';
-        return `${subject}${fromPart}${datePart}`;
-      }}
+      headline={`${(thread.lastMsgMeta.subject || '(no subject)')}${(thread.lastMsgMeta.from ? ' — ' + thread.lastMsgMeta.from : '')}${(thread.lastMsgMeta?.date ? ' • ' + formatDateTime(thread.lastMsgMeta.date) : '')}`}
       supporting={''}
       lines={3}
       unread={(thread.labelIds || []).includes('UNREAD')}
