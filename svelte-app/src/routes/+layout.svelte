@@ -193,6 +193,9 @@
       snackbar.show({ message: `Failed to queue: ${e instanceof Error ? e.message : e}`, closable: true });
     }
   }
+
+  const isViewer = $derived(/\/viewer\//.test(page.url.pathname));
+  const backHref = $derived(isViewer ? (base || '') + '/inbox' : undefined);
 </script>
 
 <svelte:head>
@@ -222,7 +225,7 @@
   {/if}
   <div class="content">
     {#if normalizePath(base || "/") !== normalizePath(page.url.pathname)}
-      <TopAppBar onSyncNow={() => refreshSyncState()} />
+      <TopAppBar onSyncNow={() => refreshSyncState()} {backHref} backLabel="Back to inbox" />
       <div id="offline-banner" class="offline" class:visible={isOffline}>You are offline. Actions will be queued.</div>
     {/if}
     {@render children()}
