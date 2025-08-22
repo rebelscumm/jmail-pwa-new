@@ -178,7 +178,7 @@
   </div>
   <div class="right">
     <div class="search-field">
-      <TextField label="Search" leadingIcon={iconSearch} bind:value={search} />
+      <TextField label="Search" leadingIcon={iconSearch} bind:value={search} enter={() => { import('$lib/stores/search').then(m => m.searchQuery.set(search)); }} trailing={{ icon: iconSearch, onclick: () => { import('$lib/stores/search').then(m => m.searchQuery.set(search)); } }} />
     </div>
     <Button variant="outlined" iconType="left" onclick={doSync}>
       {#snippet children()}
