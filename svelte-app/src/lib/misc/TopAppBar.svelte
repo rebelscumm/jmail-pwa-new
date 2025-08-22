@@ -72,6 +72,19 @@
       showSnackbar({ message: ok ? 'Diagnostics copied' : 'Failed to copy diagnostics', closable: true });
     }
   }
+
+  // Close overflow menu when clicking outside of it
+  $effect(() => {
+    function handleWindowClick(e: MouseEvent) {
+      const d = overflowDetails;
+      if (!d || !d.open) return;
+      const target = e.target as Node | null;
+      if (target && (d === target || d.contains(target))) return;
+      d.open = false;
+    }
+    window.addEventListener('click', handleWindowClick);
+    return () => window.removeEventListener('click', handleWindowClick);
+  });
 </script>
 
 <div class="topbar">
