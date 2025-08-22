@@ -22,7 +22,7 @@ function pushDiag(entry: Record<string, unknown>) {
     const payload = { time: new Date().toISOString(), ...entry };
     __gmailDiagnostics.push(payload);
     // Also emit to console for immediate visibility in dev only
-    if (import.meta.env && import.meta.env.DEV) {
+    if (import.meta.env.DEV) {
       // eslint-disable-next-line no-console
       console.debug('[GmailAPI]', payload);
     }

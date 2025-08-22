@@ -231,7 +231,7 @@ export function getAuthDiagnostics(): Record<string, unknown> {
 // Try to resolve Google Client ID from multiple sources to ease configuration in static hosts
 export function resolveGoogleClientId(): string | undefined {
   try {
-    const envId = (import.meta as any)?.env?.VITE_GOOGLE_CLIENT_ID as string | undefined;
+    const envId = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
     if (envId && envId.trim()) return envId.trim();
   } catch (_) {}
   try {

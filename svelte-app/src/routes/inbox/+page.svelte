@@ -17,7 +17,7 @@
   import iconSnooze from '@ktibow/iconset-material-symbols/snooze';
   import { getLabel } from '$lib/gmail/api';
 
-  let CLIENT_ID: string = (import.meta as any)?.env?.VITE_GOOGLE_CLIENT_ID as string;
+  let CLIENT_ID: string = import.meta.env.VITE_GOOGLE_CLIENT_ID as string;
 
   let loading = $state(true);
   let ready = $state(false);
@@ -376,9 +376,9 @@
   <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.5rem; gap:0.5rem;">
     <h3 class="m3-font-title-medium" style="margin:0">Inbox</h3>
     <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
-      <Chip variant="general" icon={iconInbox} disabled title="Inbox threads">{inboxCount}</Chip>
-      <Chip variant="general" icon={iconMarkEmailUnread} disabled title="Unread threads">{unreadCount}</Chip>
-      <Chip variant="general" icon={iconSnooze} disabled title="Snoozed due in 24h">{soonSnoozedCount}</Chip>
+      <Chip variant="general" icon={iconInbox} disabled title="Inbox threads" onclick={() => {}}>{inboxCount}</Chip>
+      <Chip variant="general" icon={iconMarkEmailUnread} disabled title="Unread threads" onclick={() => {}}>{unreadCount}</Chip>
+      <Chip variant="general" icon={iconSnooze} disabled title="Snoozed due in 24h" onclick={() => {}}>{soonSnoozedCount}</Chip>
       <Button variant="text" onclick={copyDiagnostics}>{copiedDiagOk ? 'Copied!' : 'Copy diagnostics'}</Button>
       <Button variant="outlined" disabled={!nextPageToken || syncing} onclick={loadMore}>
         {#if syncing}

@@ -8,7 +8,7 @@
   import { copyGmailDiagnosticsToClipboard } from '$lib/gmail/api';
   
 
-  let CLIENT_ID = (import.meta as any)?.env?.VITE_GOOGLE_CLIENT_ID as string;
+  let CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID as string;
   let loading = $state(true);
   let ready = $state(false);
   let hasAccount = $state(false);
