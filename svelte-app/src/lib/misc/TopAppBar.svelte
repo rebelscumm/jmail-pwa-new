@@ -36,8 +36,16 @@
   }
   async function doSync() {
     try {
+      showSnackbar({ message: 'Syncing…' });
+    } catch {}
+    try {
       const { syncNow } = await import('$lib/stores/queue');
       await syncNow();
+    } catch {}
+    try {
+      // Ask pages (e.g., inbox) to re-hydrate from server
+      window.dispatchEvent(new CustomEvent('jmail:refresh'));
+      showSnackbar({ message: 'Sync complete', timeout: 2500 });
     } catch {}
     onSyncNow && onSyncNow();
   }
