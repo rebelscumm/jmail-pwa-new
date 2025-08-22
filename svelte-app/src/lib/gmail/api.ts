@@ -338,6 +338,55 @@ export async function getLabel(labelId: string): Promise<GmailLabel & { id: stri
   return data as GmailLabel & { id: string };
 }
 
+export async function getThreadSummary(threadId: string): Promise<{ thread: import('$lib/types').GmailThread; messages: import('$lib/types').GmailMessage[] }> {
+  type ThreadResponse = {
+    id: string;
+    messages?: Array<{
+      id: string;
+      threadId: string;
+      snippet?: string;
+      internalDate?: string | number;
+      labelIds?: string[];
+      payload?: { headers?: { name: string; value: string }[] };
+    }>;
+  };
+  // Use Gmail threads.get which returns the entire thread with message metadata
+  const data = await api<ThreadResponse>(`/threads/${encodeURIComponent(threadId)}`);
+  const msgsRaw = data?.messages || [];
+  if (!msgsRaw.length) throw new GmailApiError('Thread not found or empty', 404);
+  const outMsgs: import('$lib/types').GmailMessage[] = msgsRaw.map((m) => {
+    const headers: Record<string, string> = {};
+    for (const h of m.payload?.headers || []) headers[h.name] = h.value;
+    return {
+      id: m.id,
+      threadId: m.threadId,
+      snippet: m.snippet,
+      headers,
+      labelIds: m.labelIds || [],
+      internalDate: m.internalDate ? Number(m.internalDate) : undefined
+    } satisfies import('$lib/types').GmailMessage;
+  });
+  // Build thread summary like inbox
+  const labelMap: Record<string, true> = {};
+  const last: { from?: string; subject?: string; date?: number } = {};
+  for (const m of outMsgs) {
+    for (const lid of m.labelIds || []) labelMap[lid] = true;
+    const date = m.internalDate || Date.parse(m.headers?.Date || '');
+    if (!last.date || (date && date > last.date)) {
+      last.from = m.headers?.From;
+      last.subject = m.headers?.Subject;
+      last.date = date;
+    }
+  }
+  const thread: import('$lib/types').GmailThread = {
+    threadId,
+    messageIds: outMsgs.map((m) => m.id),
+    lastMsgMeta: last,
+    labelIds: Object.keys(labelMap)
+  };
+  return { thread, messages: outMsgs };
+}
+
 function summarizeListData(data: unknown) {
   try {
     const d: any = data || {};
