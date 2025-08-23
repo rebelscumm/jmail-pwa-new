@@ -101,6 +101,11 @@
     }
   }
 
+  /* Allow dropdowns to overflow the split button when open */
+  .m3-container:has(details[open]) {
+    overflow: visible;
+  }
+
   .split {
     display: flex;
     align-items: center;
