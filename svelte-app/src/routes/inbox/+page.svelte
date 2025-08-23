@@ -24,6 +24,9 @@
   import { trailingHolds } from '$lib/stores/holds';
   import Menu from '$lib/containers/Menu.svelte';
   import MenuItem from '$lib/containers/MenuItem.svelte';
+  import { searchQuery } from '$lib/stores/search';
+  import FilterBar from '$lib/utils/FilterBar.svelte';
+  import { filters as filtersStore, applyFilterToThreads, loadFilters } from '$lib/stores/filters';
 
   type InboxSort = NonNullable<import('$lib/stores/settings').AppSettings['inboxSort']>;
   const sortOptions: { key: InboxSort; label: string }[] = [
@@ -44,7 +47,6 @@
   let nextPageToken: string | undefined = $state();
   let syncing = $state(false);
   let copiedDiagOk = $state(false);
-  import { searchQuery } from '$lib/stores/search';
   let debouncedQuery = $state('');
   $effect(() => { const id = setTimeout(() => debouncedQuery = $searchQuery, 300); return () => clearTimeout(id); });
   let now = $state(Date.now());
@@ -109,6 +111,7 @@
           return subj.includes(q) || from.includes(q);
         })
   );
+  const filteredThreads = $derived(applyFilterToThreads(visibleThreads, $messagesStore || {}, $filtersStore.active));
   function cmp(a: string, b: string): number { return a.localeCompare(b); }
   function num(n: unknown): number { return typeof n === 'number' && !Number.isNaN(n) ? n : 0; }
   function getSender(a: import('$lib/types').GmailThread): string {
@@ -121,7 +124,7 @@
   function isUnread(a: import('$lib/types').GmailThread): boolean { return (a.labelIds || []).includes('UNREAD'); }
   const currentSort: InboxSort = $derived(($settings.inboxSort || 'date_desc') as InboxSort);
   const sortedVisibleThreads = $derived((() => {
-    const arr = [...visibleThreads];
+    const arr = [...filteredThreads];
     switch (currentSort) {
       case 'date_asc':
         arr.sort((a, b) => getDate(a) - getDate(b));
@@ -173,7 +176,7 @@
   // Selection state keyed by threadId
   let selectedMap = $state<Record<string, true>>({});
   const selectedCount = $derived(Object.keys(selectedMap).length);
-  const allVisibleSelected = $derived(visibleThreads.length > 0 && visibleThreads.every(t => selectedMap[t.threadId]));
+  const allVisibleSelected = $derived(filteredThreads.length > 0 && filteredThreads.every(t => selectedMap[t.threadId]));
   function toggleSelectThread(threadId: string, next: boolean) {
     if (next) selectedMap = { ...selectedMap, [threadId]: true };
     else { const { [threadId]: _, ...rest } = selectedMap; selectedMap = rest; }
@@ -181,7 +184,7 @@
   function selectAllVisible(next: boolean) {
     if (next) {
       const map: Record<string, true> = {};
-      for (const t of visibleThreads) map[t.threadId] = true;
+      for (const t of filteredThreads) map[t.threadId] = true;
       selectedMap = map;
     } else {
       selectedMap = {};
@@ -239,7 +242,7 @@
   const totalThreadsCount = $derived($threadsStore?.length || 0);
   let inboxLabelStats = $state<{ messagesTotal?: number; messagesUnread?: number; threadsTotal?: number; threadsUnread?: number } | null>(null);
   const inboxCount = $derived(inboxLabelStats?.threadsTotal ?? inboxThreads.length);
-  const visibleThreadsCount = $derived(visibleThreads?.length || 0);
+  const visibleThreadsCount = $derived(filteredThreads?.length || 0);
   const unreadCount = $derived(inboxLabelStats?.threadsUnread ?? inboxThreads.filter((t) => (t.labelIds || []).includes('UNREAD')).length);
   const soonSnoozedCount = $derived(
     (() => {
@@ -314,6 +317,7 @@
         // Load settings first for snooze defaults
         const { loadSettings } = await import('$lib/stores/settings');
         await loadSettings();
+        await loadFilters();
         hadCache = await hydrateFromCache();
         if (hadCache) loading = false;
         navigator.serviceWorker?.addEventListener('message', (e: MessageEvent) => {
@@ -486,6 +490,23 @@
     const msgDict: Record<string, import('$lib/types').GmailMessage> = { ...$messagesStore };
     for (const m of msgs) msgDict[m.id] = m;
     messagesStore.set(msgDict);
+
+    // Proactive auto-apply: apply saved filters with autoApply to new items
+    try {
+      const autoFilters = ($filtersStore.saved || []).filter((f) => f.autoApply && (f.action === 'archive' || f.action === 'delete'));
+      if (autoFilters.length) {
+        for (const t of threadList) {
+          for (const f of autoFilters) {
+            const matches = (await import('$lib/stores/filters')).threadMatchesFilter(t as any, msgDict, f);
+            if (matches) {
+              if (f.action === 'archive') await archiveThread(t.threadId, { optimisticLocal: true });
+              else if (f.action === 'delete') await trashThread(t.threadId, { optimisticLocal: true });
+              break;
+            }
+          }
+        }
+      }
+    } catch (_) {}
   }
 
   async function loadMore() {
@@ -531,6 +552,23 @@
       const msgDict: Record<string, import('$lib/types').GmailMessage> = { ...$messagesStore };
       for (const m of msgs) msgDict[m.id] = m;
       messagesStore.set(msgDict);
+
+      // Proactive auto-apply for loaded page
+      try {
+        const autoFilters = ($filtersStore.saved || []).filter((f) => f.autoApply && (f.action === 'archive' || f.action === 'delete'));
+        if (autoFilters.length) {
+          for (const t of threadList) {
+            for (const f of autoFilters) {
+              const matches = (await import('$lib/stores/filters')).threadMatchesFilter(t as any, msgDict, f);
+              if (matches) {
+                if (f.action === 'archive') await archiveThread(t.threadId, { optimisticLocal: true });
+                else if (f.action === 'delete') await trashThread(t.threadId, { optimisticLocal: true });
+                break;
+              }
+            }
+          }
+        }
+      } catch (_) {}
     } catch (e) {
       setApiError(e);
     } finally {
@@ -592,6 +630,21 @@
   const can10m = $derived(Object.keys($settings.labelMapping || {}).some((k)=>k==='10m' && $settings.labelMapping[k]));
   const can3h = $derived(Object.keys($settings.labelMapping || {}).some((k)=>k==='3h' && $settings.labelMapping[k]));
   const can1d = $derived(Object.keys($settings.labelMapping || {}).some((k)=>k==='1d' && $settings.labelMapping[k]));
+
+  async function bulkApplyActiveFilterAction() {
+    const f = $filtersStore.active;
+    if (!f || !f.action || f.action === 'none') return;
+    const targetIds = filteredThreads.map((t) => t.threadId);
+    if (!targetIds.length) return;
+    if (f.action === 'delete' && $settings.confirmDelete) {
+      if (!confirm(`Delete ${targetIds.length} conversation(s)?`)) return;
+    }
+    for (const id of targetIds) {
+      if (f.action === 'archive') await archiveThread(id, { optimisticLocal: false });
+      else if (f.action === 'delete') await trashThread(id, { optimisticLocal: false });
+    }
+    showSnackbar({ message: `${f.action === 'archive' ? 'Archived' : 'Deleted'} ${targetIds.length}`, actions: { Undo: () => undoLast(targetIds.length) } });
+  }
 </script>
 
 {#if loading}
@@ -650,6 +703,14 @@
         {/if}
       </Button>
     </div>
+  </div>
+
+  <FilterBar />
+
+  <div style="display:flex; justify-content:flex-end; margin: 0 0 0.5rem;">
+    <Button variant="outlined" disabled={!$filtersStore.active || !$filtersStore.active.action || $filtersStore.active.action === 'none' || filteredThreads.length === 0} onclick={bulkApplyActiveFilterAction}>
+      Apply action to filtered ({filteredThreads.length})
+    </Button>
   </div>
 
   {#if selectedCount > 0}
