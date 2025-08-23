@@ -5,11 +5,11 @@
   import { resolveRule, normalizeRuleKey } from '$lib/snooze/rules';
   import Chip from '$lib/forms/Chip.svelte';
 
-  export let onSelect: (ruleKey: string) => void;
+  const { onSelect } = $props<{ onSelect: (ruleKey: string) => void }>();
 
-  let activeTab: 'Quick' | 'Hours' | 'Days' | 'Weekdays' | 'Times' | 'Custom' = 'Quick';
-  let preview: string = '';
-  let selectedRule: string | null = null;
+  let activeTab = $state<'Quick' | 'Hours' | 'Days' | 'Weekdays' | 'Times' | 'Custom'>('Quick');
+  let preview = $state<string>('');
+  let selectedRule = $state<string | null>(null);
 
   function computePreview(ruleKey: string) {
     selectedRule = ruleKey;
@@ -34,7 +34,7 @@
     '7d': '7d', '14d': '14d', '30d': '30d'
   };
   const orderedLabels: string[] = ['1h','2h','3h','2p','6a','7p','2d','4d','Mon','Fri','7d','14d','30d'];
-  $: mapped = new Set(Object.keys($settings.labelMapping || {}).filter((k) => $settings.labelMapping[k]).map((k) => normalizeRuleKey(k)));
+  const mapped = $derived(new Set(Object.keys($settings.labelMapping || {}).filter((k) => $settings.labelMapping[k]).map((k) => normalizeRuleKey(k))));
   function isMappedDisplay(label: string): boolean {
     try { return mapped.has(normalizeRuleKey(displayToRule[label])); } catch { return false; }
   }

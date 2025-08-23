@@ -135,7 +135,7 @@
 {#if labelOptions.length > 1}
   <label>
     Label:
-    <select bind:value={activeLabelId} on:change={(e)=>{ const id=(e.currentTarget as HTMLSelectElement).value; threadsStore.set([]); messagesStore.set({}); hydrate(id); }}>
+    <select bind:value={activeLabelId} onchange={(e)=>{ const id=(e.currentTarget as HTMLSelectElement).value; threadsStore.set([]); messagesStore.set({}); hydrate(id); }}>
       {#each labelOptions as opt}
         <option value={opt.id}>{opt.name}</option>
       {/each}
