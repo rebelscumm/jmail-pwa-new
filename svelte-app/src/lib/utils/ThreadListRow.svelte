@@ -296,7 +296,9 @@
 {/snippet}
 
 {#snippet trailingWithDate()}
-  {@render trailing()}
+  {#if !residualActive}
+    {@render trailing()}
+  {/if}
 {/snippet}
 
 {#snippet selectionLeading()}
@@ -311,16 +313,18 @@
      onpointermove={onPointerMove}
      onpointerup={onPointerUp}
 >
-  <div class="bg" aria-hidden="true" style={`pointer-events:none`}>
-    {#if dx > 0}
-    <div class="left">
-      {dx > 40 ? 'Archive' : ''}
+  {#if !residualActive}
+    <div class="bg" aria-hidden="true" style={`pointer-events:none`}>
+      {#if dx > 0}
+      <div class="left">
+        {dx > 40 ? 'Archive' : ''}
+      </div>
+      {/if}
+      {#if dx < 0}
+      <div class="right">{dx < -40 ? '1h' : ''}</div>
+      {/if}
     </div>
-    {/if}
-    {#if dx < 0}
-    <div class="right">{dx < -40 ? '1h' : ''}</div>
-    {/if}
-  </div>
+  {/if}
   {#if residualActive}
     <div class="residual {residualDirection === 'right' ? 'left' : 'right'}">
       <div class="pending-wrap">
