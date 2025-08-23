@@ -9,6 +9,9 @@ export type ThreadFilter = {
   senderIncludes?: string; // case-insensitive substring
   labelIds?: string[]; // any of these labels present
   unreadOnly?: boolean;
+  // Behavior
+  action?: 'none' | 'archive' | 'delete';
+  autoApply?: boolean; // proactively apply to new items
 };
 
 export type FiltersState = {
@@ -93,3 +96,12 @@ export function applyFilterToThreads(threads: import('$lib/types').GmailThread[]
   });
 }
 
+<<<<<<< Current (Your changes)
+=======
+export function threadMatchesFilter(thread: import('$lib/types').GmailThread, messagesById: Record<string, import('$lib/types').GmailMessage>, f: ThreadFilter | null): boolean {
+  if (!f) return false;
+  const list = applyFilterToThreads([thread], messagesById, f);
+  return list.length > 0;
+}
+
+>>>>>>> Incoming (Background Agent changes)
