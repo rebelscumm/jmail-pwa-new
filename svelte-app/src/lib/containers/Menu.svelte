@@ -12,17 +12,17 @@
   :root {
     --m3-menu-shape: var(--m3-util-rounding-extra-small);
   }
-  .m3-container {
-    display: flex;
-    position: relative;
-    overflow: hidden;
-    flex-direction: column;
-    padding: 0.5rem 0;
-    border-radius: var(--m3-menu-shape);
-    min-width: 7rem;
-    max-width: 17.5rem;
-    background-color: rgb(var(--m3-scheme-surface-container));
-    z-index: 2;
-    box-shadow: var(--m3-util-elevation-2);
-  }
+  	.m3-container {
+		display: flex;
+		position: relative;
+		overflow: hidden;
+		flex-direction: column;
+		padding: 0.5rem 0;
+		border-radius: var(--m3-menu-shape);
+		min-width: 7rem;
+		max-width: 17.5rem;
+		background-color: rgb(var(--m3-scheme-surface-container-highest));
+		z-index: 10001;
+		box-shadow: var(--m3-util-elevation-3);
+	}
 </style>

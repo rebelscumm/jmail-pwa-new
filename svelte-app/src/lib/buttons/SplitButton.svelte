@@ -179,13 +179,14 @@
       transition: rotate var(--m3-util-easing-fast);
     }
 
-  details > :global(:not(summary)) {
-    position: absolute !important;
-  }
-  details.align-inner > :global(:not(summary)) { left: 0; }
-  details.align-right > :global(:not(summary)) { right: 0; }
-  details.align-down > :global(:not(summary)) { top: 100%; }
-  details.align-up > :global(:not(summary)) { bottom: 100%; }
+  	details > :global(:not(summary)) {
+		position: absolute !important;
+		z-index: 10;
+	}
+	details.align-inner > :global(:not(summary)) { left: 0; }
+	details.align-right > :global(:not(summary)) { right: 0; }
+	details.align-down > :global(:not(summary)) { top: 100%; }
+	details.align-up > :global(:not(summary)) { bottom: 100%; }
 
   .m3-container {
     print-color-adjust: exact;
