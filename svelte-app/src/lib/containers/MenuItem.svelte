@@ -33,8 +33,8 @@
   .item {
     display: flex;
     align-items: center;
-    height: 2.75rem; /* MD3 menu item default height */
-    padding: 0 0.875rem; /* 14dp horizontal */
+    height: 3rem; /* slightly larger for easier touch */
+    padding: 0 1rem; /* a touch more breathing room */
     white-space: nowrap;
 
     border: none;
@@ -49,7 +49,7 @@
   .icon {
     width: 1.5rem;
     height: 1.5rem;
-    margin-right: 0.75rem;
+    margin-right: 0.875rem;
   }
   .icon > :global(svg) {
     width: 1.5rem;

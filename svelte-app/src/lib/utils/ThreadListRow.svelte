@@ -436,7 +436,7 @@
       <div class="snooze-buttons">
         <details class="menu-toggle" bind:this={snoozeDetails} use:autoclose ontoggle={(e) => { const isOpen = (e.currentTarget as HTMLDetailsElement).open; snoozeMenuOpen = isOpen; }}>
           <summary aria-label="Snooze menu" aria-haspopup="menu" aria-expanded={snoozeMenuOpen} onpointerdown={(e: PointerEvent) => e.stopPropagation()} onclick={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); const d = snoozeDetails || (e.currentTarget as HTMLElement).closest('details') as HTMLDetailsElement | null; if (d) d.open = !d.open; }}>
-            <Button variant="text" iconType="full" aria-label="Snooze menu">
+            <Button variant="text" iconType="full" aria-label="Snooze menu" class="expand-button">
               <Icon icon={iconExpand} />
             </Button>
           </summary>
@@ -541,27 +541,24 @@
     background: rgb(var(--m3-scheme-surface));
     min-width: 0;
   }
-  .actions { display:flex; flex-direction: row; flex-wrap: wrap; gap:0.25rem; align-items:center; justify-content:flex-end; min-width: 0; }
+  .actions { display:flex; flex-direction: row; flex-wrap: wrap; gap:0.5rem; align-items:center; justify-content:flex-end; min-width: 0; }
   /* Keep trailing actions vertically centered even on 3-line rows */
   .actions { align-self: center; }
   /* Make text buttons in trailing actions more compact to reduce visual gap */
-  .actions :global(.m3-container.text) {
-    padding-inline-start: 0.5rem;
-    padding-inline-end: 0.5rem;
-    height: 2.25rem;
-    min-width: 0;
-  }
+  .actions :global(.m3-container.text) { padding-inline: 0.625rem; height: 2.5rem; min-width: 0; }
   /* Allow line breaks inside button labels when space is tight */
   .actions :global(.m3-container.text span) { white-space: normal; }
   /* Ensure 30d and 1h actions can sit on the same line */
-  .snooze-wrap { display:inline-flex; align-items:center; gap: 0.25rem; flex: 0 0 auto; flex-wrap: nowrap; }
-  .snooze-menu :global(.m3-container) { padding: 0.5rem; max-width: 24rem; }
+  .snooze-wrap { display:inline-flex; align-items:center; gap: 0.5rem; flex: 0 0 auto; flex-wrap: nowrap; }
+  .snooze-menu :global(.m3-container) { padding: 0.75rem; max-width: 24rem; }
   /* Separate snooze and toggle button styles */
-  .snooze-buttons { display:inline-flex; align-items:center; position: relative; gap: 0.25rem; flex-wrap: nowrap; }
+  .snooze-buttons { display:inline-flex; align-items:center; position: relative; gap: 0.5rem; flex-wrap: nowrap; }
   .menu-toggle { position: relative; }
   .menu-toggle > :global(:not(summary)) { position: absolute !important; z-index: 10; right: 0; top: 100%; pointer-events: auto; }
   /* Reset native marker on summary for MD3 button inside */
   .menu-toggle > summary { list-style: none; }
+  /* Slightly larger tap target for expand */
+  .expand-button { min-width: 2.25rem; min-height: 2.25rem; }
   .leading-checkbox {
     display: inline-flex;
     align-items: center;
