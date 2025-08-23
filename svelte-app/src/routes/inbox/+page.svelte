@@ -39,6 +39,7 @@
   onMount(() => { const id = setInterval(() => { now = Date.now(); }, 250); return () => clearInterval(id); });
   // Temporarily lock interactions during coordinated collapses
   let listLocked = $state(false);
+  // Restore list lock handler
   onMount(() => {
     const handler = (ev: Event) => {
       try {
@@ -51,6 +52,36 @@
     window.addEventListener('jmail:listLock', handler as EventListener);
     return () => window.removeEventListener('jmail:listLock', handler as EventListener);
   });
+  // Lightweight remote change detection state
+  let lastRemoteCheckAtMs: number | null = $state(null);
+  let remoteCheckInFlight = $state(false);
+
+  async function maybeRemoteRefresh() {
+    if (remoteCheckInFlight) return;
+    const nowMs = Date.now();
+    const minIntervalMs = 60_000;
+    if (lastRemoteCheckAtMs && (nowMs - lastRemoteCheckAtMs) < minIntervalMs) return;
+    if (typeof document !== 'undefined' && (document as any).visibilityState === 'hidden') return;
+    if (typeof navigator !== 'undefined' && !navigator.onLine) return;
+    remoteCheckInFlight = true;
+    try {
+      const inboxLabel = await getLabel('INBOX');
+      const remoteThreadsTotal = inboxLabel.threadsTotal ?? 0;
+      const remoteThreadsUnread = inboxLabel.threadsUnread ?? 0;
+      const localThreadsTotal = inboxThreads.length;
+      const localThreadsUnread = inboxThreads.filter((t) => (t.labelIds || []).includes('UNREAD')).length;
+      const differs = remoteThreadsTotal !== localThreadsTotal || remoteThreadsUnread !== localThreadsUnread;
+      try { if (import.meta.env.DEV) console.debug('[InboxUI] remoteCheck', { remoteThreadsTotal, localThreadsTotal, remoteThreadsUnread, localThreadsUnread, differs }); } catch {}
+      if (differs) {
+        try { syncing = true; await hydrate(); } finally { syncing = false; }
+      }
+    } catch (_) {
+      // ignore transient errors
+    } finally {
+      lastRemoteCheckAtMs = nowMs;
+      remoteCheckInFlight = false;
+    }
+  }
   const inboxThreads = $derived(($threadsStore || []).filter((t) => {
     const inInbox = (t.labelIds || []).includes('INBOX');
     const held = (($trailingHolds || {})[t.threadId] || 0) > now;
@@ -213,7 +244,11 @@
         hadCache = await hydrateFromCache();
         if (hadCache) loading = false;
         navigator.serviceWorker?.addEventListener('message', (e: MessageEvent) => {
-          if ((e.data && e.data.type) === 'SYNC_TICK') void hydrateFromCache();
+          if ((e.data && e.data.type) === 'SYNC_TICK') {
+            try { if (import.meta.env.DEV) console.debug('[InboxUI] SYNC_TICK received'); } catch {}
+            void hydrateFromCache();
+            void maybeRemoteRefresh();
+          }
         });
         // Attempt initial remote hydrate without blocking UI if cache exists
         try {
