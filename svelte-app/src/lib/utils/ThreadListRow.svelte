@@ -18,6 +18,7 @@
   import iconDelete from '@ktibow/iconset-material-symbols/delete';
   import iconSnooze from '@ktibow/iconset-material-symbols/snooze';
   import { onMount } from 'svelte';
+  import iconSchedule from '@ktibow/iconset-material-symbols/schedule';
 
   // Lazy import to avoid circular or route coupling; fallback no-op if route not mounted
   async function scheduleReload() {
@@ -33,6 +34,23 @@
   }
 
   let { thread, selected = false, selectionActive = false, onToggleSelected = undefined }: { thread: import('$lib/types').GmailThread; selected?: boolean; selectionActive?: boolean; onToggleSelected?: ((next: boolean, ev: Event) => void) | undefined } = $props();
+
+  const unread = $derived((thread.labelIds || []).includes('UNREAD'));
+
+  function extractSender(raw?: string): string {
+    try {
+      const r = raw || '';
+      const m = r.match(/^\s*"?([^"<]+)"?\s*<[^>]+>\s*$/);
+      if (m && m[1]) return m[1].trim();
+      const lt = r.indexOf('<');
+      if (lt > 0) return r.slice(0, lt).trim();
+      const at = r.indexOf('@');
+      if (at > 0) return r.slice(0, at).trim();
+      return r.trim();
+    } catch { return raw || ''; }
+  }
+  const senderDisplay = $derived(extractSender(thread.lastMsgMeta?.from || ''));
+  const senderInitial = $derived((senderDisplay?.[0] || '?').toUpperCase());
 
   let dx = $state(0);
   let startX = $state(0);
@@ -431,6 +449,23 @@
   });
 </script>
 
+{#snippet defaultLeading()}
+  <div class={`avatar ${unread ? 'unread' : ''}`} aria-hidden="true">{senderInitial}</div>
+{/snippet}
+
+{#snippet threadHeadline()}
+  <span class="row-headline">
+    <span class="title">{thread.lastMsgMeta.subject || '(no subject)'}</span>
+    {#if thread.lastMsgMeta?.date}
+      <span class="meta"><Icon icon={iconSchedule} /><span class="meta-text">{formatDateTime(thread.lastMsgMeta.date)}</span></span>
+    {/if}
+  </span>
+{/snippet}
+
+{#snippet threadSupporting()}
+  {#if isSnoozedThread(thread)}<span class="badge">Snoozed</span>{/if}
+{/snippet}
+
 {#snippet trailing()}
   <div class="actions" style={`opacity:${dx === 0 ? 1 : 0}; pointer-events:${dx === 0 ? 'auto' : 'none'};`}>
     {#if isSnoozedThread(thread)}
@@ -500,9 +535,10 @@
   </div>
   <div class="fg" style={`transform: translateX(${dx}px); transition: ${animating ? 'transform 200ms cubic-bezier(0,0,0.2,1)' : 'none'};`} in:fade={{ duration: 180 }} out:fade={{ duration: 180 }}>
     <ListItem
-      leading={onToggleSelected ? selectionLeading : undefined}
-      headline={`${(thread.lastMsgMeta.subject || '(no subject)')}${(thread.lastMsgMeta.from ? ' — ' + thread.lastMsgMeta.from : '')}${(thread.lastMsgMeta?.date ? ' • ' + formatDateTime(thread.lastMsgMeta.date) : '')}`}
-      supporting={''}
+      leading={onToggleSelected ? selectionLeading : defaultLeading}
+      overline={senderDisplay}
+      headlineSnippet={threadHeadline}
+      supportingSnippet={threadSupporting}
       lines={3}
       unread={(thread.labelIds || []).includes('UNREAD')}
       href={`${base || ''}/viewer/${thread.threadId}`}
@@ -590,6 +626,46 @@
     border-color: selecteditem !important;
     box-shadow: inset 0 0 0 2px rgb(var(--m3-scheme-on-primary));
   }
+  /* Avatar and headline/meta styling */
+  .avatar {
+    width: 2rem;
+    height: 2rem;
+    border-radius: 9999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 0.875rem;
+    background: rgb(var(--m3-scheme-surface-variant));
+    color: rgb(var(--m3-scheme-on-surface-variant));
+    flex-shrink: 0;
+  }
+  .avatar.unread {
+    background: rgb(var(--m3-scheme-primary));
+    color: rgb(var(--m3-scheme-on-primary));
+  }
+  .row-headline {
+    display: inline-flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.5rem;
+    width: 100%;
+  }
+  .row-headline .title {
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .row-headline .meta {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    color: rgb(var(--m3-scheme-on-surface-variant));
+    white-space: nowrap;
+  }
+  .row-headline .meta :global(svg) { width: 1rem; height: 1rem; }
 </style>
 
 
