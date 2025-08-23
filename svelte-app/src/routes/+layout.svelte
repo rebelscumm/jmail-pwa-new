@@ -29,6 +29,7 @@
   import Button from "$lib/buttons/Button.svelte";
   import { queueSendRaw } from "$lib/queue/intents";
   import { copyGmailDiagnosticsToClipboard } from "$lib/gmail/api";
+  import { appVersion, buildId } from "$lib/utils/version";
   
   if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
 
@@ -83,6 +84,10 @@
 
           try {
             await collect('before');
+            try {
+              localStorage.setItem('jmail_prev_build', buildId);
+              localStorage.setItem('jmail_prev_app', appVersion);
+            } catch {}
             if ('caches' in window) {
               try {
                 const keys = await caches.keys();
@@ -197,7 +202,22 @@
   let snackbar: ReturnType<typeof Snackbar>;
   let isOffline = $state(false);
 
-  $effect(() => { if (snackbar) registerSnackbar(snackbar.show); });
+  $effect(() => {
+    if (snackbar) {
+      registerSnackbar(snackbar.show);
+      try {
+        const prevBuild = localStorage.getItem('jmail_prev_build');
+        const prevApp = localStorage.getItem('jmail_prev_app');
+        if (prevBuild || prevApp) {
+          localStorage.removeItem('jmail_prev_build');
+          localStorage.removeItem('jmail_prev_app');
+          if ((prevBuild && prevBuild !== buildId) || (prevApp && prevApp !== appVersion)) {
+            showSnackbar({ message: `Updated to ${appVersion}`, closable: true });
+          }
+        }
+      } catch {}
+    }
+  });
 
   function makeRfc2822(): string {
     const boundary = `----Jmail-${Math.random().toString(36).slice(2)}`;
