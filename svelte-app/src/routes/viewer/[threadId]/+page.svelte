@@ -363,5 +363,33 @@
     color: rgb(var(--m3-scheme-on-secondary-container));
     white-space: nowrap;
   }
+  /* Ensure HTML emails are responsive and wrap on narrow screens */
+  .html-body {
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: hidden;
+    word-break: break-word;
+  }
+  :global(.html-body *), :global(.html-body *::before), :global(.html-body *::after) {
+    box-sizing: border-box;
+  }
+  :global(.html-body table) {
+    width: 100% !important;
+    max-width: 100% !important;
+    table-layout: fixed !important;
+    border-collapse: collapse;
+  }
+  :global(.html-body td), :global(.html-body th) {
+    word-break: break-word;
+  }
+  :global(.html-body pre), :global(.html-body code) {
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    overflow-wrap: anywhere;
+  }
+  :global(.html-body img), :global(.html-body svg), :global(.html-body video), :global(.html-body iframe), :global(.html-body canvas) {
+    max-width: 100% !important;
+    height: auto !important;
+  }
 </style>
 
