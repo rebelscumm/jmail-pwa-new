@@ -14,6 +14,7 @@
   import { fade } from 'svelte/transition';
   import { rules, DEFAULTS, normalizeRuleKey, resolveRule } from '$lib/snooze/rules';
   import { holdThread } from '$lib/stores/holds';
+  import { cubicOut } from 'svelte/easing';
   // Lazy import to avoid circular or route coupling; fallback no-op if route not mounted
   async function scheduleReload() {
     try {
@@ -99,6 +100,39 @@
     }
   }
   
+  // Custom out transition to continue sliding the row out of view in the
+  // same direction as the trailing action when the item is removed on refresh.
+  function slideOutContinue(node: HTMLElement, params: { direction?: 'left' | 'right'; duration?: number } = {}) {
+    const direction = params?.direction;
+    if (!direction) return;
+    const width = node.offsetWidth || 320;
+    // Use last known dx as start position if available; fall back to 160px.
+    const startX = typeof dx === 'number' && dx !== 0 ? dx : (direction === 'right' ? 160 : -160);
+    const endX = direction === 'right' ? (width + 80) : -(width + 80);
+    const duration = Math.max(0, Number(params?.duration || 260));
+    return {
+      duration,
+      easing: cubicOut,
+      css: (t: number) => {
+        const u = 1 - t;
+        const x = startX + (endX - startX) * u;
+        return `transform: translateX(${x}px);`;
+      }
+    };
+  }
+
+  function outSmart(node: HTMLElement) {
+    try {
+      const dur = Math.max(0, Number($settings.trailingSlideOutDurationMs || 260));
+      if (residualActive && residualDirection) {
+        return slideOutContinue(node, { direction: residualDirection, duration: dur });
+      }
+      return fade(node, { duration: 180 });
+    } catch {
+      return fade(node, { duration: 180 });
+    }
+  }
+
   // Unified slide-out performer used by all trailing actions
   async function animateAndPerform(label: string, doIt: () => Promise<void>, direction: 'left' | 'right', _isError = false): Promise<void> {
     animating = true;
@@ -333,7 +367,7 @@
       </div>
     </div>
   {/if}
-  <div class="fg" style={`transform: translateX(${dx}px); transition: ${animating ? 'transform 180ms var(--m3-util-easing-fast)' : 'none'}; pointer-events: ${residualActive ? 'none' : 'auto'};`} in:fade={{ duration: 120 }} out:fade={{ duration: 180 }}>
+  <div class="fg" style={`transform: translateX(${dx}px); transition: ${animating ? 'transform 180ms var(--m3-util-easing-fast)' : 'none'}; pointer-events: ${residualActive ? 'none' : 'auto'};`} in:fade={{ duration: 120 }} out:outSmart>
     <ListItem
       leading={onToggleSelected ? selectionLeading : undefined}
       headline={`${(thread.lastMsgMeta.subject || '(no subject)')}${(thread.lastMsgMeta.from ? ' — ' + thread.lastMsgMeta.from : '')}${(thread.lastMsgMeta?.date ? ' • ' + formatDateTime(thread.lastMsgMeta.date) : '')}`}

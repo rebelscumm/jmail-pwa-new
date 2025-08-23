@@ -15,6 +15,8 @@ export type AppSettings = {
   aiPageFetchOptIn?: boolean;
   taskFilePath?: string;
   trailingRefreshDelayMs?: number;
+  /** Duration for residual slide-out on refresh/removal (ms) */
+  trailingSlideOutDurationMs?: number;
 };
 
 const DEFAULTS: AppSettings = {
@@ -23,7 +25,8 @@ const DEFAULTS: AppSettings = {
   unreadOnUnsnooze: true,
   labelMapping: {},
   notifEnabled: false,
-  trailingRefreshDelayMs: 5000
+  trailingRefreshDelayMs: 5000,
+  trailingSlideOutDurationMs: 260
 };
 
 export const settings = writable<AppSettings>({ ...DEFAULTS });

@@ -31,6 +31,7 @@
   let _aiPageFetchOptIn = false;
   let _taskFilePath = '';
   let _trailingRefreshDelayMs = 5000;
+  let _trailingSlideOutDurationMs = 260;
   let backups: { key: string; createdAt: number }[] = [];
   // Human-friendly mapping UI state
   let uiMapping: Record<string, string> = {};
@@ -63,6 +64,7 @@
     _aiPageFetchOptIn = !!s.aiPageFetchOptIn;
     _taskFilePath = s.taskFilePath || '';
     _trailingRefreshDelayMs = Number(s.trailingRefreshDelayMs || 5000);
+    _trailingSlideOutDurationMs = Number((s as any).trailingSlideOutDurationMs || 260);
     mappingJson = JSON.stringify(s.labelMapping, null, 2);
     uiMapping = { ...s.labelMapping };
 
@@ -162,7 +164,7 @@
   }
 
   async function saveAppSettings() {
-    await updateAppSettings({ anchorHour: _anchorHour, roundMinutes: _roundMinutes, unreadOnUnsnooze: _unreadOnUnsnooze, notifEnabled: _notifEnabled, aiProvider: _aiProvider, aiApiKey: _aiApiKey, aiModel: _aiModel, aiPageFetchOptIn: _aiPageFetchOptIn, taskFilePath: _taskFilePath, trailingRefreshDelayMs: Math.max(0, Number(_trailingRefreshDelayMs || 0)) });
+    await updateAppSettings({ anchorHour: _anchorHour, roundMinutes: _roundMinutes, unreadOnUnsnooze: _unreadOnUnsnooze, notifEnabled: _notifEnabled, aiProvider: _aiProvider, aiApiKey: _aiApiKey, aiModel: _aiModel, aiPageFetchOptIn: _aiPageFetchOptIn, taskFilePath: _taskFilePath, trailingRefreshDelayMs: Math.max(0, Number(_trailingRefreshDelayMs || 0)), trailingSlideOutDurationMs: Math.max(0, Number(_trailingSlideOutDurationMs || 0)) });
     if (_notifEnabled && 'Notification' in window) {
       const p = await Notification.requestPermission();
       if (p !== 'granted') {
@@ -218,6 +220,7 @@
       <TextFieldOutlined label="Anchor hour (0-23)" type="number" min="0" max="23" bind:value={(_anchorHour as any)} />
       <TextFieldOutlined label="Round minutes (1-60)" type="number" min="1" max="60" step="1" bind:value={(_roundMinutes as any)} />
       <TextFieldOutlined label="Trailing refresh delay (ms)" type="number" min="0" step="100" bind:value={(_trailingRefreshDelayMs as any)} />
+      <TextFieldOutlined label="Slide-out duration on refresh (ms)" type="number" min="0" step="20" bind:value={(_trailingSlideOutDurationMs as any)} />
       <label style="display:flex; align-items:center; gap:0.5rem;">
         <Checkbox>
           <input type="checkbox" bind:checked={_unreadOnUnsnooze} />
