@@ -105,6 +105,18 @@ export async function initAuth(clientId: string) {
       callback: () => {}
     });
     authState.update((s) => ({ ...s, ready: true }));
+    // Load any persisted, still-valid token to avoid popups between sessions
+    try {
+      const { getDB } = await import('$lib/db/indexeddb');
+      const db = await getDB();
+      const meta = (await db.get('auth', 'me')) as AccountAuthMeta | undefined;
+      if (meta && typeof meta.tokenExpiry === 'number' && meta.tokenExpiry > Date.now() && meta.accessToken) {
+        authState.update((s) => ({ ...s, accessToken: meta.accessToken, expiryMs: meta.tokenExpiry, account: meta }));
+        pushGmailDiag({ type: 'auth_persist_loaded', expiresAt: meta.tokenExpiry });
+      }
+    } catch (_) {
+      // non-fatal
+    }
     lastInitOk = true;
     lastInitError = undefined;
     pushGmailDiag({ type: 'auth_init_success', clientIdPresent: !!clientId, scopes: SCOPES });
@@ -190,10 +202,10 @@ export async function acquireTokenInteractive(prompt: 'none' | 'consent' | 'sele
     try { afterInfo = await fetchTokenInfo(); } catch (_) {}
     pushGmailDiag({ type: 'auth_popup_after', flow: 'interactive', prompt, reason, tokenInfo: afterInfo, expiresIn: token.expires_in });
     try {
-      // Persist minimal token metadata for session continuity without storing secrets
+      // Persist token and expiry for continuity between sessions
       const { getDB } = await import('$lib/db/indexeddb');
       const db = await getDB();
-      const account = { sub: 'me', tokenExpiry: expiryMs } satisfies AccountAuthMeta;
+      const account = { sub: 'me', tokenExpiry: expiryMs, accessToken: token.access_token } satisfies AccountAuthMeta;
       await db.put('auth', account, account.sub);
     } catch (_) {
       // non-fatal
@@ -260,7 +272,7 @@ export async function acquireTokenForScopes(scopes: string, prompt: 'none' | 'co
     try {
       const { getDB } = await import('$lib/db/indexeddb');
       const db = await getDB();
-      const account = { sub: 'me', tokenExpiry: expiryMs } satisfies AccountAuthMeta;
+      const account = { sub: 'me', tokenExpiry: expiryMs, accessToken: token.access_token } satisfies AccountAuthMeta;
       await db.put('auth', account, account.sub);
     } catch (_) {}
     return true;
@@ -306,7 +318,7 @@ export async function ensureValidToken(): Promise<string> {
     try {
       const { getDB } = await import('$lib/db/indexeddb');
       const db = await getDB();
-      const account = { sub: 'me', tokenExpiry: expiryMs } satisfies AccountAuthMeta;
+      const account = { sub: 'me', tokenExpiry: expiryMs, accessToken: token.access_token } satisfies AccountAuthMeta;
       await db.put('auth', account, account.sub);
     } catch (_) {}
     return token.access_token;
@@ -404,7 +416,8 @@ export async function signOut(): Promise<void> {
     try {
       const { getDB } = await import('$lib/db/indexeddb');
       const db = await getDB();
-      await db.delete('auth', 'me');
+      // Remove persisted token, but keep any other metadata if present
+      await db.put('auth', { sub: 'me' } as AccountAuthMeta, 'me');
     } catch (_) {}
   } catch (_) {}
 }
