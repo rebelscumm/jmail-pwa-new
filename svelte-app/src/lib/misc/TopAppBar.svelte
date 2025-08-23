@@ -287,7 +287,7 @@
     justify-content: space-between;
     gap: 0.5rem;
     padding: 0.25rem 0;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
   }
   .left, .right { display: flex; align-items: center; gap: 0.5rem; }
   .right { flex-wrap: wrap; min-width: 0; }
