@@ -35,10 +35,29 @@ export function startUpdateChecker(
 		window.removeEventListener('online', onOnline);
 	};
 
-	const notifyAllTabs = () => {
+	const ensureBroadcastChannel = () => {
+		if (bc) return bc;
 		try {
 			bc = new BroadcastChannel('version-updates');
-			bc.postMessage({ type: 'NEW_BUILD_AVAILABLE' });
+			bc.onmessage = (ev) => {
+				const msg = ev?.data || {};
+				if (msg && msg.type === 'NEW_BUILD_AVAILABLE') {
+					const remoteFromPeer: VersionInfo | null = msg.remote && msg.remote.buildId ? msg.remote : null;
+					// Only notify if the peer indicates a different build than ours
+					if (remoteFromPeer && remoteFromPeer.buildId !== current.buildId) {
+						onNewVersion(remoteFromPeer, current);
+						stop();
+					}
+				}
+			};
+		} catch {}
+		return bc;
+	};
+
+	const notifyAllTabs = (remote: VersionInfo) => {
+		try {
+			const chan = ensureBroadcastChannel();
+			chan && chan.postMessage({ type: 'NEW_BUILD_AVAILABLE', remote });
 		} catch {}
 	};
 
@@ -63,23 +82,19 @@ export function startUpdateChecker(
 		if (stopped) return;
 		const remote = await fetchRemote();
 		if (!remote) return;
-		if (remote.buildId && remote.buildId !== current.buildId) {
+		if (
+			remote.buildId &&
+			remote.buildId !== current.buildId &&
+			(remote.appVersion !== current.appVersion || remote.buildId !== current.buildId)
+		) {
 			onNewVersion(remote, current);
-			notifyAllTabs();
+			notifyAllTabs(remote);
 			stop();
 		}
 	}
 
 	// Listen to other tabs' notifications to prompt here too
-	try {
-		bc = new BroadcastChannel('version-updates');
-		bc.onmessage = (ev) => {
-			if (ev?.data?.type === 'NEW_BUILD_AVAILABLE') {
-				onNewVersion({ appVersion: current.appVersion, buildId: 'new' }, current);
-				stop();
-			}
-		};
-	} catch {}
+	ensureBroadcastChannel();
 
 	window.addEventListener('visibilitychange', onVisibilityChange);
 	window.addEventListener('online', onOnline);
