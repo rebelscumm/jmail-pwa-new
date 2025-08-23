@@ -36,6 +36,11 @@
   let snoozeMenuOpen = $state(false);
   let mappedKeys = $derived(Array.from(new Set(Object.keys($settings.labelMapping || {}).filter((k) => $settings.labelMapping[k]).map((k) => normalizeRuleKey(k)))));
   let defaultSnoozeKey = $derived(mappedKeys.includes('1h') ? '1h' : (mappedKeys[0] || null));
+  
+  // Residual state for inline Undo UI
+  let residualActive = $state(false);
+  let residualLabel = $state('');
+  let residualDirection: 'left' | 'right' | null = $state(null);
 
   function isMapped(key: string): boolean {
     try { return mappedKeys.includes(normalizeRuleKey(key)); } catch { return false; }
@@ -80,9 +85,9 @@
   }
   
   // Unified slide-out performer used by all trailing actions
-  async function animateAndPerform(label: string, doIt: () => Promise<void>, _isError = false): Promise<void> {
+  async function animateAndPerform(label: string, doIt: () => Promise<void>, direction: 'left' | 'right', _isError = false): Promise<void> {
     animating = true;
-    dx = 160;
+    dx = direction === 'right' ? 160 : -160;
     await new Promise((r) => setTimeout(r, 180));
     // Place a hold to keep the thread visible until the user-configured delay elapses
     try {
@@ -90,16 +95,17 @@
       holdThread(thread.threadId, delay);
     } catch {}
     await doIt();
-    // Return the row to its resting position; rely on snackbar for Undo per MD3
-    dx = 0;
-    await new Promise((r) => setTimeout(r, 180));
+    // Keep the row slid over and show residual inline Undo until list refresh
+    residualActive = true;
+    residualLabel = label;
+    residualDirection = direction;
     animating = false;
-    showSnackbar({ message: label, actions: { Undo: () => undoLast(1) } });
     // Schedule a reload to refresh list after trailing action
     scheduleReload();
   }
-  
+
   function onPointerDown(e: PointerEvent) {
+    if (residualActive) return;
     startTarget = e.target as HTMLElement;
     downInInteractive = !!startTarget?.closest(
       'button,summary,details,input,textarea,select,[data-no-row-nav]'
@@ -131,7 +137,7 @@
         await animateAndArchive();
       } else if (currentDx < -threshold) {
         // Swipe left: Quick snooze 1h
-        await animateAndPerform('Snoozed 1h', () => snoozeThreadByRule(thread.threadId, '1h', { optimisticLocal: false }));
+        await animateAndPerform('Snoozed 1h', () => snoozeThreadByRule(thread.threadId, '1h', { optimisticLocal: false }), 'left');
       }
       // If swipe distance didn't cross threshold, do nothing (no navigation). Tap will be handled by <a>
     }
@@ -139,7 +145,7 @@
   }
   
   function onPointerMove(e: PointerEvent) {
-    if (!dragging || downInInteractive) return;
+    if (!dragging || downInInteractive || residualActive) return;
     const delta = e.clientX - startX;
     if (!captured && Math.abs(delta) > 6) {
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
@@ -149,19 +155,35 @@
   }
   
   async function animateAndDelete(): Promise<void> {
-    await animateAndPerform('Deleted', () => trashThread(thread.threadId, { optimisticLocal: false }), true);
+    await animateAndPerform('Deleted', () => trashThread(thread.threadId, { optimisticLocal: false }), 'right', true);
   }
   
   async function animateAndArchive(): Promise<void> {
-    await animateAndPerform('Archived', () => archiveThread(thread.threadId, { optimisticLocal: false }));
+    await animateAndPerform('Archived', () => archiveThread(thread.threadId, { optimisticLocal: false }), 'right');
   }
   
   async function animateAndUnsnooze(): Promise<void> {
-    await animateAndPerform('Unsnoozed', () => manualUnsnoozeThread(thread.threadId, { optimisticLocal: false }));
+    await animateAndPerform('Unsnoozed', () => manualUnsnoozeThread(thread.threadId, { optimisticLocal: false }), 'right');
   }
   
   async function animateAndSnooze(ruleKey: string, label = 'Snoozed'): Promise<void> {
-    await animateAndPerform(label, () => snoozeThreadByRule(thread.threadId, ruleKey, { optimisticLocal: false }));
+    await animateAndPerform(label, () => snoozeThreadByRule(thread.threadId, ruleKey, { optimisticLocal: false }), 'left');
+  }
+  
+  async function onUndoInline(e: MouseEvent): Promise<void> {
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      await undoLast(1);
+    } finally {
+      animating = true;
+      dx = 0;
+      await new Promise((r) => setTimeout(r, 180));
+      animating = false;
+      residualActive = false;
+      residualLabel = '';
+      residualDirection = null;
+    }
   }
   
   function formatDateTime(ts?: number): string {
@@ -274,7 +296,15 @@
     <div class="right">{dx < -40 ? '1h' : ''}</div>
     {/if}
   </div>
-  <div class="fg" style={`transform: translateX(${dx}px); transition: ${animating ? 'transform 180ms var(--m3-util-easing-fast)' : 'none'};`} in:fade={{ duration: 120 }} out:fade={{ duration: 180 }}>
+  {#if residualActive}
+    <div class="residual {residualDirection === 'right' ? 'left' : 'right'}">
+      <div class="pending-wrap">
+        <span class="m3-font-body-medium">{residualLabel}</span>
+        <Button variant="text" onclick={onUndoInline}>Undo</Button>
+      </div>
+    </div>
+  {/if}
+  <div class="fg" style={`transform: translateX(${dx}px); transition: ${animating ? 'transform 180ms var(--m3-util-easing-fast)' : 'none'}; pointer-events: ${residualActive ? 'none' : 'auto'};`} in:fade={{ duration: 120 }} out:fade={{ duration: 180 }}>
     <ListItem
       leading={onToggleSelected ? selectionLeading : undefined}
       headline={`${(thread.lastMsgMeta.subject || '(no subject)')}${(thread.lastMsgMeta.from ? ' — ' + thread.lastMsgMeta.from : '')}${(thread.lastMsgMeta?.date ? ' • ' + formatDateTime(thread.lastMsgMeta.date) : '')}`}
@@ -332,6 +362,16 @@
     background: transparent;
     min-width: 0;
   }
+  .residual {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding: 0 1rem;
+    pointer-events: auto;
+  }
+  .residual.left { justify-content: flex-start; }
   .actions { display:flex; flex-direction: column; gap:0.25rem; align-items:flex-end; }
   .snooze-menu :global(.m3-container) { padding: 0; }
   .snooze-menu .list { display:flex; flex-direction: column; gap: 0.125rem; padding: 0.25rem; }
