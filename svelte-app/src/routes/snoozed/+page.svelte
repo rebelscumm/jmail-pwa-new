@@ -152,7 +152,7 @@
 {:else}
   <Button variant="outlined" disabled={!nextPageToken || syncing} onclick={loadMore}>{syncing ? 'Loading…' : 'Load more'}</Button>
   <div style="height:70vh">
-    <VirtualList items={$threadsStore} rowHeight={68} getKey={(t) => t.threadId}>
+    <VirtualList items={$threadsStore} rowHeight={96} getKey={(t) => t.threadId}>
       {#snippet children(item: import('$lib/types').GmailThread)}
         <ThreadListRow thread={item} />
       {/snippet}

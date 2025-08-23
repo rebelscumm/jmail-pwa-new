@@ -500,7 +500,7 @@
     </Card>
   {/if}
   <div style="height:70vh">
-    <VirtualList items={visibleThreads} rowHeight={68} getKey={(t) => t.threadId}>
+    <VirtualList items={visibleThreads} rowHeight={96} getKey={(t) => t.threadId}>
       {#snippet children(item: import('$lib/types').GmailThread)}
       <ThreadListRow thread={item} selected={!!selectedMap[item.threadId]} onToggleSelected={(next) => toggleSelectThread(item.threadId, next)} />
       {/snippet}

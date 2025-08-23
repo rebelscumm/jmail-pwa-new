@@ -110,4 +110,7 @@
   .row:has(:global(details[open])) {
     z-index: 5;
   }
+  .row:hover {
+    z-index: 4;
+  }
 </style>
