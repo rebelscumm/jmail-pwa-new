@@ -1,5 +1,6 @@
 <script lang="ts">
   import { page } from "$app/stores";
+  import { goto } from "$app/navigation";
   import { messages, threads } from "$lib/stores/threads";
   import { archiveThread, trashThread, spamThread, undoLast } from "$lib/queue/intents";
   import { snoozeThreadByRule, manualUnsnoozeThread, isSnoozedThread } from "$lib/snooze/actions";
@@ -294,7 +295,7 @@
     <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
       <Button variant="text" onclick={() => relogin(currentThread.messageIds?.[0])}>Re-login</Button>
       <Button variant="text" onclick={() => archiveThread(currentThread.threadId).then(()=> showSnackbar({ message: 'Archived', actions: { Undo: () => undoLast(1) } }))}>Archive</Button>
-      <Button variant="text" color="error" onclick={() => trashThread(currentThread.threadId).then(()=> showSnackbar({ message: 'Deleted', actions: { Undo: () => undoLast(1) } }))}>Delete</Button>
+      <Button variant="text" color="error" onclick={() => trashThread(currentThread.threadId).then(()=> { showSnackbar({ message: 'Deleted', actions: { Undo: () => undoLast(1) } }); goto('/inbox'); })}>Delete</Button>
       <Button variant="text" onclick={() => spamThread(currentThread.threadId).then(()=> showSnackbar({ message: 'Marked as spam', actions: { Undo: () => undoLast(1) } }))}>Spam</Button>
       {#if isSnoozedThread(currentThread)}
         <Button variant="text" onclick={() => manualUnsnoozeThread(currentThread.threadId).then(()=> showSnackbar({ message: 'Unsnoozed', actions: { Undo: () => undoLast(1) } }))}>Unsnooze</Button>
