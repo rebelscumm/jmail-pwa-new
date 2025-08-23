@@ -20,39 +20,39 @@
   import Radio from '$lib/forms/RadioAnim2.svelte';
   import { goto } from '$app/navigation';
 
-  let labels: GmailLabel[] = [];
-  let mappingJson = '';
-  let info = '';
-  let _anchorHour = 5;
-  let _roundMinutes = 5;
-  let _unreadOnUnsnooze = true;
-  let _notifEnabled = false;
-  let _aiProvider: AppSettings['aiProvider'] = 'openai';
-  let _aiApiKey = '';
-  let _aiModel = '';
-  let _aiPageFetchOptIn = false;
-  let _taskFilePath = '';
-  let _trailingRefreshDelayMs = 5000;
-  let _trailingSlideOutDurationMs = 260;
-  let importMappingInput: HTMLInputElement | null = null;
-  let _swipeRightPrimary: 'archive' | 'delete' = 'archive';
-  let _swipeLeftPrimary: 'archive' | 'delete' = 'delete';
-  let _confirmDelete = false;
-  let _swipeCommitVelocityPxPerSec = 1000;
-  let _swipeDisappearMs = 5000;
-  let backups: { key: string; createdAt: number }[] = [];
+  let labels = $state<GmailLabel[]>([]);
+  let mappingJson = $state('');
+  let info = $state('');
+  let _anchorHour = $state(5);
+  let _roundMinutes = $state(5);
+  let _unreadOnUnsnooze = $state(true);
+  let _notifEnabled = $state(false);
+  let _aiProvider: AppSettings['aiProvider'] = $state('openai');
+  let _aiApiKey = $state('');
+  let _aiModel = $state('');
+  let _aiPageFetchOptIn = $state(false);
+  let _taskFilePath = $state('');
+  let _trailingRefreshDelayMs = $state(5000);
+  let _trailingSlideOutDurationMs = $state(260);
+  let importMappingInput = $state<HTMLInputElement | null>(null);
+  let _swipeRightPrimary: 'archive' | 'delete' = $state('archive');
+  let _swipeLeftPrimary: 'archive' | 'delete' = $state('delete');
+  let _confirmDelete = $state(false);
+  let _swipeCommitVelocityPxPerSec = $state(1000);
+  let _swipeDisappearMs = $state(5000);
+  let backups = $state<{ key: string; createdAt: number }[]>([]);
   // Human-friendly mapping UI state
-  let uiMapping: Record<string, string> = {};
+  let uiMapping = $state<Record<string, string>>({});
   const quickKeys = ['10m','30m','1h','2h','3h'];
   const hourKeys = ['1h','2h','3h','4h','5h','6h','7h'];
   const dayKeys = Array.from({ length: 30 }, (_, i) => `${i+1}d`);
   const weekdayKeys = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
   const timeKeys = ['6am','2pm','7pm'];
   const persistentKeys = ['Desktop','long-term'];
-  $: ruleKeys = [ ...new Set([ ...quickKeys, ...hourKeys, ...dayKeys, ...weekdayKeys, ...timeKeys, ...persistentKeys ]) ];
+  let ruleKeys = $derived([ ...new Set([ ...quickKeys, ...hourKeys, ...dayKeys, ...weekdayKeys, ...timeKeys, ...persistentKeys ]) ]);
 
   // Tabs
-  let currentTab: 'app' | 'mapping' | 'backups' = 'app';
+  let currentTab: 'app' | 'mapping' | 'backups' = $state('app');
   const tabItems = [
     { name: 'App', value: 'app' },
     { name: 'Label Mapping', value: 'mapping' },
@@ -410,7 +410,7 @@
     <span>{info}</span>
     <Button variant="text" onclick={() => navigator.clipboard.writeText(mappingJson)}>Copy</Button>
     <Button variant="outlined" onclick={() => importMappingInput?.click()}>Import JSON</Button>
-    <input bind:this={importMappingInput} type="file" accept="application/json" style="display:none" on:change={(e)=>{
+    <input bind:this={importMappingInput} type="file" accept="application/json" style="display:none" onchange={(e)=>{
       const input = e.currentTarget as HTMLInputElement;
       const file=input.files?.[0]; if(!file) return; file.text().then((t: string)=>mappingJson=t);
       // reset value so selecting same file again still triggers change
