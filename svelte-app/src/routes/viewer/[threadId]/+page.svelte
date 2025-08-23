@@ -239,6 +239,33 @@
       </h2>
     </Card>
 
+    <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+      <Button variant="text" onclick={() => relogin(currentThread.messageIds?.[0])}>Re-login</Button>
+      <Button variant="text" onclick={() => archiveThread(currentThread.threadId).then(()=> { showSnackbar({ message: 'Archived', actions: { Undo: () => undoLast(1) } }); goto('/inbox'); })}>Archive</Button>
+      <Button variant="text" color="error" onclick={() => trashThread(currentThread.threadId).then(()=> { showSnackbar({ message: 'Deleted', actions: { Undo: () => undoLast(1) } }); goto('/inbox'); })}>Delete</Button>
+      <Button variant="text" onclick={() => spamThread(currentThread.threadId).then(()=> showSnackbar({ message: 'Marked as spam', actions: { Undo: () => undoLast(1) } }))}>Spam</Button>
+      {#if isSnoozedThread(currentThread)}
+        <Button variant="text" onclick={() => manualUnsnoozeThread(currentThread.threadId).then(()=> showSnackbar({ message: 'Unsnoozed', actions: { Undo: () => undoLast(1) } }))}>Unsnooze</Button>
+      {/if}
+      {#if Object.keys($settings.labelMapping || {}).some((k)=>k==='10m' && $settings.labelMapping[k])}
+        <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '10m').then(()=> showSnackbar({ message: 'Snoozed 10m', actions: { Undo: () => undoLast(1) } }))}>10m</Button>
+      {/if}
+      {#if Object.keys($settings.labelMapping || {}).some((k)=>k==='3h' && $settings.labelMapping[k])}
+        <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '3h').then(()=> showSnackbar({ message: 'Snoozed 3h', actions: { Undo: () => undoLast(1) } }))}>3h</Button>
+      {/if}
+      {#if Object.keys($settings.labelMapping || {}).some((k)=>k==='1d' && $settings.labelMapping[k])}
+        <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '1d').then(()=> showSnackbar({ message: 'Snoozed 1d', actions: { Undo: () => undoLast(1) } }))}>1d</Button>
+      {/if}
+      <Button variant="text" onclick={() => copyText(currentThread.lastMsgMeta.subject || '')}>Copy Subject</Button>
+      {#if currentThread.messageIds?.length}
+        {@const mid = currentThread.messageIds[currentThread.messageIds.length-1]}
+        <Button variant="text" onclick={() => unsubscribe(mid)}>Unsubscribe</Button>
+        <Button variant="text" onclick={() => summarize(mid)}>Summarize</Button>
+        <Button variant="text" onclick={() => replyDraft(mid)}>Reply (AI) → Clipboard</Button>
+        <Button variant="text" onclick={() => createTask(mid)}>Create Task</Button>
+      {/if}
+    </div>
+
     <div class="messages">
       {#each currentThread.messageIds as mid, idx}
         {@const m = $messages[mid]}
