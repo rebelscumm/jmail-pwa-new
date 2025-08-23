@@ -28,6 +28,8 @@
   let { onSyncNow, backHref, backLabel }: { onSyncNow?: () => void; backHref?: string; backLabel?: string } = $props();
   let overflowDetails: HTMLDetailsElement;
   let aboutOpen = $state(false);
+  let __menuPushed = $state(false);
+  let __menuPopHandler: ((e: PopStateEvent) => void) | null = $state(null);
   function toggleOverflow(e: MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
@@ -61,15 +63,11 @@
 
   function handleBack() {
     try {
-      const canGoBack = typeof document !== 'undefined' && document.referrer && history.length > 1;
-      if (canGoBack) {
-        history.back();
-        return;
-      }
+      const hasReferrer = typeof document !== 'undefined' && !!document.referrer;
+      const canGoBack = hasReferrer && history.length > 1;
+      if (canGoBack) { history.back(); return; }
     } catch {}
-    if (backHref) {
-      location.href = backHref;
-    }
+    if (backHref) { location.href = backHref; }
   }
 
   let search = $state('');
@@ -124,7 +122,39 @@
       d.open = false;
     }
     window.addEventListener('click', handleWindowClick);
-    return () => window.removeEventListener('click', handleWindowClick);
+    // Manage synthetic history when menu opens/closes
+    const manageMenuHistory = () => {
+      try {
+        const d = overflowDetails;
+        const isOpen = !!(d && d.open);
+        if (isOpen && !__menuPushed) {
+          history.pushState({ ...history.state, __m3_overlay: 'menu' }, '', location.href);
+          __menuPushed = true;
+          const handler = (_e: PopStateEvent) => { const dd = overflowDetails; if (dd && dd.open) dd.open = false; };
+          __menuPopHandler = handler;
+          window.addEventListener('popstate', handler, { once: true });
+        } else if (!isOpen && __menuPushed) {
+          __menuPushed = false;
+          if (__menuPopHandler) { window.removeEventListener('popstate', __menuPopHandler); __menuPopHandler = null; }
+          history.back();
+        }
+      } catch {}
+    };
+    const mo = new MutationObserver(manageMenuHistory);
+    if (overflowDetails) mo.observe(overflowDetails, { attributes: true, attributeFilter: ['open'] });
+    // Initial sync in case it's opened programmatically
+    manageMenuHistory();
+    return () => {
+      window.removeEventListener('click', handleWindowClick);
+      try { mo.disconnect(); } catch {}
+      try {
+        if (__menuPushed) {
+          __menuPushed = false;
+          if (__menuPopHandler) { window.removeEventListener('popstate', __menuPopHandler); __menuPopHandler = null; }
+          history.back();
+        }
+      } catch {}
+    };
   });
 
   function formatLastSync(ts?: number): string {

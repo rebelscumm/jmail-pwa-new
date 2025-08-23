@@ -3,6 +3,7 @@
   import type { TransitionConfig } from "svelte/transition";
   import { easeEmphasizedAccel, easeEmphasizedDecel } from "$lib/misc/easing";
   import { outroClass } from "$lib/misc/animation";
+  import { onDestroy } from "svelte";
 
   let { children, close }: { children: Snippet; close: (reason: "esc" | "click" | "low") => void } =
     $props();
@@ -39,6 +40,37 @@
   };
   $effect(() => {
     if (height < 48) close("low");
+  });
+
+  // Push a synthetic history entry while sheet is open so Android back closes it first
+  let __pushedHistoryEntry = $state(false);
+  let __popHandler: ((e: PopStateEvent) => void) | null = $state(null);
+  $effect(() => {
+    try {
+      // The dialog opens immediately via action; consider it open after mount
+      if (!__pushedHistoryEntry) {
+        history.pushState({ ...history.state, __m3_overlay: 'sheet' }, "", location.href);
+        __pushedHistoryEntry = true;
+        const handler = (_e: PopStateEvent) => {
+          close("esc");
+        };
+        __popHandler = handler;
+        window.addEventListener('popstate', handler, { once: true });
+      }
+    } catch {}
+  });
+
+  onDestroy(() => {
+    try {
+      if (__pushedHistoryEntry) {
+        if (__popHandler) {
+          window.removeEventListener('popstate', __popHandler);
+          __popHandler = null;
+        }
+        __pushedHistoryEntry = false;
+        history.back();
+      }
+    } catch {}
   });
 </script>
 
