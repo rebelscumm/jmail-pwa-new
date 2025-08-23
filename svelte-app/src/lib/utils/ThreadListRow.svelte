@@ -1,20 +1,18 @@
 <script lang="ts">
-  import ListItem from '$lib/containers/ListItem.svelte';
-  import Button from '$lib/buttons/Button.svelte';
-  import SplitButton from '$lib/buttons/SplitButton.svelte';
-  import Card from '$lib/containers/Card.svelte';
-  import DatePickerDocked from '$lib/forms/DatePickerDocked.svelte';
-  import Icon from '$lib/misc/_icon.svelte';
-  import iconCalendar from '@ktibow/iconset-material-symbols/calendar-today-outline';
-  import { archiveThread, trashThread, markRead, markUnread, undoLast } from '$lib/queue/intents';
-  import { snoozeThreadByRule, manualUnsnoozeThread, isSnoozedThread } from '$lib/snooze/actions';
-  import { settings } from '$lib/stores/settings';
-  import { base } from '$app/paths';
-  import { show as showSnackbar } from '$lib/containers/snackbar';
-  import { fade } from 'svelte/transition';
-  import { rules, DEFAULTS, normalizeRuleKey, resolveRule } from '$lib/snooze/rules';
-  import { holdThread } from '$lib/stores/holds';
-  import { cubicOut } from 'svelte/easing';
+  	import ListItem from '$lib/containers/ListItem.svelte';
+	import Button from '$lib/buttons/Button.svelte';
+	import SplitButton from '$lib/buttons/SplitButton.svelte';
+	import Menu from '$lib/containers/Menu.svelte';
+	import SnoozePanel from '$lib/snooze/SnoozePanel.svelte';
+	import { archiveThread, trashThread, markRead, markUnread, undoLast } from '$lib/queue/intents';
+	import { snoozeThreadByRule, manualUnsnoozeThread, isSnoozedThread } from '$lib/snooze/actions';
+	import { settings } from '$lib/stores/settings';
+	import { base } from '$app/paths';
+	import { show as showSnackbar } from '$lib/containers/snackbar';
+	import { fade } from 'svelte/transition';
+	import { DEFAULTS, normalizeRuleKey, resolveRule } from '$lib/snooze/rules';
+	import { holdThread } from '$lib/stores/holds';
+	import { cubicOut } from 'svelte/easing';
   // Lazy import to avoid circular or route coupling; fallback no-op if route not mounted
   async function scheduleReload() {
     try {
@@ -37,10 +35,9 @@
   let captured = $state(false);
   let downInInteractive = $state(false);
   let startTarget: HTMLElement | null = null;
-  let snoozeMenuOpen = $state(false);
-  let showInlineDatePicker = $state(false);
-  let mappedKeys = $derived(Array.from(new Set(Object.keys($settings.labelMapping || {}).filter((k) => $settings.labelMapping[k]).map((k) => normalizeRuleKey(k)))));
-  let defaultSnoozeKey = $derived(mappedKeys.includes('1h') ? '1h' : (mappedKeys[0] || null));
+  	let snoozeMenuOpen = $state(false);
+	let mappedKeys = $derived(Array.from(new Set(Object.keys($settings.labelMapping || {}).filter((k) => $settings.labelMapping[k]).map((k) => normalizeRuleKey(k)))));
+	let defaultSnoozeKey = $derived(mappedKeys.includes('1h') ? '1h' : (mappedKeys[0] || null));
   
   // Residual state for inline Undo UI
   let residualActive = $state(false);
@@ -66,38 +63,6 @@
       return;
     }
     await animateAndSnooze(k, 'Snoozed');
-  }
-  function daysFromToday(dateStr: string): number {
-    try {
-      const now = new Date();
-      const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      const chosen = new Date(dateStr + 'T00:00:00');
-      const diffMs = chosen.getTime() - startOfToday.getTime();
-      return Math.round(diffMs / 86400000);
-    } catch {
-      return 0;
-    }
-  }
-  async function onDatePicked(dateStr: string): Promise<void> {
-    const n = daysFromToday(dateStr);
-    if (n < 1 || n > 30) return;
-    const key = `${n}d`;
-    if (!isMapped(key)) {
-      showSnackbar({ message: 'No snooze labels configured for that date. Map in Settings.' });
-      return;
-    }
-    await animateAndSnooze(key, 'Snoozed');
-  }
-  function dateWithinRangeValidator(date: string): boolean {
-    try {
-      const picked = new Date(date + 'T00:00:00');
-      const now = new Date();
-      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
-      const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 30);
-      return picked >= start && picked <= end;
-    } catch {
-      return false;
-    }
   }
   
   // Custom out transition to continue sliding the row out of view in the
@@ -283,49 +248,20 @@
     {/if}
     <Button variant="text" onclick={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); animateAndArchive(); }}>Archive</Button>
     <Button variant="text" color="error" onclick={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); animateAndDelete(); }}>Delete</Button>
-    <div class="snooze-wrap" role="button" tabindex="0" data-no-row-nav onclick={(e) => { if (!(e.target as Element)?.closest('summary')) { e.preventDefault(); } e.stopPropagation(); }} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { if (!(e.target as Element)?.closest('summary')) { e.preventDefault(); } e.stopPropagation(); } }}>
-      <SplitButton variant="outlined" x="right" y="down" onclick={() => { if (defaultSnoozeKey) { animateAndSnooze(defaultSnoozeKey, `Snoozed ${defaultSnoozeKey}`); } else { showSnackbar({ message: 'No snooze labels configured. Map them in Settings.' }); } }} on:toggle={(e) => { snoozeMenuOpen = (e.detail as boolean); }}>
-        {#snippet children()}
-          {defaultSnoozeKey || 'Snooze'}
-        {/snippet}
-        {#snippet menu()}
-          <div class="snooze-menu">
-            {#if mappedKeys.length > 0}
-              <Card variant="filled" class="panel">
-                <div class="list">
-                  {#each ['2p','6a','7p','2d','4d','mon','fri','7 day','14 day','30 days','1h','2h','3h'] as item}
-                    {#if isMapped(toRuleKey(item))}
-                      <Button variant="text" onclick={() => trySnooze(toRuleKey(item))}>{item}</Button>
-                    {/if}
-                  {/each}
-                </div>
-                <div class="footer">
-                  <Button variant="text" onclick={() => (showInlineDatePicker = !showInlineDatePicker)}>
-                    <Icon icon={iconCalendar} />
-                    <span>Pick date</span>
-                  </Button>
-                </div>
-                {#if showInlineDatePicker}
-                  <div class="inline-date-picker">
-                    <DatePickerDocked
-                      date={''}
-                      clearable={true}
-                      close={() => (showInlineDatePicker = false)}
-                      dateValidator={dateWithinRangeValidator}
-                      setDate={(d) => { showInlineDatePicker = false; if (d) onDatePicked(d); }}
-                    />
-                  </div>
-                {/if}
-              </Card>
-            {:else}
-              <Card variant="filled" class="panel">
-                <div style="padding:0.5rem 0.75rem; max-width: 18rem;" class="m3-font-body-small">No snooze labels configured. Map them in Settings.</div>
-              </Card>
-            {/if}
-          </div>
-        {/snippet}
-      </SplitButton>
-    </div>
+    	<div class="snooze-wrap" role="button" tabindex="0" data-no-row-nav onclick={(e) => { if (!(e.target as Element)?.closest('summary')) { e.preventDefault(); } e.stopPropagation(); }} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { if (!(e.target as Element)?.closest('summary')) { e.preventDefault(); } e.stopPropagation(); } }}>
+		  <SplitButton variant="outlined" x="right" y="down" onclick={() => { if (defaultSnoozeKey) { animateAndSnooze(defaultSnoozeKey, `Snoozed ${defaultSnoozeKey}`); } else { showSnackbar({ message: 'No snooze labels configured. Map them in Settings.' }); } }} on:toggle={(e) => { snoozeMenuOpen = (e.detail as boolean); }}>
+			{#snippet children()}
+			  {defaultSnoozeKey || 'Snooze'}
+			{/snippet}
+			{#snippet menu()}
+			  <div class="snooze-menu">
+				<Menu>
+				  <SnoozePanel onSelect={(k) => trySnooze(k)} />
+				</Menu>
+			  </div>
+			{/snippet}
+		  </SplitButton>
+		</div>
   </div>
 {/snippet}
 
@@ -438,16 +374,11 @@
   }
   .residual.left { justify-content: flex-start; }
   .actions { display:flex; flex-direction: column; gap:0.25rem; align-items:flex-end; }
-  .snooze-menu :global(.m3-container) { padding: 0; min-width: 18rem; max-width: 28rem; }
-  .snooze-menu .list { display:grid; grid-template-columns: repeat(auto-fit, minmax(4.25rem, 1fr)); gap: 0.25rem; padding: 0.5rem; }
-  .snooze-menu .list :global(button) { justify-content: center; }
-  .snooze-menu .footer { display:flex; justify-content:flex-end; padding: 0.25rem 0.5rem; border-top: 1px solid rgb(var(--m3-scheme-outline-variant)); }
-  .snooze-menu .footer :global(svg) { width: 1.25rem; height: 1.25rem; margin-right: 0.25rem; color: rgb(var(--m3-scheme-on-surface-variant)); }
-  .snooze-menu .inline-date-picker { padding: 0.5rem; display:flex; justify-content:flex-end; }
-  /* Ensure snooze menu is opaque and above everything */
-  .snooze-menu { z-index: 10000; }
-  .snooze-menu :global(.m3-container) { background-color: rgb(var(--m3-scheme-surface-container-highest)); z-index: 10001; }
-  .leading-checkbox {
+  	  .snooze-menu :global(.m3-container) { padding: 0; min-width: 18rem; max-width: 28rem; }
+	  /* Ensure snooze menu is opaque and above everything */
+	  .snooze-menu { z-index: 10000; position: relative; }
+	  .snooze-menu :global(.m3-container) { background-color: rgb(var(--m3-scheme-surface-container-highest)); z-index: 10001; box-shadow: var(--m3-util-elevation-3); }
+	  .leading-checkbox {
     display: inline-flex;
     align-items: center;
     justify-content: center;
