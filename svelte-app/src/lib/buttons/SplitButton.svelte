@@ -22,6 +22,7 @@
   } = $props();
 
   const dispatch = createEventDispatcher<{ toggle: boolean }>();
+  let open = $state(false);
 
   const autoclose = (node: HTMLDetailsElement) => {
     const close = (e: Event) => {
@@ -44,8 +45,8 @@
     <Layer />
     {@render children()}
   </button>
-  <details class="align-{x} align-{y}" use:autoclose ontoggle={(e) => dispatch('toggle', (e.currentTarget as HTMLDetailsElement).open)}>
-    <summary class="split">
+  <details class="align-{x} align-{y}" use:autoclose ontoggle={(e) => { const isOpen = (e.currentTarget as HTMLDetailsElement).open; open = isOpen; dispatch('toggle', isOpen); }}>
+    <summary class="split" aria-haspopup="menu" aria-expanded={open}>
       <Layer />
       <Icon icon={iconExpand} width="1.375rem" height="1.375rem" />
     </summary>
@@ -131,6 +132,7 @@
   details {
     display: flex;
     position: relative;
+    overflow: visible; /* allow open menus and popovers to escape */
   }
   summary {
     padding-inline-start: 0.75rem;

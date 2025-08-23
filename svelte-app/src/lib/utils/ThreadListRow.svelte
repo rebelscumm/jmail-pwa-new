@@ -11,6 +11,7 @@
   import { fade } from 'svelte/transition';
   import { rules, DEFAULTS, normalizeRuleKey, resolveRule } from '$lib/snooze/rules';
   import { holdThread } from '$lib/stores/holds';
+  import SnoozePanel from '$lib/snooze/SnoozePanel.svelte';
   // Lazy import to avoid circular or route coupling; fallback no-op if route not mounted
   async function scheduleReload() {
     try {
@@ -83,7 +84,7 @@
   async function animateAndPerform(label: string, doIt: () => Promise<void>, _isError = false): Promise<void> {
     animating = true;
     dx = 160;
-    await new Promise((r) => setTimeout(r, 180));
+    await new Promise((r) => setTimeout(r, 150));
     // Place a hold to keep the thread visible until the user-configured delay elapses
     try {
       const delay = Math.max(0, Number($settings.trailingRefreshDelayMs || 5000));
@@ -92,7 +93,7 @@
     await doIt();
     // Return the row to its resting position; rely on snackbar for Undo per MD3
     dx = 0;
-    await new Promise((r) => setTimeout(r, 180));
+    await new Promise((r) => setTimeout(r, 150));
     animating = false;
     showSnackbar({ message: label, actions: { Undo: () => undoLast(1) } });
     // Schedule a reload to refresh list after trailing action
@@ -135,7 +136,7 @@
       }
       // If swipe distance didn't cross threshold, do nothing (no navigation). Tap will be handled by <a>
     }
-    setTimeout(() => (animating = false), 180);
+    setTimeout(() => (animating = false), 150);
   }
   
   function onPointerMove(e: PointerEvent) {
@@ -221,22 +222,7 @@
           <div class="snooze-menu">
             <Menu>
               {#if mappedKeys.length > 0}
-                <div class="list">
-                  {#each ['2p','6a','7p','2d','4d','mon','fri','7 day','14 day','30 days','1h','2h','3h'] as item}
-                    {#if isMapped(toRuleKey(item))}
-                      <Button variant="text" onclick={() => trySnooze(toRuleKey(item))}>{item}</Button>
-                    {/if}
-                  {/each}
-                  <div class="date-row">
-                    <label class="m3-font-body-small" for={`native-date-${thread.threadId}`}>Pick date</label>
-                    <input id={`native-date-${thread.threadId}`}
-                      type="date"
-                      min={(new Date(Date.now()+24*60*60*1000)).toISOString().slice(0,10)}
-                      max={(new Date(Date.now()+30*24*60*60*1000)).toISOString().slice(0,10)}
-                      onchange={(e) => { const v = (e.currentTarget as HTMLInputElement).value; if (v) { onDatePicked(v); (e.currentTarget as HTMLInputElement).value = ''; } }}
-                    />
-                  </div>
-                </div>
+                <SnoozePanel onSelect={(rk) => trySnooze(rk)} />
               {:else}
                 <div style="padding:0.5rem 0.75rem; max-width: 18rem;" class="m3-font-body-small">No snooze labels configured. Map them in Settings.</div>
               {/if}
@@ -274,7 +260,7 @@
     <div class="right">{dx < -40 ? '1h' : ''}</div>
     {/if}
   </div>
-  <div class="fg" style={`transform: translateX(${dx}px); transition: ${animating ? 'transform 180ms var(--m3-util-easing-fast)' : 'none'};`} in:fade={{ duration: 120 }} out:fade={{ duration: 180 }}>
+  <div class="fg" style={`transform: translateX(${dx}px); transition: ${animating ? 'transform var(--m3-util-easing-fast)' : 'none'};`} in:fade={{ duration: 120 }} out:fade={{ duration: 180 }}>
     <ListItem
       leading={onToggleSelected ? selectionLeading : undefined}
       headline={`${(thread.lastMsgMeta.subject || '(no subject)')}${(thread.lastMsgMeta.from ? ' — ' + thread.lastMsgMeta.from : '')}${(thread.lastMsgMeta?.date ? ' • ' + formatDateTime(thread.lastMsgMeta.date) : '')}`}
@@ -325,7 +311,6 @@
     text-align: center;
     box-shadow: var(--m3-util-elevation-1);
   }
-  .pending-wrap { display: inline-flex; align-items: center; gap: 0.5rem; }
   /* Residue Undo button removed in favor of global snackbar per MD3 */
   .fg {
     position: relative;
@@ -333,12 +318,7 @@
     min-width: 0;
   }
   .actions { display:flex; flex-direction: column; gap:0.25rem; align-items:flex-end; }
-  .snooze-menu :global(.m3-container) { padding: 0; }
-  .snooze-menu .list { display:flex; flex-direction: column; gap: 0.125rem; padding: 0.25rem; }
-  .snooze-menu .list :global(button) { justify-content: flex-start; }
-  .snooze-menu .footer { display:flex; justify-content:flex-end; padding: 0.25rem 0.5rem; border-top: 1px solid rgb(var(--m3-scheme-outline-variant)); }
-  .snooze-menu .date-row { display:flex; align-items:center; justify-content:space-between; gap:0.5rem; padding: 0.25rem 0.5rem; }
-  .snooze-menu .date-row input[type="date"] { background: transparent; color: inherit; border: 1px solid rgb(var(--m3-scheme-outline-variant)); border-radius: 0.5rem; padding: 0.25rem 0.5rem; }
+  .snooze-menu :global(.m3-container) { padding: 0.5rem; max-width: 24rem; }
   .leading-checkbox {
     display: inline-flex;
     align-items: center;

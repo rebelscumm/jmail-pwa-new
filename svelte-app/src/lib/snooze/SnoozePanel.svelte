@@ -26,47 +26,52 @@
     onSelect(ruleKey);
   }
 
-  const quickAll = ['10m','30m','1h','2h','3h'];
-  const hoursAll = ['1h','2h','3h','4h','5h','6h','7h'];
-  const daysAll = Array.from({ length: 30 }, (_, i) => `${i+1}d`);
-  const weekdaysAll = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
-  const timesAll = ['6am','2pm','7pm'];
-
+  // Exact list and labels requested; map display labels to rule keys
+  const displayToRule: Record<string, string> = {
+    '1h': '1h', '2h': '2h', '3h': '3h',
+    '2p': '2pm', '6a': '6am', '7p': '7pm',
+    '2d': '2d', '4d': '4d', 'Mon': 'Monday', 'Fri': 'Friday',
+    '7d': '7d', '14d': '14d', '30d': '30d'
+  };
+  const orderedLabels: string[] = ['1h','2h','3h','2p','6a','7p','2d','4d','Mon','Fri','7d','14d','30d'];
   $: mapped = new Set(Object.keys($settings.labelMapping || {}).filter((k) => $settings.labelMapping[k]).map((k) => normalizeRuleKey(k)));
-  function onlyMapped(list: string[]): string[] { return list.filter((k) => mapped.has(k)); }
-  $: quick = onlyMapped(quickAll);
-  $: hours = onlyMapped(hoursAll);
-  $: days = onlyMapped(daysAll);
-  $: weekdays = onlyMapped(weekdaysAll);
-  $: times = onlyMapped(timesAll);
+  function isMappedDisplay(label: string): boolean {
+    try { return mapped.has(normalizeRuleKey(displayToRule[label])); } catch { return false; }
+  }
+
+  function daysFromToday(dateStr: string): number {
+    try {
+      const now = new Date();
+      const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const chosen = new Date(dateStr + 'T00:00:00');
+      const diffMs = chosen.getTime() - startOfToday.getTime();
+      return Math.round(diffMs / 86400000);
+    } catch {
+      return 0;
+    }
+  }
 </script>
 
-<div class="panel">
+<div class="panel" role="menu" aria-label="Snooze options">
   <div class="tabs">
-    {#each ['Quick','Hours','Days','Weekdays','Times','Custom'] as t}
-      <Chip
-        variant="general"
-        selected={activeTab === t}
-        onclick={() => (activeTab = t as any)}
-      >{t}</Chip>
-    {/each}
+    <div class="grid" role="group" aria-label="Snooze presets">
+      {#each orderedLabels as label}
+        {#if isMappedDisplay(label)}
+          <Chip variant="assist" onclick={() => pick(displayToRule[label])} aria-label={`Snooze ${label}`}>{label}</Chip>
+        {/if}
+      {/each}
+    </div>
   </div>
 
-  {#if activeTab==='Quick'}
-    <div class="grid">{#each quick as k}<Chip variant="assist" onclick={() => pick(k)}>{k}</Chip>{/each}</div>
-  {:else if activeTab==='Hours'}
-    <div class="grid">{#each hours as k}<Chip variant="assist" onclick={() => pick(k)}>{k}</Chip>{/each}</div>
-  {:else if activeTab==='Days'}
-    <div class="grid">{#each days as k}<Chip variant="assist" onclick={() => pick(k)}>{k}</Chip>{/each}</div>
-  {:else if activeTab==='Weekdays'}
-    <div class="grid">{#each weekdays as k}<Chip variant="assist" onclick={() => pick(k)}>{k}</Chip>{/each}</div>
-  {:else if activeTab==='Times'}
-    <div class="grid">{#each times as k}<Chip variant="assist" onclick={() => pick(k)}>{k}</Chip>{/each}</div>
-  {:else}
-    <div>
-      <small>Use label buckets or manual mapping in Settings for custom labels.</small>
-    </div>
-  {/if}
+  <div class="picker">
+    <label class="m3-font-body-small" for={`native-date-snooze`}>Pick date</label>
+    <input id={`native-date-snooze`}
+      type="date"
+      min={(new Date(Date.now()+24*60*60*1000)).toISOString().slice(0,10)}
+      max={(new Date(Date.now()+30*24*60*60*1000)).toISOString().slice(0,10)}
+      onchange={(e) => { const v = (e.currentTarget as HTMLInputElement).value; if (v) { const n = daysFromToday(v); if (n >= 1 && n <= 30) pick(`${n}d`); (e.currentTarget as HTMLInputElement).value = ''; } }}
+    />
+  </div>
 
   {#if selectedRule}
     <div class="preview">Next: {preview}</div>
@@ -74,10 +79,10 @@
 </div>
 
 <style>
-  .panel { display:flex; flex-direction:column; gap:0.5rem; padding:0.5rem; min-width: 18rem; }
-  .tabs { display:flex; flex-wrap:wrap; gap:0.25rem; }
-  /* Using MD3 Chip components for tabs; no extra styles needed beyond spacing */
-  .grid { display:grid; grid-template-columns: repeat(5, 1fr); gap:0.25rem; }
+  .panel { display:flex; flex-direction:column; gap:0.5rem; padding:0.25rem; min-width: 18rem; }
+  .tabs { padding: 0 0.25rem; }
+  .grid { display:flex; flex-wrap: wrap; gap:0.25rem; align-items:flex-start; }
+  .picker { display:flex; align-items:center; gap:0.5rem; padding: 0.25rem 0.25rem; }
   /* Grid contains MD3 assist chips */
   .preview { font-size:0.875rem; color: rgb(var(--m3-scheme-on-surface-variant)); }
 </style>

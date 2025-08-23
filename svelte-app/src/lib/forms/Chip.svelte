@@ -41,6 +41,7 @@
   class:selected
   {disabled}
   {...extra}
+  role="menuitem"
 >
   <Layer />
   {#if icon}
@@ -60,7 +61,7 @@
     display: flex;
     height: 2rem;
     border-radius: var(--m3-chip-shape);
-    padding: 0 1rem;
+    padding: 0 0.75rem; /* MD3 assist chip horizontal padding = 12dp */
     gap: 0.5rem;
     align-items: center;
 
@@ -71,6 +72,11 @@
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
     transition: var(--m3-util-easing-fast);
+    outline: none;
+  }
+
+  .m3-container:focus-visible {
+    box-shadow: 0 0 0 3px rgb(var(--m3-scheme-primary) / 0.3);
   }
 
   .m3-container > :global(:is(.ripple-container, .tint)) {

@@ -4,7 +4,7 @@
   let { children }: { children: Snippet } = $props();
 </script>
 
-<div class="m3-container">
+<div class="m3-container" role="menu" aria-orientation="vertical" aria-label="Menu">
   {@render children()}
 </div>
 
@@ -15,9 +15,9 @@
   .m3-container {
     display: flex;
     position: relative;
-    overflow: hidden;
+    overflow: visible; /* allow native pickers/popovers to escape */
     flex-direction: column;
-    padding: 0.5rem 0;
+    padding: 0.5rem 0.5rem; /* MD3 menu container padding */
     border-radius: var(--m3-menu-shape);
     min-width: 7rem;
     max-width: 17.5rem;

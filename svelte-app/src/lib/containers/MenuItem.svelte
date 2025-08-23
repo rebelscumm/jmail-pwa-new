@@ -33,8 +33,8 @@
   .item {
     display: flex;
     align-items: center;
-    height: 3rem;
-    padding: 0 0.75rem;
+    height: 2.75rem; /* MD3 menu item default height */
+    padding: 0 0.875rem; /* 14dp horizontal */
     white-space: nowrap;
 
     border: none;
@@ -45,6 +45,7 @@
     -webkit-tap-highlight-color: transparent;
     cursor: pointer;
   }
+  .item:focus-visible { outline: 2px solid rgb(var(--m3-scheme-primary) / 0.6); outline-offset: -2px; border-radius: var(--m3-util-rounding-extra-small); }
   .icon {
     width: 1.5rem;
     height: 1.5rem;
