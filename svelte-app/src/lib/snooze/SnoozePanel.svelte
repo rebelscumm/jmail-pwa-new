@@ -84,15 +84,18 @@
 </div>
 
 <style>
-  .panel { display:flex; flex-direction:column; gap:0.5rem; padding:0.25rem; min-width: 18rem; }
+  .panel { display:flex; flex-direction:column; gap:0.75rem; padding:0.5rem; min-width: 18rem; }
   .tabs { padding: 0 0.25rem; }
-  .grid { display:flex; flex-wrap: wrap; gap:0.25rem; align-items:flex-start; }
+  .grid { display:flex; flex-wrap: wrap; gap:0.5rem; align-items:flex-start; }
   .picker { display:flex; align-items:center; gap:0.5rem; padding: 0.25rem 0.25rem; position: relative; z-index: 10002; border: 0; pointer-events: auto; }
   .as-link { background: transparent; border: none; color: inherit; padding: 0; cursor: pointer; }
   .picker > input[type="date"] { position: relative; z-index: 10003; }
   .picker > input[type="date"] { background: transparent; color: inherit; border: 1px solid rgb(var(--m3-scheme-outline-variant)); border-radius: 0.5rem; padding: 0.25rem 0.5rem; }
   /* Grid contains MD3 assist chips */
   .preview { font-size:0.875rem; color: rgb(var(--m3-scheme-on-surface-variant)); }
+  @media (max-width: 480px) {
+    .panel { min-width: min(100vw - 1rem, 18rem); }
+  }
 </style>
 
 
