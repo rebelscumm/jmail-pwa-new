@@ -34,7 +34,7 @@
       if (inside) {
         // Keep menu OPEN for general interactions inside the menu, except
         // when an actual action control is activated (buttons/links/menuitems).
-        if (target.closest('.picker, label[for="native-date-snooze"], input[type="date"]')) return;
+        if (target.closest('.picker')) return;
         if (target.closest('button, [role="menuitem"], a[href]')) {
           node.open = false; // selecting a chip/menuitem closes the menu
           return;

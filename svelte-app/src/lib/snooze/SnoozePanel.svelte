@@ -4,6 +4,7 @@
   import { settings } from '$lib/stores/settings';
   import { resolveRule, normalizeRuleKey } from '$lib/snooze/rules';
   import Chip from '$lib/forms/Chip.svelte';
+  import DatePickerDocked from '$lib/forms/DatePickerDocked.svelte';
 
   const { onSelect } = $props<{ onSelect: (ruleKey: string) => void }>();
 
@@ -50,9 +51,30 @@
       return 0;
     }
   }
+
+  function isValidDate(iso: string): boolean {
+    const n = daysFromToday(iso);
+    return n >= 1 && n <= 30;
+  }
+
+  function onDateChosen(iso: string): void {
+    const n = daysFromToday(iso);
+    if (n < 1 || n > 30) return;
+    pick(`${n}d`);
+  }
 </script>
 
 <div class="panel" role="menu" aria-label="Snooze options">
+  <div class="picker" role="group" aria-label="Pick a date">
+    <DatePickerDocked
+      clearable={false}
+      date={''}
+      dateValidator={isValidDate}
+      close={() => {}}
+      setDate={onDateChosen}
+    />
+  </div>
+
   <div class="tabs" role="group" aria-label="Snooze presets">
     <div class="grid" role="group" aria-label="Snooze presets">
       {#each orderedLabels as label}
@@ -63,38 +85,20 @@
     </div>
   </div>
 
-  <div class="picker" role="group" aria-labelledby="native-date-snooze-label">
-    <button type="button" id="native-date-snooze-label" class="m3-font-body-small as-link" onclick={(e) => { e.preventDefault(); e.stopPropagation(); try { (document.getElementById('native-date-snooze') as any)?.showPicker?.(); } catch {} }}>Pick date</button>
-    <input id="native-date-snooze"
-      type="date"
-      min={(new Date(Date.now()+24*60*60*1000)).toISOString().slice(0,10)}
-      max={(new Date(Date.now()+30*24*60*60*1000)).toISOString().slice(0,10)}
-      onclick={(e) => { e.preventDefault(); e.stopPropagation(); const el = e.currentTarget as HTMLInputElement; (el as any).showPicker?.(); }}
-      onpointerdown={(e) => { e.preventDefault(); e.stopPropagation(); }}
-      onpointerup={(e) => { e.preventDefault(); e.stopPropagation(); }}
-      onmousedown={(e) => { e.preventDefault(); e.stopPropagation(); }}
-      onmouseup={(e) => { e.preventDefault(); e.stopPropagation(); }}
-      onchange={(e) => { e.preventDefault(); e.stopPropagation(); const v = (e.currentTarget as HTMLInputElement).value; if (v) { const n = daysFromToday(v); if (n >= 1 && n <= 30) pick(`${n}d`); (e.currentTarget as HTMLInputElement).value = ''; } }}
-    />
-  </div>
-
   {#if selectedRule}
     <div class="preview">Next: {preview}</div>
   {/if}
 </div>
 
 <style>
-  .panel { display:flex; flex-direction:column; gap:0.75rem; padding:0.5rem; min-width: 18rem; }
+  .panel { display:flex; flex-direction:column; gap:0.75rem; padding:0.5rem; min-width: 21rem; }
   .tabs { padding: 0 0.25rem; }
   .grid { display:flex; flex-wrap: wrap; gap:0.5rem; align-items:flex-start; }
-  .picker { display:flex; align-items:center; gap:0.5rem; padding: 0.25rem 0.25rem; position: relative; z-index: 10002; border: 0; pointer-events: auto; }
-  .as-link { background: transparent; border: none; color: inherit; padding: 0; cursor: pointer; }
-  .picker > input[type="date"] { position: relative; z-index: 10003; }
-  .picker > input[type="date"] { background: transparent; color: inherit; border: 1px solid rgb(var(--m3-scheme-outline-variant)); border-radius: 0.5rem; padding: 0.25rem 0.5rem; }
+  .picker { display:flex; align-items:center; justify-content:center; padding: 0.25rem 0.25rem; position: relative; z-index: 10002; border: 0; pointer-events: auto; }
   /* Grid contains MD3 assist chips */
   .preview { font-size:0.875rem; color: rgb(var(--m3-scheme-on-surface-variant)); }
   @media (max-width: 480px) {
-    .panel { min-width: min(100vw - 1rem, 18rem); }
+    .panel { min-width: min(100vw - 1rem, 21rem); }
   }
 </style>
 
