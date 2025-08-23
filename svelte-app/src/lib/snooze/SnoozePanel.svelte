@@ -6,6 +6,10 @@
   import Chip from '$lib/forms/Chip.svelte';
 
   export let onSelect: (ruleKey: string) => void;
+  export let inputId: string = 'native-date-snooze';
+
+  let dateInputEl: HTMLInputElement | null = null;
+  $: labelId = `${inputId}-label`;
 
   let activeTab: 'Quick' | 'Hours' | 'Days' | 'Weekdays' | 'Times' | 'Custom' = 'Quick';
   let preview: string = '';
@@ -63,12 +67,13 @@
     </div>
   </div>
 
-  <div class="picker" role="group" aria-labelledby="native-date-snooze-label">
-    <button type="button" id="native-date-snooze-label" class="m3-font-body-small as-link" onclick={(e) => { e.preventDefault(); e.stopPropagation(); try { (document.getElementById('native-date-snooze') as any)?.showPicker?.(); } catch {} }}>Pick date</button>
-    <input id="native-date-snooze"
+  <div class="picker" role="group" aria-labelledby={labelId}>
+    <button type="button" id={labelId} class="m3-font-body-small as-link" onclick={(e) => { e.preventDefault(); e.stopPropagation(); try { (dateInputEl as any)?.showPicker?.(); } catch {} }}>Pick date</button>
+    <input id={inputId}
       type="date"
       min={(new Date(Date.now()+24*60*60*1000)).toISOString().slice(0,10)}
       max={(new Date(Date.now()+30*24*60*60*1000)).toISOString().slice(0,10)}
+      bind:this={dateInputEl}
       onclick={(e) => { e.preventDefault(); e.stopPropagation(); const el = e.currentTarget as HTMLInputElement; (el as any).showPicker?.(); }}
       onpointerdown={(e) => { e.preventDefault(); e.stopPropagation(); }}
       onpointerup={(e) => { e.preventDefault(); e.stopPropagation(); }}
