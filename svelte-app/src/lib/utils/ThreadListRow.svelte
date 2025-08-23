@@ -391,6 +391,8 @@
     background: transparent;
     min-width: 0;
   }
+  /* Raise stacking context when snooze menu is open */
+  .menu-open .fg { z-index: 10002; }
   .residual {
     position: absolute;
     inset: 0;
@@ -408,6 +410,9 @@
   .snooze-menu .footer { display:flex; justify-content:flex-end; padding: 0.25rem 0.5rem; border-top: 1px solid rgb(var(--m3-scheme-outline-variant)); }
   .snooze-menu .footer :global(svg) { width: 1.25rem; height: 1.25rem; margin-right: 0.25rem; color: rgb(var(--m3-scheme-on-surface-variant)); }
   .snooze-menu .inline-date-picker { padding: 0.5rem; display:flex; justify-content:flex-end; }
+  /* Ensure snooze menu is opaque and above everything */
+  .snooze-menu { z-index: 10000; }
+  .snooze-menu :global(.m3-container) { background-color: rgb(var(--m3-scheme-surface-container-highest)); z-index: 10001; }
   .leading-checkbox {
     display: inline-flex;
     align-items: center;
