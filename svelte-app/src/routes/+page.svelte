@@ -91,6 +91,10 @@
     }
   }
 
+  if (typeof window !== 'undefined') {
+    (window as any).__copyPageDiagnostics = async () => { await copyDiagnostics(); };
+  }
+
   async function enterClientId() {
     try {
       const id = prompt('Enter Google OAuth Client ID (will be saved locally)', CLIENT_ID || '');
@@ -114,7 +118,6 @@
     <Button variant="filled" onclick={connect}>Sign in with Google</Button>
     {#if !ready}
       <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
-        <Button variant="text" onclick={copyDiagnostics}>{copiedDiagOk ? 'Copied!' : 'Copy diagnostics'}</Button>
         <Button variant="outlined" onclick={enterClientId}>Enter client ID</Button>
       </div>
     {/if}

@@ -22,6 +22,8 @@
   import FAB from "$lib/buttons/FAB.svelte";
   import Snackbar from "$lib/containers/Snackbar.svelte";
   import { register as registerSnackbar, show as showSnackbar } from "$lib/containers/snackbar";
+  import PreAuthDialog from "$lib/gmail/PreAuthDialog.svelte";
+  import { registerPreAuth } from "$lib/gmail/preauth";
   import iconCompose from "@ktibow/iconset-material-symbols/edit";
   import BottomSheet from "$lib/containers/BottomSheet.svelte";
   import TextField from "$lib/forms/TextField.svelte";
@@ -195,9 +197,11 @@
   let subject = $state("");
   let body = $state("");
   let snackbar: ReturnType<typeof Snackbar>;
+  let preAuthDialog: ReturnType<typeof PreAuthDialog>;
   let isOffline = $state(false);
 
   $effect(() => { if (snackbar) registerSnackbar(snackbar.show); });
+  $effect(() => { if (preAuthDialog) registerPreAuth(preAuthDialog.show); });
 
   function makeRfc2822(): string {
     const boundary = `----Jmail-${Math.random().toString(36).slice(2)}`;
@@ -268,6 +272,7 @@
       </div>
     {/if}
     <Snackbar bind:this={snackbar} />
+    <PreAuthDialog bind:this={preAuthDialog} />
   </div>
 </div>
 

@@ -100,42 +100,49 @@
   }
 
   // Fallback: if the thread is not present (e.g., deep link to an older thread), try to fetch a summary
-  $effect(async () => {
+  $effect(() => {
     if (currentThread || threadLoading) return;
     if (!threadId) return;
-    threadLoading = true;
-    threadError = null;
-    try {
-      const { thread, messages: metas } = await getThreadSummary(threadId);
-      // Persist to DB and hydrate stores
+    (async () => {
+      // Avoid triggering any auth flow on navigation: only fetch if we already have a token
       try {
-        const db = await getDB();
-        const txMsgs = db.transaction('messages', 'readwrite');
-        for (const m of metas) await txMsgs.store.put(m);
-        await txMsgs.done;
-        const txThreads = db.transaction('threads', 'readwrite');
-        await txThreads.store.put(thread);
-        await txThreads.done;
-      } catch (_) {}
-      // Update stores
-      threads.set([...(Array.isArray($threads) ? $threads : []), thread].reduce((acc, t) => {
-        const idx = acc.findIndex((x) => x.threadId === t.threadId);
-        if (idx >= 0) acc[idx] = t; else acc.push(t);
-        return acc;
-      }, [] as typeof $threads));
-      const dict: Record<string, import('$lib/types').GmailMessage> = { ...$messages };
-      for (const m of metas) dict[m.id] = m;
-      messages.set(dict);
-    } catch (e) {
-      threadError = e instanceof Error ? e.message : String(e);
-      // Best-effort: attach diagnostics
-      void copyDiagnostics('viewer_thread_fallback_failed', undefined, e);
-    } finally {
-      threadLoading = false;
-    }
+        const info = await fetchTokenInfo();
+        if (!info) return; // not authorized in this session; skip remote fetch
+      } catch (_) { return; }
+      threadLoading = true;
+      threadError = null;
+      try {
+        const { thread, messages: metas } = await getThreadSummary(threadId);
+        // Persist to DB and hydrate stores
+        try {
+          const db = await getDB();
+          const txMsgs = db.transaction('messages', 'readwrite');
+          for (const m of metas) await txMsgs.store.put(m);
+          await txMsgs.done;
+          const txThreads = db.transaction('threads', 'readwrite');
+          await txThreads.store.put(thread);
+          await txThreads.done;
+        } catch (_) {}
+        // Update stores
+        threads.set([...(Array.isArray($threads) ? $threads : []), thread].reduce((acc, t) => {
+          const idx = acc.findIndex((x) => x.threadId === t.threadId);
+          if (idx >= 0) acc[idx] = t; else acc.push(t);
+          return acc;
+        }, [] as typeof $threads));
+        const dict: Record<string, import('$lib/types').GmailMessage> = { ...$messages };
+        for (const m of metas) dict[m.id] = m;
+        messages.set(dict);
+      } catch (e) {
+        threadError = e instanceof Error ? e.message : String(e);
+        // Best-effort: attach diagnostics
+        void copyDiagnostics('viewer_thread_fallback_failed', undefined, e);
+      } finally {
+        threadLoading = false;
+      }
+    })();
   });
 
-  // Auto-load the first message's full content
+  // Auto-load the first message's full content (only if body scopes already granted)
   $effect(() => {
     if (!currentThread) return;
     const firstId = currentThread.messageIds?.[0];
@@ -143,21 +150,29 @@
     const m = $messages[firstId];
     if (!m?.bodyText && !m?.bodyHtml && !loadingMap[firstId] && !autoTried[firstId]) {
       autoTried[firstId] = true;
-      loadingMap[firstId] = true;
-      getMessageFull(firstId)
-        .then((full) => { messages.set({ ...$messages, [firstId]: full }); errorMap[firstId] = ''; })
-        .catch((e) => {
-          errorMap[firstId] = e instanceof Error ? e.message : String(e);
-          // eslint-disable-next-line no-console
-          console.error('[Viewer] Failed to auto-load message', firstId, e);
-          void copyDiagnostics('auto_load_failed', firstId, e);
-          // If it's still a permissions problem, surface clipboard copy proactively
-          const msg = e instanceof Error ? e.message : String(e);
-          if (typeof msg === 'string' && msg.toLowerCase().includes('permissions') || msg.toLowerCase().includes('scope')) {
-            void copyDiagnostics('scope_after_upgrade_failed', firstId, e);
-          }
-        })
-        .finally(() => { loadingMap[firstId] = false; });
+      (async () => {
+        // Check current token scopes; if body scopes aren't present, skip auto-fetch
+        let hasBodyScopes = false;
+        try {
+          const info = await fetchTokenInfo();
+          hasBodyScopes = !!info?.scope && (info.scope.includes('gmail.readonly') || info.scope.includes('gmail.modify'));
+        } catch (_) {}
+        if (!hasBodyScopes) return;
+        loadingMap[firstId] = true;
+        getMessageFull(firstId)
+          .then((full) => { messages.set({ ...$messages, [firstId]: full }); errorMap[firstId] = ''; })
+          .catch((e) => {
+            errorMap[firstId] = e instanceof Error ? e.message : String(e);
+            // eslint-disable-next-line no-console
+            console.error('[Viewer] Failed to auto-load message', firstId, e);
+            void copyDiagnostics('auto_load_failed', firstId, e);
+            const msg = e instanceof Error ? e.message : String(e);
+            if (typeof msg === 'string' && msg.toLowerCase().includes('permissions') || msg.toLowerCase().includes('scope')) {
+              void copyDiagnostics('scope_after_upgrade_failed', firstId, e);
+            }
+          })
+          .finally(() => { loadingMap[firstId] = false; });
+      })();
     }
   });
   async function summarize(mid: string) {
@@ -294,7 +309,7 @@
 
     <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
       <Button variant="text" onclick={() => relogin(currentThread.messageIds?.[0])}>Re-login</Button>
-      <Button variant="text" onclick={() => archiveThread(currentThread.threadId).then(()=> showSnackbar({ message: 'Archived', actions: { Undo: () => undoLast(1) } }))}>Archive</Button>
+      <Button variant="text" onclick={() => archiveThread(currentThread.threadId).then(()=> { showSnackbar({ message: 'Archived', actions: { Undo: () => undoLast(1) } }); goto('/inbox'); })}>Archive</Button>
       <Button variant="text" color="error" onclick={() => trashThread(currentThread.threadId).then(()=> { showSnackbar({ message: 'Deleted', actions: { Undo: () => undoLast(1) } }); goto('/inbox'); })}>Delete</Button>
       <Button variant="text" onclick={() => spamThread(currentThread.threadId).then(()=> showSnackbar({ message: 'Marked as spam', actions: { Undo: () => undoLast(1) } }))}>Spam</Button>
       {#if isSnoozedThread(currentThread)}

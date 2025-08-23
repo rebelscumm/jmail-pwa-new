@@ -171,10 +171,17 @@
   async function doCopyDiagnostics() {
     try {
       const w = typeof window !== 'undefined' ? (window as any) : undefined;
-      if (w && typeof w.__copyViewerDiagnostics === 'function') {
-        await w.__copyViewerDiagnostics();
-        showSnackbar({ message: 'Diagnostics copied', closable: true });
-        return;
+      if (w) {
+        if (typeof w.__copyPageDiagnostics === 'function') {
+          await w.__copyPageDiagnostics();
+          showSnackbar({ message: 'Diagnostics copied', closable: true });
+          return;
+        }
+        if (typeof w.__copyViewerDiagnostics === 'function') {
+          await w.__copyViewerDiagnostics();
+          showSnackbar({ message: 'Diagnostics copied', closable: true });
+          return;
+        }
       }
     } catch (_) {}
     const ok = await copyGmailDiagnosticsToClipboard({ reason: 'topbar_manual_copy' });
@@ -189,6 +196,8 @@
         <Icon icon={iconBack} />
       </Button>
     {/if}
+  </div>
+  <div class="right">
     <SplitButton variant="filled" x="inner" y="down" onclick={() => doUndo(1)} on:toggle={(e) => { if (e.detail) refreshUndo(); }}>
       {#snippet children()}
         <Icon icon={iconUndo} />
@@ -228,20 +237,16 @@
         </div>
       {/snippet}
     </SplitButton>
-  </div>
-  <div class="right">
+
     <div class="search-field">
       <TextField label="Search" leadingIcon={iconSearch} bind:value={search} enter={() => { import('$lib/stores/search').then(m => m.searchQuery.set(search)); }} trailing={{ icon: iconSearch, onclick: () => { import('$lib/stores/search').then(m => m.searchQuery.set(search)); } }} />
     </div>
     <Button variant="outlined" iconType="left" onclick={doSync}>
       {#snippet children()}
         <Icon icon={iconSync} />
-        <span class="label">
-          {#if $syncState.pendingOps > 0}
-            {$syncState.pendingOps} pending
-          {/if}
-        </span>
-        {#if !$syncState.pendingOps}
+        {#if $syncState.pendingOps > 0}
+          <span class="label">{$syncState.pendingOps} pending</span>
+        {:else}
           <span class="last-sync m3-font-label-small">{formatLastSync($syncState.lastUpdatedAt)}</span>
         {/if}
       {/snippet}
@@ -285,6 +290,7 @@
     flex-wrap: wrap;
   }
   .left, .right { display: flex; align-items: center; gap: 0.5rem; }
+  .right { flex-wrap: wrap; min-width: 0; }
   .label { margin-inline-start: 0.25rem; }
   .search-field { flex: 1 1 12rem; min-width: 0; }
   .search-field :global(.m3-container) {
@@ -295,7 +301,7 @@
   .overflow > summary { list-style: none; }
   .summary-btn { cursor: pointer; }
   .overflow[open] > :global(.m3-container) { position:absolute; right:0; margin-top:0.25rem; }
-  .last-sync { color: rgb(var(--m3-scheme-on-surface-variant)); margin-inline-start: 0.25rem; }
+  .last-sync { color: rgb(var(--m3-scheme-on-surface-variant)); margin-inline-start: 0; }
   .about { display:flex; flex-direction:column; gap:0.5rem; }
   .about .row { display:flex; justify-content:space-between; gap:1rem; }
   .about .k { color: rgb(var(--m3-scheme-on-surface-variant)); }

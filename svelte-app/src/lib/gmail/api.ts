@@ -191,36 +191,15 @@ export async function getMessageFull(id: string): Promise<GmailMessage> {
     const msg = e instanceof Error ? e.message : String(e);
     const isScopeOrPermission = e instanceof GmailApiError && e.status === 403 && typeof msg === 'string' && (msg.toLowerCase().includes('metadata scope') || msg.toLowerCase().includes('insufficient') || msg.toLowerCase().includes('permission'));
     if (isScopeOrPermission) {
-      pushGmailDiag({ type: 'scope_upgrade_needed', id, error: msg });
-      let attemptUpgrade = true;
+      // Do NOT attempt an automatic interactive scope upgrade here.
+      // Surface a consistent error so the UI can offer a "Grant access" button.
       try {
         const before = await fetchTokenInfo();
         const hasBodyScopes = !!before?.scope && (before.scope.includes('gmail.readonly') || before.scope.includes('gmail.modify'));
         pushGmailDiag({ type: 'tokeninfo_snapshot', id, tokenInfo: before, hasBodyScopes });
-        if (hasBodyScopes) attemptUpgrade = false;
       } catch (_) {}
-      if (attemptUpgrade) {
-        // Attempt an automatic scope upgrade and retry once
-        try {
-          const upgraded = await acquireTokenForScopes(SCOPES, 'consent', 'auto_scope_upgrade_getMessageFull');
-          pushGmailDiag({ type: 'scope_upgrade_attempt', id, upgraded });
-          if (upgraded) {
-            data = await api<GmailMessageApiResponse>(`/messages/${id}?format=full`);
-          }
-        } catch (uerr) {
-          pushGmailDiag({ type: 'scope_upgrade_failed', id, error: uerr instanceof Error ? uerr.message : String(uerr) });
-        }
-      } else {
-        pushGmailDiag({ type: 'scope_upgrade_skipped', id, reason: 'body_scopes_already_present' });
-      }
-      if (!data) {
-        // Do NOT auto-prompt further. Surface a consistent error that the UI can handle.
-        const reason = attemptUpgrade ? 'scope_upgrade_required' : 'scope_present_but_denied';
-        const message = attemptUpgrade
-          ? 'Additional Gmail permissions are required to read this message body. Please grant access.'
-          : 'Gmail returned 403 despite body scopes being present. Please retry once, or re-login.';
-        throw new GmailApiError(message, 403, { reason, id });
-      }
+      pushGmailDiag({ type: 'scope_upgrade_needed', id, error: msg, autoPromptSuppressed: true });
+      throw new GmailApiError('Additional Gmail permissions are required to read this message body. Please grant access.', 403, { reason: 'scope_upgrade_required', id });
     } else {
       throw e;
     }

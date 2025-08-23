@@ -37,6 +37,20 @@
   $effect(() => { const id = setTimeout(() => debouncedQuery = $searchQuery, 300); return () => clearTimeout(id); });
   let now = $state(Date.now());
   onMount(() => { const id = setInterval(() => { now = Date.now(); }, 250); return () => clearInterval(id); });
+  // Temporarily lock interactions during coordinated collapses
+  let listLocked = $state(false);
+  onMount(() => {
+    const handler = (ev: Event) => {
+      try {
+        const e = ev as CustomEvent<{ ms?: number }>;
+        const ms = Math.max(0, Math.min(1000, (e.detail?.ms ?? 400)));
+        listLocked = true;
+        setTimeout(() => { listLocked = false; }, ms);
+      } catch {}
+    };
+    window.addEventListener('jmail:listLock', handler as EventListener);
+    return () => window.removeEventListener('jmail:listLock', handler as EventListener);
+  });
   const inboxThreads = $derived(($threadsStore || []).filter((t) => {
     const inInbox = (t.labelIds || []).includes('INBOX');
     const held = (($trailingHolds || {})[t.threadId] || 0) > now;
@@ -69,6 +83,30 @@
       selectedMap = {};
     }
   }
+  function isEventFromTextInput(e: KeyboardEvent): boolean {
+    const t = e.target as HTMLElement | null;
+    if (!t) return false;
+    const tag = (t.tagName || '').toLowerCase();
+    const editable = (t as any).isContentEditable;
+    return tag === 'input' || tag === 'textarea' || editable;
+  }
+  function onKeyDown(e: KeyboardEvent) {
+    if (isEventFromTextInput(e)) return;
+    if (e.key === 'Delete') {
+      if (selectedCount > 0) {
+        if ($settings.confirmDelete) {
+          if (!confirm(`Delete ${selectedCount} conversation(s)?`)) return;
+        }
+        void bulkDelete();
+      }
+    } else if (e.key === 'e' || e.key === 'E') {
+      if (selectedCount > 0) {
+        void bulkArchive();
+      }
+    } else if (e.key === 'z' || e.key === 'Z') {
+      void undoLast(1);
+    }
+  }
   async function bulkArchive() {
     const ids = Object.keys(selectedMap);
     if (!ids.length) return;
@@ -86,9 +124,13 @@
   async function bulkSnooze(ruleKey: string) {
     const ids = Object.keys(selectedMap);
     if (!ids.length) return;
-    for (const id of ids) await snoozeThreadByRule(id, ruleKey, { optimisticLocal: false });
+    // Dispatch a group slide event to animate all visible selected items simultaneously
+    try {
+      window.dispatchEvent(new CustomEvent('jmail:groupSlide', { detail: { action: 'snooze', ids, ruleKey } }));
+    } catch (_) {}
+    for (const id of ids) await snoozeThreadByRule(id, ruleKey, { optimisticLocal: true });
     selectedMap = {};
-    showSnackbar({ message: `Snoozed ${ruleKey}`, actions: { Undo: () => undoLast(ids.length) } });
+    showSnackbar({ message: `Snoozed ${ids.length} • ${ruleKey}`, actions: { Undo: () => undoLast(ids.length) } });
   }
   const totalThreadsCount = $derived($threadsStore?.length || 0);
   let inboxLabelStats = $state<{ messagesTotal?: number; messagesUnread?: number; threadsTotal?: number; threadsUnread?: number } | null>(null);
@@ -140,10 +182,18 @@
   export async function reloadFromCache() {
     const db = await getDB();
     const cachedThreads = await db.getAll('threads');
-    if (cachedThreads?.length) threadsStore.set(cachedThreads);
+    if (cachedThreads?.length) {
+      const current = $threadsStore || [];
+      const merged = [...current, ...cachedThreads].reduce((acc, t) => {
+        const idx = acc.findIndex((x) => x.threadId === t.threadId);
+        if (idx >= 0) acc[idx] = t; else acc.push(t);
+        return acc;
+      }, [] as typeof current);
+      threadsStore.set(merged);
+    }
     const cachedMessages = await db.getAll('messages');
     if (cachedMessages?.length) {
-      const dict: Record<string, import('$lib/types').GmailMessage> = {};
+      const dict: Record<string, import('$lib/types').GmailMessage> = { ...$messagesStore };
       for (const m of cachedMessages) dict[m.id] = m;
       messagesStore.set(dict);
     }
@@ -197,7 +247,8 @@
     window.addEventListener('jmail:refresh', handleGlobalRefresh);
     // Expose for debugging/manual trigger
     try { (window as any).__jmailRefresh = () => window.dispatchEvent(new CustomEvent('jmail:refresh')); } catch {}
-    return () => { window.removeEventListener('jmail:refresh', handleGlobalRefresh); unsub(); };
+    window.addEventListener('keydown', onKeyDown);
+    return () => { window.removeEventListener('jmail:refresh', handleGlobalRefresh); window.removeEventListener('keydown', onKeyDown); unsub(); };
   });
 
   function setApiError(e: unknown) {
@@ -242,10 +293,23 @@
     const cachedLabels = await db.getAll('labels');
     if (cachedLabels?.length) { labelsStore.set(cachedLabels); hasCached = true; }
     const cachedThreads = await db.getAll('threads');
-    if (cachedThreads?.length) { threadsStore.set(cachedThreads); hasCached = true; }
+    if (cachedThreads?.length) {
+      const current = $threadsStore || [];
+      if (current.length === 0) {
+        threadsStore.set(cachedThreads);
+      } else {
+        const merged = [...current, ...cachedThreads].reduce((acc, t) => {
+          const idx = acc.findIndex((x) => x.threadId === t.threadId);
+          if (idx >= 0) acc[idx] = t; else acc.push(t);
+          return acc;
+        }, [] as typeof current);
+        threadsStore.set(merged);
+      }
+      hasCached = true;
+    }
     const cachedMessages = await db.getAll('messages');
     if (cachedMessages?.length) {
-      const dict: Record<string, import('$lib/types').GmailMessage> = {};
+      const dict: Record<string, import('$lib/types').GmailMessage> = { ...$messagesStore };
       for (const m of cachedMessages) dict[m.id] = m;
       messagesStore.set(dict);
       hasCached = true;
@@ -304,8 +368,14 @@
     const txThreads = db.transaction('threads', 'readwrite');
     for (const t of threadList) await txThreads.store.put(t);
     await txThreads.done;
-    threadsStore.set(threadList);
-    const msgDict: Record<string, import('$lib/types').GmailMessage> = {};
+    const current = $threadsStore || [];
+    const merged = [...current, ...threadList].reduce((acc, t) => {
+      const idx = acc.findIndex((x) => x.threadId === t.threadId);
+      if (idx >= 0) acc[idx] = t; else acc.push(t);
+      return acc;
+    }, [] as typeof current);
+    threadsStore.set(merged);
+    const msgDict: Record<string, import('$lib/types').GmailMessage> = { ...$messagesStore };
     for (const m of msgs) msgDict[m.id] = m;
     messagesStore.set(msgDict);
   }
@@ -393,6 +463,10 @@
     }
   }
 
+  if (typeof window !== 'undefined') {
+    (window as any).__copyPageDiagnostics = async () => { await copyDiagnostics(); };
+  }
+
   async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
     const results: R[] = new Array(items.length);
     let idx = 0;
@@ -415,9 +489,6 @@
 {#if loading}
   <div style="display:grid; place-items:center; height:70vh;">
     <LoadingIndicator />
-    <div style="margin-top:0.75rem;">
-      <Button variant="text" onclick={copyDiagnostics}>{copiedDiagOk ? 'Copied!' : 'Copy diagnostics'}</Button>
-    </div>
   </div>
 {:else}
   {#if apiErrorStatus === 403}
@@ -428,7 +499,6 @@
         <p class="m3-font-body-small" style="margin:0.5rem 0 0; color:rgb(var(--m3-scheme-error))">{apiErrorMessage}</p>
       {/if}
       <div style="display:flex; gap:0.5rem; justify-content:flex-end; margin-top:0.75rem;">
-        <Button variant="text" onclick={copyDiagnostics}>{copiedDiagOk ? 'Copied!' : 'Copy diagnostics'}</Button>
         <Button variant="text" href="https://myaccount.google.com/permissions">Review permissions</Button>
         <Button variant="filled" onclick={signIn}>Sign in with Google</Button>
       </div>
@@ -450,7 +520,6 @@
       <Chip variant="general" icon={iconInbox} disabled title="Inbox threads" onclick={() => {}}>{inboxCount}</Chip>
       <Chip variant="general" icon={iconMarkEmailUnread} disabled title="Unread threads" onclick={() => {}}>{unreadCount}</Chip>
       <Chip variant="general" icon={iconSnooze} disabled title="Snoozed due in 24h" onclick={() => {}}>{soonSnoozedCount}</Chip>
-      <Button variant="text" onclick={copyDiagnostics}>{copiedDiagOk ? 'Copied!' : 'Copy diagnostics'}</Button>
       <Button variant="outlined" disabled={!nextPageToken || syncing} onclick={loadMore}>
         {#if syncing}
           Loading…
@@ -492,21 +561,22 @@
         <p class="m3-font-body-medium" style="margin:0; color:rgb(var(--m3-scheme-on-surface-variant))">If you just connected your account, try reloading or copying diagnostics to share.</p>
       {/if}
       <div style="display:flex; gap:0.5rem; justify-content:flex-end; margin-top:0.75rem;">
-        <Button variant="text" onclick={copyDiagnostics}>{copiedDiagOk ? 'Copied!' : 'Copy diagnostics'}</Button>
         {#if debouncedQuery}
           <Button variant="outlined" onclick={() => { import('$lib/stores/search').then(m=>m.searchQuery.set('')); }}>Clear search</Button>
         {/if}
       </div>
     </Card>
   {/if}
-  <div style="height:70vh">
-    <VirtualList items={visibleThreads} rowHeight={88} getKey={(t) => t.threadId}>
+  <div class="inbox-list-wrap" class:locked={listLocked} style="height:70vh">
+    <VirtualList items={visibleThreads} rowHeight={88} getKey={(t: import('$lib/types').GmailThread) => t.threadId} persistKey="inbox:threads">
       {#snippet children(item: import('$lib/types').GmailThread)}
-      <ThreadListRow thread={item} selected={!!selectedMap[item.threadId]} onToggleSelected={(next) => toggleSelectThread(item.threadId, next)} />
+      <ThreadListRow thread={item} />
       {/snippet}
     </VirtualList>
   </div>
 {/if}
 
-<style></style>
+<style>
+  .inbox-list-wrap.locked { pointer-events: none; }
+</style>
 

@@ -53,7 +53,7 @@
 </script>
 
 <div class="panel" role="menu" aria-label="Snooze options">
-  <div class="tabs">
+  <div class="tabs" role="group" aria-label="Snooze presets">
     <div class="grid" role="group" aria-label="Snooze presets">
       {#each orderedLabels as label}
         {#if isMappedDisplay(label)}
@@ -63,13 +63,18 @@
     </div>
   </div>
 
-  <div class="picker">
-    <label class="m3-font-body-small" for={`native-date-snooze`}>Pick date</label>
-    <input id={`native-date-snooze`}
+  <div class="picker" role="group" aria-labelledby="native-date-snooze-label">
+    <button type="button" id="native-date-snooze-label" class="m3-font-body-small as-link" onclick={(e) => { e.preventDefault(); e.stopPropagation(); try { (document.getElementById('native-date-snooze') as any)?.showPicker?.(); } catch {} }}>Pick date</button>
+    <input id="native-date-snooze"
       type="date"
       min={(new Date(Date.now()+24*60*60*1000)).toISOString().slice(0,10)}
       max={(new Date(Date.now()+30*24*60*60*1000)).toISOString().slice(0,10)}
-      onchange={(e) => { const v = (e.currentTarget as HTMLInputElement).value; if (v) { const n = daysFromToday(v); if (n >= 1 && n <= 30) pick(`${n}d`); (e.currentTarget as HTMLInputElement).value = ''; } }}
+      onclick={(e) => { e.preventDefault(); e.stopPropagation(); const el = e.currentTarget as HTMLInputElement; (el as any).showPicker?.(); }}
+      onpointerdown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+      onpointerup={(e) => { e.preventDefault(); e.stopPropagation(); }}
+      onmousedown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+      onmouseup={(e) => { e.preventDefault(); e.stopPropagation(); }}
+      onchange={(e) => { e.preventDefault(); e.stopPropagation(); const v = (e.currentTarget as HTMLInputElement).value; if (v) { const n = daysFromToday(v); if (n >= 1 && n <= 30) pick(`${n}d`); (e.currentTarget as HTMLInputElement).value = ''; } }}
     />
   </div>
 
@@ -82,7 +87,9 @@
   .panel { display:flex; flex-direction:column; gap:0.5rem; padding:0.25rem; min-width: 18rem; }
   .tabs { padding: 0 0.25rem; }
   .grid { display:flex; flex-wrap: wrap; gap:0.25rem; align-items:flex-start; }
-  .picker { display:flex; align-items:center; gap:0.5rem; padding: 0.25rem 0.25rem; position: relative; z-index: 3; }
+  .picker { display:flex; align-items:center; gap:0.5rem; padding: 0.25rem 0.25rem; position: relative; z-index: 10002; border: 0; pointer-events: auto; }
+  .as-link { background: transparent; border: none; color: inherit; padding: 0; cursor: pointer; }
+  .picker > input[type="date"] { position: relative; z-index: 10003; }
   .picker > input[type="date"] { background: transparent; color: inherit; border: 1px solid rgb(var(--m3-scheme-outline-variant)); border-radius: 0.5rem; padding: 0.25rem 0.5rem; }
   /* Grid contains MD3 assist chips */
   .preview { font-size:0.875rem; color: rgb(var(--m3-scheme-on-surface-variant)); }

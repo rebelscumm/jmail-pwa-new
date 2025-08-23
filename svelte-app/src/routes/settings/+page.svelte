@@ -32,6 +32,12 @@
   let _taskFilePath = '';
   let _trailingRefreshDelayMs = 5000;
   let _trailingSlideOutDurationMs = 260;
+  let importMappingInput: HTMLInputElement | null = null;
+  let _swipeRightPrimary: 'archive' | 'delete' = 'archive';
+  let _swipeLeftPrimary: 'archive' | 'delete' = 'delete';
+  let _confirmDelete = false;
+  let _swipeCommitVelocityPxPerSec = 1000;
+  let _swipeDisappearMs = 5000;
   let backups: { key: string; createdAt: number }[] = [];
   // Human-friendly mapping UI state
   let uiMapping: Record<string, string> = {};
@@ -65,6 +71,11 @@
     _taskFilePath = s.taskFilePath || '';
     _trailingRefreshDelayMs = Number(s.trailingRefreshDelayMs || 5000);
     _trailingSlideOutDurationMs = Number((s as any).trailingSlideOutDurationMs || 260);
+    _swipeRightPrimary = (s.swipeRightPrimary || 'archive') as any;
+    _swipeLeftPrimary = (s.swipeLeftPrimary || 'delete') as any;
+    _confirmDelete = !!s.confirmDelete;
+    _swipeCommitVelocityPxPerSec = Number(s.swipeCommitVelocityPxPerSec || 1000);
+    _swipeDisappearMs = Number(s.swipeDisappearMs || 5000);
     mappingJson = JSON.stringify(s.labelMapping, null, 2);
     uiMapping = { ...s.labelMapping };
 
@@ -164,7 +175,7 @@
   }
 
   async function saveAppSettings() {
-    await updateAppSettings({ anchorHour: _anchorHour, roundMinutes: _roundMinutes, unreadOnUnsnooze: _unreadOnUnsnooze, notifEnabled: _notifEnabled, aiProvider: _aiProvider, aiApiKey: _aiApiKey, aiModel: _aiModel, aiPageFetchOptIn: _aiPageFetchOptIn, taskFilePath: _taskFilePath, trailingRefreshDelayMs: Math.max(0, Number(_trailingRefreshDelayMs || 0)), trailingSlideOutDurationMs: Math.max(0, Number(_trailingSlideOutDurationMs || 0)) });
+    await updateAppSettings({ anchorHour: _anchorHour, roundMinutes: _roundMinutes, unreadOnUnsnooze: _unreadOnUnsnooze, notifEnabled: _notifEnabled, aiProvider: _aiProvider, aiApiKey: _aiApiKey, aiModel: _aiModel, aiPageFetchOptIn: _aiPageFetchOptIn, taskFilePath: _taskFilePath, trailingRefreshDelayMs: Math.max(0, Number(_trailingRefreshDelayMs || 0)), trailingSlideOutDurationMs: Math.max(0, Number(_trailingSlideOutDurationMs || 0)), swipeRightPrimary: _swipeRightPrimary, swipeLeftPrimary: _swipeLeftPrimary, confirmDelete: _confirmDelete, swipeCommitVelocityPxPerSec: Math.max(100, Number(_swipeCommitVelocityPxPerSec || 1000)), swipeDisappearMs: Math.max(100, Number(_swipeDisappearMs || 800)) });
     if (_notifEnabled && 'Notification' in window) {
       const p = await Notification.requestPermission();
       if (p !== 'granted') {
@@ -231,6 +242,52 @@
         <Switch bind:checked={_notifEnabled} />
         <span class="m3-font-body-medium">Notifications enabled</span>
       </label>
+      <div>
+        <div class="m3-font-body-medium" style="margin-bottom:0.25rem;">Swipe right primary</div>
+        <div style="display:flex; gap:1rem; align-items:center;">
+          <label style="display:flex; align-items:center; gap:0.5rem;">
+            <Radio>
+              <input type="radio" name="swipeRightPrimary" value="archive" bind:group={_swipeRightPrimary} />
+            </Radio>
+            <span class="m3-font-body-medium">Archive</span>
+          </label>
+          <label style="display:flex; align-items:center; gap:0.5rem;">
+            <Radio>
+              <input type="radio" name="swipeRightPrimary" value="delete" bind:group={_swipeRightPrimary} />
+            </Radio>
+            <span class="m3-font-body-medium">Delete</span>
+          </label>
+        </div>
+      </div>
+      <div>
+        <div class="m3-font-body-medium" style="margin-bottom:0.25rem;">Swipe left primary</div>
+        <div style="display:flex; gap:1rem; align-items:center;">
+          <label style="display:flex; align-items:center; gap:0.5rem;">
+            <Radio>
+              <input type="radio" name="swipeLeftPrimary" value="archive" bind:group={_swipeLeftPrimary} />
+            </Radio>
+            <span class="m3-font-body-medium">Archive</span>
+          </label>
+          <label style="display:flex; align-items:center; gap:0.5rem;">
+            <Radio>
+              <input type="radio" name="swipeLeftPrimary" value="delete" bind:group={_swipeLeftPrimary} />
+            </Radio>
+            <span class="m3-font-body-medium">Delete</span>
+          </label>
+        </div>
+      </div>
+      <div>
+        <TextFieldOutlined label="Commit velocity (px/s)" type="number" min="200" step="50" bind:value={(_swipeCommitVelocityPxPerSec as any)} />
+      </div>
+      <div>
+        <TextFieldOutlined label="Swipe disappear (ms)" type="number" min="100" step="50" bind:value={(_swipeDisappearMs as any)} />
+      </div>
+      <label style="display:flex; align-items:center; gap:0.5rem;">
+        <Checkbox>
+          <input type="checkbox" bind:checked={_confirmDelete} />
+        </Checkbox>
+        <span class="m3-font-body-medium">Confirm before delete</span>
+      </label>
     </div>
     <fieldset style="margin-top:0.75rem; border:1px solid var(--m3-outline-variant); padding:0.5rem; border-radius:0.5rem;">
       <legend>AI</legend>
@@ -261,8 +318,10 @@
         <TextFieldOutlined label="API Key" type="password" bind:value={_aiApiKey} placeholder="sk-..." />
         <TextFieldOutlined label="Model" bind:value={_aiModel} placeholder="gpt-4o-mini / claude-3-haiku / gemini-1.5-flash" />
         <label style="display:flex; align-items:center; gap:0.5rem;">
-          <input type="checkbox" bind:checked={_aiPageFetchOptIn} />
-          <Checkbox>Allow page fetch for link-only emails</Checkbox>
+          <Checkbox>
+            <input type="checkbox" bind:checked={_aiPageFetchOptIn} />
+          </Checkbox>
+          <span class="m3-font-body-medium">Allow page fetch for link-only emails</span>
         </label>
       </div>
     </fieldset>
@@ -287,9 +346,12 @@
     <Button variant="filled" onclick={saveMapping}>Save</Button>
     <span>{info}</span>
     <Button variant="text" onclick={() => navigator.clipboard.writeText(mappingJson)}>Copy</Button>
-    <input type="file" accept="application/json" on:change={(e)=>{
+    <Button variant="outlined" onclick={() => importMappingInput?.click()}>Import JSON</Button>
+    <input bind:this={importMappingInput} type="file" accept="application/json" style="display:none" on:change={(e)=>{
       const input = e.currentTarget as HTMLInputElement;
       const file=input.files?.[0]; if(!file) return; file.text().then((t: string)=>mappingJson=t);
+      // reset value so selecting same file again still triggers change
+      input.value = '';
     }} />
     <Button variant="outlined" onclick={seedMapping}>Seed defaults</Button>
   </div>

@@ -1,7 +1,6 @@
 <script lang="ts">
   import ListItem from '$lib/containers/ListItem.svelte';
   import Button from '$lib/buttons/Button.svelte';
-  import SplitButton from '$lib/buttons/SplitButton.svelte';
   import Menu from '$lib/containers/Menu.svelte';
   import { archiveThread, trashThread, undoLast } from '$lib/queue/intents';
   import { snoozeThreadByRule, manualUnsnoozeThread, isSnoozedThread } from '$lib/snooze/actions';
@@ -12,6 +11,13 @@
   import { DEFAULTS, normalizeRuleKey, resolveRule } from '$lib/snooze/rules';
   import { holdThread } from '$lib/stores/holds';
   import SnoozePanel from '$lib/snooze/SnoozePanel.svelte';
+  import { lastSelectedSnoozeRuleKey } from '$lib/stores/snooze';
+  import Icon from '$lib/misc/_icon.svelte';
+  import iconExpand from '@ktibow/iconset-material-symbols/keyboard-arrow-down';
+  import iconArchive from '@ktibow/iconset-material-symbols/archive';
+  import iconDelete from '@ktibow/iconset-material-symbols/delete';
+  import iconSnooze from '@ktibow/iconset-material-symbols/snooze';
+  import { onMount } from 'svelte';
 
   // Lazy import to avoid circular or route coupling; fallback no-op if route not mounted
   async function scheduleReload() {
@@ -26,18 +32,59 @@
     } catch (_) {}
   }
 
-  let { thread, selected = false, onToggleSelected = undefined }: { thread: import('$lib/types').GmailThread; selected?: boolean; onToggleSelected?: ((next: boolean, ev: Event) => void) | undefined } = $props();
+  let { thread, selected = false, selectionActive = false, onToggleSelected = undefined }: { thread: import('$lib/types').GmailThread; selected?: boolean; selectionActive?: boolean; onToggleSelected?: ((next: boolean, ev: Event) => void) | undefined } = $props();
 
   let dx = $state(0);
   let startX = $state(0);
+  let startY = $state(0);
   let dragging = $state(false);
   let animating = $state(false);
   let captured = $state(false);
   let downInInteractive = $state(false);
   let startTarget: HTMLElement | null = null;
   let snoozeMenuOpen = $state(false);
+  let rowEl: HTMLDivElement | null = null;
+  let containerEl: HTMLDivElement | null = null;
+  let width = $state(320);
+  let rowHeightPx: number | null = $state(null);
+  let lastMoveAt = $state(0);
+  let lastMoveX = $state(0);
+  let vx = $state(0); // px/s
+  let isHorizontal = $state(false);
+  let committed = $state(false);
+  let exiting = $state(false);
+  let collapsing = $state(false);
+  let crossedHint = $state(false);
+  let crossedCommit = $state(false);
   let mappedKeys = $derived(Array.from(new Set(Object.keys($settings.labelMapping || {}).filter((k) => $settings.labelMapping[k]).map((k) => normalizeRuleKey(k)))));
   let defaultSnoozeKey = $derived(mappedKeys.includes('1h') ? '1h' : (mappedKeys[0] || null));
+  const commitVelocity = $derived(Math.max(100, Number($settings.swipeCommitVelocityPxPerSec || 1000)));
+  const disappearMs = $derived(Math.max(100, Number($settings.swipeDisappearMs || 5000)));
+  const rightPrimary = $derived(($settings.swipeRightPrimary || 'archive') as 'archive' | 'delete');
+  const leftPrimary = $derived(($settings.swipeLeftPrimary || 'delete') as 'archive' | 'delete');
+  const confirmDelete = $derived(!!$settings.confirmDelete);
+  // Track last committed action for contextual Undo label
+  let lastCommittedAction: { type: 'archive' | 'delete' | 'snooze'; ruleKey?: string } | null = $state(null);
+
+  function formatUndoLabel(): string {
+    const a = lastCommittedAction;
+    if (!a) return 'action';
+    if (a.type === 'snooze') {
+      return `snooze${a.ruleKey ? ' ' + a.ruleKey : ''}`;
+    }
+    return a.type;
+  }
+
+  function cancelGlobalDisappearTimer(): void {
+    try {
+      const w = window as any;
+      if (w.__jmailDisappearTimer) {
+        clearTimeout(w.__jmailDisappearTimer);
+        w.__jmailDisappearTimer = null;
+      }
+    } catch {}
+  }
+
 
   function isMapped(key: string): boolean {
     try { return mappedKeys.includes(normalizeRuleKey(key)); } catch { return false; }
@@ -50,6 +97,19 @@
     if (d === 'mon') return 'Monday';
     if (d === 'fri') return 'Friday';
     return display;
+  }
+  function incrementSnoozeKey(baseKey: string): string {
+    try {
+      const k = normalizeRuleKey(baseKey);
+      if (k === '30d') return '1h';
+      const m = k.match(/^(\d+)([hd])$/);
+      if (!m) return '1h';
+      const n = Math.max(0, parseInt(m[1], 10)) + 1;
+      const unit = m[2];
+      return `${n}${unit}`;
+    } catch {
+      return '1h';
+    }
   }
   async function trySnooze(key: string): Promise<void> {
     const k = normalizeRuleKey(key);
@@ -81,24 +141,80 @@
     await animateAndSnooze(key, 'Snoozed');
   }
 
-  // Unified slide-out performer used by all trailing actions (restore original behavior)
-  async function animateAndPerform(label: string, doIt: () => Promise<void>, _isError = false): Promise<void> {
-    animating = true;
-    dx = 160;
-    await new Promise((r) => setTimeout(r, 150));
-    // Place a hold to keep the thread visible until the user-configured delay elapses
+  // Haptics (if available)
+  function haptic(kind: 'light' | 'medium' | 'heavy'): void {
     try {
-      const delay = Math.max(0, Number($settings.trailingRefreshDelayMs || 5000));
-      holdThread(thread.threadId, delay);
+      const nav = navigator as any;
+      const patterns = { light: [10], medium: [15], heavy: [25] };
+      if (nav?.vibrate) nav.vibrate(patterns[kind]);
     } catch {}
-    await doIt();
-    // Return the row to its resting position; rely on snackbar for Undo per MD3
-    dx = 0;
-    await new Promise((r) => setTimeout(r, 150));
-    animating = false;
-    showSnackbar({ message: label, actions: { Undo: () => undoLast(1) } });
-    // Schedule a reload to refresh list after trailing action
-    scheduleReload();
+  }
+
+  function primaryFor(dx: number): 'archive' | 'delete' {
+    return dx >= 0 ? rightPrimary : leftPrimary;
+  }
+
+  function actionLabel(a: 'archive' | 'delete'): string { return a === 'archive' ? 'Archive' : 'Delete'; }
+
+  // Global disappear coordinator
+  function startGlobalDisappearTimer(ms: number): void {
+    try {
+      const w = window as any;
+      if (w.__jmailDisappearTimer) return;
+      w.__jmailDisappearTimer = setTimeout(() => {
+        try { w.__jmailDisappearTimer = null; } catch {}
+        window.dispatchEvent(new CustomEvent('jmail:disappearNow'));
+      }, ms);
+    } catch {}
+  }
+
+  // Commit animation + optimistic operation; collapse deferred by global timer
+  type CommitOpts = { suppressSnackbar?: boolean; suppressReload?: boolean; forceDirection?: 1 | -1; ruleKey?: string; perform?: boolean };
+  async function commitAction(action: 'archive' | 'delete' | 'snooze', opts?: CommitOpts): Promise<void> {
+    if (committed) return;
+    if (action === 'delete' && confirmDelete) {
+      if (!confirm('Delete this conversation?')) return;
+    }
+    committed = true;
+    exiting = true;
+    animating = true;
+    const sign = (opts?.forceDirection) ?? (dx >= 0 ? 1 : -1);
+    const exitMs = 200; // fast initial slide
+    const collapseMs = 160; // collapse duration when global timer fires
+    try { rowHeightPx = rowEl?.clientHeight || rowHeightPx; } catch {}
+    // Translate off-screen
+    const W = width || 320;
+    dx = sign * (W + 40);
+    // Keep row alive just long enough for slide + collapse
+    holdThread(thread.threadId, exitMs + collapseMs + 100);
+    // Briefly lock list interactions during coordinated collapse
+    try { window.dispatchEvent(new CustomEvent('jmail:listLock', { detail: { ms: exitMs + collapseMs + 120 } })); } catch {}
+    // Coordinate immediate group collapse right after slide completes
+    startGlobalDisappearTimer(exitMs);
+    await new Promise((r) => setTimeout(r, exitMs));
+    exiting = false;
+    // Perform action + snackbar immediately after slide
+    if (opts?.perform !== false) {
+      lastCommittedAction = { type: action, ruleKey: opts?.ruleKey };
+      if (action === 'archive') {
+        await archiveThread(thread.threadId);
+        if (!opts?.suppressSnackbar) showSnackbar({ message: 'Archived 1 conversation', actions: { Undo: () => undoLast(1) }, timeout: 5000 });
+      } else if (action === 'delete') {
+        await trashThread(thread.threadId);
+        if (!opts?.suppressSnackbar) showSnackbar({ message: 'Deleted 1 conversation', actions: { Undo: () => undoLast(1) }, timeout: 5000 });
+      } else if (action === 'snooze') {
+        const k = opts?.ruleKey || defaultSnoozeKey;
+        if (k) {
+          await snoozeThreadByRule(thread.threadId, k, { optimisticLocal: true });
+          if (!opts?.suppressSnackbar) showSnackbar({ message: `Snoozed ${k}`, actions: { Undo: () => undoLast(1) }, timeout: 5000 });
+        } else {
+          showSnackbar({ message: 'No snooze labels configured. Map them in Settings.' });
+        }
+      }
+    }
+    if (!opts?.suppressReload) scheduleReload();
+    // Start (or join) global disappear timer (no-op if already set)
+    startGlobalDisappearTimer(exitMs);
   }
 
   function onPointerDown(e: PointerEvent) {
@@ -107,9 +223,16 @@
       'button,summary,details,input,textarea,select,[data-no-row-nav]'
     );
     if (downInInteractive) return;
+    if (selectionActive) return; // disable swipe in multi-select mode
     dragging = true;
     animating = false;
     startX = e.clientX;
+    startY = e.clientY;
+    lastMoveAt = performance.now();
+    lastMoveX = startX;
+    isHorizontal = false;
+    crossedHint = false;
+    crossedCommit = false;
     // Do not capture immediately; only capture after small movement to allow native click
   }
 
@@ -121,50 +244,92 @@
       return;
     }
     dragging = false;
-    const threshold = 120;
     const currentDx = dx;
-    dx = 0;
-    animating = true;
+    const absDx = Math.abs(currentDx);
+    const commitDist = (width || 1) * 0.5;
+    const hintDist = (width || 1) * 0.1;
+    const commitByDist = absDx >= commitDist;
+    const commitByVelocity = Math.abs(vx) >= commitVelocity;
+    const shouldCommit = commitByDist || commitByVelocity;
     if (captured) {
       try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
       captured = false;
-      if (currentDx > threshold) {
-        // Swipe right: Archive (with same animation as delete)
-        await animateAndArchive();
-      } else if (currentDx < -threshold) {
-        // Swipe left: Quick snooze 1h
-        await animateAndPerform('Snoozed 1h', () => snoozeThreadByRule(thread.threadId, '1h', { optimisticLocal: false }));
+      if (shouldCommit) {
+        const action = primaryFor(currentDx);
+        haptic(action === 'delete' ? 'heavy' : 'medium');
+        await commitAction(action);
+        return;
       }
-      // If swipe distance didn't cross threshold, do nothing (no navigation). Tap will be handled by <a>
     }
-    setTimeout(() => (animating = false), 150);
+    // Cancel snap-back
+    animating = true;
+    dx = 0;
+    setTimeout(() => { animating = false; }, 140);
   }
 
   function onPointerMove(e: PointerEvent) {
     if (!dragging || downInInteractive) return;
-    const delta = e.clientX - startX;
-    if (!captured && Math.abs(delta) > 6) {
-      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-      captured = true;
+    // Measure width lazily
+    try { width = containerEl?.clientWidth || rowEl?.clientWidth || width; } catch {}
+    const now = performance.now();
+    const deltaX = e.clientX - startX;
+    const deltaY = e.clientY - startY;
+    const absX = Math.abs(deltaX);
+    const absY = Math.abs(deltaY);
+    const angleDeg = Math.atan2(absY, Math.max(1, absX)) * 180 / Math.PI;
+    const passGuard = angleDeg <= 15;
+    if (!captured) {
+      if (absX > 8 && passGuard) {
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+        captured = true;
+        isHorizontal = true;
+      } else if (absY > 8 && !passGuard) {
+        // vertical wins
+        dragging = false;
+        return;
+      } else {
+        return;
+      }
     }
-    dx = Math.max(Math.min(delta, 160), -160);
+    // Update velocity (px/s)
+    const dtMs = Math.max(1, now - lastMoveAt);
+    const dxSince = e.clientX - lastMoveX;
+    vx = (dxSince / dtMs) * 1000;
+    lastMoveAt = now;
+    lastMoveX = e.clientX;
+    const maxTranslate = width; // allow full width
+    dx = Math.max(Math.min(deltaX, maxTranslate), -maxTranslate);
+    const absDx = Math.abs(dx);
+    const commitDist = (width || 1) * 0.5;
+    const hintDist = (width || 1) * 0.1;
+    const crossedHintNow = absDx >= hintDist;
+    if (crossedHintNow && !crossedHint) { crossedHint = true; haptic('light'); }
+    crossedCommit = absDx >= commitDist;
   }
 
-  async function animateAndDelete(): Promise<void> {
-    await animateAndPerform('Deleted', () => trashThread(thread.threadId, { optimisticLocal: false }), true);
+  function onPointerCancel(e: PointerEvent) {
+    if (!dragging) return;
+    dragging = false;
+    if (captured) {
+      try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
+      captured = false;
+    }
+    animating = true;
+    dx = 0;
+    setTimeout(() => { animating = false; }, 140);
   }
 
-  async function animateAndArchive(): Promise<void> {
-    await animateAndPerform('Archived', () => archiveThread(thread.threadId, { optimisticLocal: false }));
-  }
+  async function animateAndDelete(): Promise<void> { await commitAction('delete'); }
+
+  async function animateAndArchive(): Promise<void> { await commitAction('archive'); }
 
   async function animateAndUnsnooze(): Promise<void> {
-    await animateAndPerform('Unsnoozed', () => manualUnsnoozeThread(thread.threadId, { optimisticLocal: false }));
+    // Unsnooze keeps INBOX; no collapse
+    await manualUnsnoozeThread(thread.threadId, { optimisticLocal: true });
+    showSnackbar({ message: 'Unsnoozed', actions: { Undo: () => undoLast(1) } });
   }
 
-  async function animateAndSnooze(ruleKey: string, label = 'Snoozed'): Promise<void> {
-    await animateAndPerform(label, () => snoozeThreadByRule(thread.threadId, ruleKey, { optimisticLocal: false }));
-  }
+  async function animateAndSnooze(ruleKey: string, label = 'Snoozed'): Promise<void> { await commitAction('snooze', { ruleKey }); }
 
   function formatDateTime(ts?: number): string {
     if (!ts) return '';
@@ -205,32 +370,87 @@
       if (shortest) defaultSnoozeKey = shortest as any;
     }
   });
+
+  // Dynamic trailing snooze buttons (3rd and 4th)
+  let thirdSnoozeKey = $derived(normalizeRuleKey($lastSelectedSnoozeRuleKey || '1h'));
+  let fourthSnoozeKey = $derived(incrementSnoozeKey(thirdSnoozeKey));
+
+  // Local autoclose action for details menus (mirrors SplitButton behavior)
+  const autoclose = (node: HTMLDetailsElement) => {
+    const close = (e: Event) => {
+      const target = e.target as Element | null;
+      if (!target) { node.open = false; return; }
+      if (target.closest('summary')) return;
+      const inside = node.contains(target);
+      if (inside) {
+        if (target.closest('.picker, label[for="native-date-snooze"], input[type="date"]')) return;
+        if (target.closest('button, [role="menuitem"], a[href]')) {
+          node.open = false;
+          return;
+        }
+        return;
+      }
+      node.open = false;
+    };
+    window.addEventListener('click', close, true);
+    return { destroy() { window.removeEventListener('click', close, true); } };
+  };
+
+  let snoozeDetails: HTMLDetailsElement | null = null;
+
+  // Synchronize group slide across multiple rows and group collapse
+  onMount(() => {
+    function handleGroupSlide(ev: Event) {
+      try {
+        const e = ev as CustomEvent<{ action: 'archive' | 'delete' | 'snooze'; ids: string[]; ruleKey?: string }>;
+        const ids = e.detail?.ids || [];
+        const action = e.detail?.action;
+        if (!action || !ids.includes(thread.threadId)) return;
+        if (committed) return;
+        const dir: 1 | -1 = action === 'delete' ? -1 : 1;
+        void commitAction(action, { perform: false, suppressSnackbar: true, suppressReload: true, forceDirection: dir, ruleKey: e.detail?.ruleKey });
+      } catch {}
+    }
+    function handleDisappear() {
+      if (!committed || collapsing) return;
+      animating = true;
+      collapsing = true;
+      setTimeout(() => { animating = false; }, 160);
+    }
+    window.addEventListener('jmail:groupSlide', handleGroupSlide as EventListener);
+    window.addEventListener('jmail:disappearNow', handleDisappear);
+    return () => { window.removeEventListener('jmail:groupSlide', handleGroupSlide as EventListener); window.removeEventListener('jmail:disappearNow', handleDisappear); };
+  });
 </script>
 
 {#snippet trailing()}
-  <div class="actions">
+  <div class="actions" style={`opacity:${dx === 0 ? 1 : 0}; pointer-events:${dx === 0 ? 'auto' : 'none'};`}>
     {#if isSnoozedThread(thread)}
       <Button variant="text" onclick={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); animateAndUnsnooze(); }}>Unsnooze</Button>
     {/if}
     <Button variant="text" onclick={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); animateAndArchive(); }}>Archive</Button>
     <Button variant="text" color="error" onclick={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); animateAndDelete(); }}>Delete</Button>
-    <div class="snooze-wrap" role="button" tabindex="0" data-no-row-nav onclick={(e) => { if (!(e.target as Element)?.closest('summary')) { e.preventDefault(); } e.stopPropagation(); }} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { if (!(e.target as Element)?.closest('summary')) { e.preventDefault(); } e.stopPropagation(); } }}>
-      <SplitButton variant="outlined" x="right" y="down" onclick={() => { if (defaultSnoozeKey) { animateAndSnooze(defaultSnoozeKey, `Snoozed ${defaultSnoozeKey}`); } else { showSnackbar({ message: 'No snooze labels configured. Map them in Settings.' }); } }} on:toggle={(e) => { snoozeMenuOpen = (e.detail as boolean); }}>
-        {#snippet children()}
-          {defaultSnoozeKey || 'Snooze'}
-        {/snippet}
-        {#snippet menu()}
+    <Button variant="text" onclick={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); trySnooze(thirdSnoozeKey); }}>{thirdSnoozeKey}</Button>
+    <div class="snooze-wrap" role="button" tabindex="0" data-no-row-nav onclick={(e) => { const t = e.target as Element; if (t?.closest('summary,button,input,select,textarea,a,[role="menu"],[role="menuitem"]')) { e.stopPropagation(); return; } e.preventDefault(); e.stopPropagation(); }} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { const t = e.target as Element; if (t?.closest('summary,button,input,select,textarea,a,[role="menu"],[role="menuitem"]')) { e.stopPropagation(); return; } e.preventDefault(); e.stopPropagation(); } }}>
+      <Button variant="text" onclick={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); trySnooze(fourthSnoozeKey); }}>{fourthSnoozeKey}</Button>
+      <div class="snooze-buttons">
+        <details class="menu-toggle" bind:this={snoozeDetails} use:autoclose ontoggle={(e) => { const isOpen = (e.currentTarget as HTMLDetailsElement).open; snoozeMenuOpen = isOpen; }}>
+          <summary aria-label="Snooze menu" aria-haspopup="menu" aria-expanded={snoozeMenuOpen} onpointerdown={(e: PointerEvent) => e.stopPropagation()} onclick={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); const d = snoozeDetails || (e.currentTarget as HTMLElement).closest('details') as HTMLDetailsElement | null; if (d) d.open = !d.open; }}>
+            <Button variant="text" iconType="full" aria-label="Snooze menu">
+              <Icon icon={iconExpand} />
+            </Button>
+          </summary>
           <div class="snooze-menu">
             <Menu>
               {#if mappedKeys.length > 0}
-                <SnoozePanel onSelect={(rk) => trySnooze(rk)} />
+                <SnoozePanel onSelect={(rk) => { lastSelectedSnoozeRuleKey.set(normalizeRuleKey(rk)); trySnooze(rk); }} />
               {:else}
                 <div style="padding:0.5rem 0.75rem; max-width: 18rem;" class="m3-font-body-small">No snooze labels configured. Map them in Settings.</div>
               {/if}
             </Menu>
           </div>
-        {/snippet}
-      </SplitButton>
+        </details>
+      </div>
     </div>
   </div>
 {/snippet}
@@ -246,22 +466,31 @@
   </label>
 {/snippet}
 
+<div class="row-container" bind:this={rowEl} style={`height:${collapsing ? '0px' : (rowHeightPx != null ? rowHeightPx + 'px' : 'auto')}; transition: ${collapsing ? 'height 160ms cubic-bezier(0,0,0.2,1), opacity 160ms cubic-bezier(0,0,0.2,1)' : 'none'}; opacity:${collapsing ? 0 : 1};`}>
 <div class="swipe-wrapper" class:menu-open={snoozeMenuOpen}
      onpointerdown={onPointerDown}
      onpointermove={onPointerMove}
      onpointerup={onPointerUp}
+     onpointercancel={onPointerCancel}
+     bind:this={containerEl}
 >
-  <div class="bg" aria-hidden="true" style={`pointer-events:none`}>
-    {#if dx > 0}
-    <div class="left">
-      {dx > 40 ? 'Archive' : ''}
-    </div>
-    {/if}
-    {#if dx < 0}
-    <div class="right">{dx < -40 ? '1h' : ''}</div>
+  <div class="bg" aria-hidden="true" style={`pointer-events:${Math.abs(dx) >= (width*0.2) ? 'auto' : 'none'}` }>
+    {#if dx !== 0}
+      {@const action = primaryFor(dx)}
+      <div class={`fill ${dx > 0 ? 'fill-archive' : 'fill-delete'}`} style={`opacity:${0.3 + Math.min(1, Math.abs(dx)/(width*0.5)) * 0.7}`}></div>
+      <div class={`affordance ${dx > 0 ? 'left' : 'right'}`} style={`opacity:${0.3 + Math.min(1, Math.abs(dx)/(width*0.5)) * 0.7}; transform: scale(${0.85 + Math.min(1, Math.abs(dx)/(width*0.5))*0.15});`}>
+        <Icon icon={action === 'archive' ? iconArchive : iconDelete} />
+      </div>
+      <div class="tray" style={`opacity:${Math.max(0, Math.min(1, (Math.abs(dx)/(width*0.5) - 0.2) / 0.3))}; justify-content:${dx > 0 ? 'flex-start' : 'flex-end'}` }>
+        {#if lastCommittedAction}
+          <Button variant="text" onclick={async (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); cancelGlobalDisappearTimer(); await undoLast(1); animating = true; dx = 0; committed = false; lastCommittedAction = null; setTimeout(() => { animating = false; }, 140); }}>
+            <span>Undo {formatUndoLabel()}</span>
+          </Button>
+        {/if}
+      </div>
     {/if}
   </div>
-  <div class="fg" style={`transform: translateX(${dx}px); transition: ${animating ? 'transform var(--m3-util-easing-fast)' : 'none'};`} in:fade={{ duration: 120 }} out:fade={{ duration: 180 }}>
+  <div class="fg" style={`transform: translateX(${dx}px); transition: ${animating ? 'transform 200ms cubic-bezier(0,0,0.2,1)' : 'none'};`} in:fade={{ duration: 180 }} out:fade={{ duration: 180 }}>
     <ListItem
       leading={onToggleSelected ? selectionLeading : undefined}
       headline={`${(thread.lastMsgMeta.subject || '(no subject)')}${(thread.lastMsgMeta.from ? ' — ' + thread.lastMsgMeta.from : '')}${(thread.lastMsgMeta?.date ? ' • ' + formatDateTime(thread.lastMsgMeta.date) : '')}`}
@@ -273,8 +502,10 @@
     />
   </div>
 </div>
+</div>
 
 <style>
+  .row-container { will-change: height, opacity; }
   .swipe-wrapper {
     position: relative;
     overflow: hidden;
@@ -282,43 +513,55 @@
   }
   .swipe-wrapper:has(:global(details[open])) {
     overflow: visible;
+    pointer-events: none; /* prevent row beneath menu from catching clicks */
   }
+  .swipe-wrapper:has(:global(details[open])) :global(details[open]) {
+    pointer-events: auto; /* but allow interactions within the open menu */
+  }
+  /* Ensure anchor overlay doesn't capture clicks under menu */
+  .swipe-wrapper:has(:global(details[open])) :global(a.m3-container) { pointer-events: none; }
   .bg {
     position: absolute;
     inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0 1rem;
     pointer-events: none;
-    color: rgb(var(--m3-scheme-on-secondary-container));
+    contain: strict;
   }
-  .bg .left {
-    background: rgb(var(--m3-scheme-secondary-container));
-    padding: 0.25rem 0.5rem;
-    border-radius: var(--m3-util-rounding-extra-small);
-    min-width: 5rem;
-    text-align: center;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.5rem;
-    box-shadow: var(--m3-util-elevation-1);
-  }
-  .bg .right {
-    background: rgb(var(--m3-scheme-tertiary-container));
-    padding: 0.25rem 0.5rem;
-    border-radius: var(--m3-util-rounding-extra-small);
-    min-width: 5rem;
-    text-align: center;
-    box-shadow: var(--m3-util-elevation-1);
-  }
+  .bg .fill { position:absolute; inset:0; opacity:0; transition: opacity 120ms linear; }
+  .bg .fill.fill-archive { background: rgb(var(--m3-scheme-secondary-container)); }
+  .bg .fill.fill-delete { background: rgb(var(--m3-scheme-error-container)); }
+  .affordance { position:absolute; top:0; bottom:0; display:flex; align-items:center; gap:0.5rem; padding: 0 1rem; color: rgb(var(--m3-scheme-on-secondary-container)); }
+  .affordance.right { right: 0; justify-content: flex-end; color: rgb(var(--m3-scheme-on-error-container)); }
+  .affordance.left { left: 0; justify-content: flex-start; color: rgb(var(--m3-scheme-on-secondary-container)); }
+  /* label removed from affordance to avoid duplication with trailing actions */
+  .tray { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; gap:0.25rem; opacity:0; pointer-events:none; flex-wrap: nowrap; }
+  .tray :global(button) { min-width: 48px; min-height: 40px; }
+  .tray :global(span) { white-space: nowrap; }
   .fg {
     position: relative;
-    background: transparent;
+    background: rgb(var(--m3-scheme-surface));
     min-width: 0;
   }
-  .actions { display:flex; flex-direction: column; gap:0.25rem; align-items:flex-end; }
+  .actions { display:flex; flex-direction: row; flex-wrap: wrap; gap:0.25rem; align-items:center; justify-content:flex-end; min-width: 0; }
+  /* Keep trailing actions vertically centered even on 3-line rows */
+  .actions { align-self: center; }
+  /* Make text buttons in trailing actions more compact to reduce visual gap */
+  .actions :global(.m3-container.text) {
+    padding-inline-start: 0.5rem;
+    padding-inline-end: 0.5rem;
+    height: 2.25rem;
+    min-width: 0;
+  }
+  /* Allow line breaks inside button labels when space is tight */
+  .actions :global(.m3-container.text span) { white-space: normal; }
+  /* Ensure 30d and 1h actions can sit on the same line */
+  .snooze-wrap { display:inline-flex; align-items:center; gap: 0.25rem; flex: 0 0 auto; flex-wrap: nowrap; }
   .snooze-menu :global(.m3-container) { padding: 0.5rem; max-width: 24rem; }
+  /* Separate snooze and toggle button styles */
+  .snooze-buttons { display:inline-flex; align-items:center; position: relative; gap: 0.25rem; flex-wrap: nowrap; }
+  .menu-toggle { position: relative; }
+  .menu-toggle > :global(:not(summary)) { position: absolute !important; z-index: 10; right: 0; top: 100%; pointer-events: auto; }
+  /* Reset native marker on summary for MD3 button inside */
+  .menu-toggle > summary { list-style: none; }
   .leading-checkbox {
     display: inline-flex;
     align-items: center;

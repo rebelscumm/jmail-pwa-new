@@ -3,6 +3,7 @@
 
 import { writable } from 'svelte/store';
 import { pushGmailDiag } from '$lib/gmail/diag';
+import { confirmGooglePopup } from '$lib/gmail/preauth';
 import type { AccountAuthMeta } from '$lib/types';
 
 type TokenResponse = {
@@ -144,8 +145,31 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label = 'timeout'): Pro
 export async function acquireTokenInteractive(prompt: 'none' | 'consent' | 'select_account' = 'consent', reason?: string): Promise<void> {
   if (!tokenClient) throw new Error('Auth not initialized');
   await withTokenClientLock(async () => {
+    // Coalesce concurrent interactive requests: if a valid token exists now, skip
+    const preState = getAuthState();
+    if (preState.accessToken && preState.expiryMs && preState.expiryMs > Date.now()) {
+      pushGmailDiag({ type: 'auth_interactive_skip_valid' });
+      return;
+    }
     let beforeInfo: any = undefined;
     try { beforeInfo = await fetchTokenInfo(); } catch (_) {}
+    // Pre-auth explanation dialog with diagnostics and scope analysis
+    try {
+      const state = getAuthState();
+      const granted = typeof beforeInfo?.scope === 'string' ? String(beforeInfo.scope).split(/\s+/).filter(Boolean) : [];
+      const requested = String(SCOPES).split(/\s+/).filter(Boolean);
+      const missingScopes = requested.filter((s) => !granted.includes(s));
+      await confirmGooglePopup({
+        flow: 'interactive',
+        prompt,
+        reason,
+        requestedScopes: SCOPES,
+        missingScopes,
+        tokenPresent: !!state.accessToken,
+        tokenExpired: typeof state.expiryMs === 'number' ? state.expiryMs <= Date.now() : undefined,
+        diagnostics: { ...getAuthDiagnostics(), tokenInfo: beforeInfo }
+      });
+    } catch (_) {}
     pushGmailDiag({ type: 'auth_popup_before', flow: 'interactive', prompt, reason, requestedScopes: SCOPES, tokenInfo: beforeInfo });
     const token = await withTimeout(
       new Promise<TokenResponse>((resolve, reject) => {
@@ -181,8 +205,39 @@ export async function acquireTokenInteractive(prompt: 'none' | 'consent' | 'sele
 export async function acquireTokenForScopes(scopes: string, prompt: 'none' | 'consent' | 'select_account' = 'consent', reason?: string): Promise<boolean> {
   if (!tokenClient) throw new Error('Auth not initialized');
   return await withTokenClientLock(async () => {
+    // Coalesce concurrent scope-upgrade requests: if already granted, skip
+    const preState = getAuthState();
+    if (preState.accessToken && preState.expiryMs && preState.expiryMs > Date.now()) {
+      try {
+        const info = await fetchTokenInfo();
+        const granted = typeof info?.scope === 'string' ? String(info.scope).split(/\s+/).filter(Boolean) : [];
+        const requested = String(scopes).split(/\s+/).filter(Boolean);
+        const missingScopes = requested.filter((s) => !granted.includes(s));
+        if (missingScopes.length === 0) {
+          pushGmailDiag({ type: 'auth_scope_upgrade_skip_already_granted' });
+          return true;
+        }
+      } catch (_) {}
+    }
     let beforeInfo: any = undefined;
     try { beforeInfo = await fetchTokenInfo(); } catch (_) {}
+    // Pre-auth explanation dialog with diagnostics and scope analysis
+    try {
+      const state = getAuthState();
+      const granted = typeof beforeInfo?.scope === 'string' ? String(beforeInfo.scope).split(/\s+/).filter(Boolean) : [];
+      const requested = String(scopes).split(/\s+/).filter(Boolean);
+      const missingScopes = requested.filter((s) => !granted.includes(s));
+      await confirmGooglePopup({
+        flow: 'scope_upgrade',
+        prompt,
+        reason,
+        requestedScopes: scopes,
+        missingScopes,
+        tokenPresent: !!state.accessToken,
+        tokenExpired: typeof state.expiryMs === 'number' ? state.expiryMs <= Date.now() : undefined,
+        diagnostics: { ...getAuthDiagnostics(), tokenInfo: beforeInfo }
+      });
+    } catch (_) {}
     pushGmailDiag({ type: 'auth_popup_before', flow: 'scope_upgrade', prompt, reason, requestedScopes: scopes, tokenInfo: beforeInfo });
     const token = await withTimeout(
       new Promise<TokenResponse>((resolve, reject) => {

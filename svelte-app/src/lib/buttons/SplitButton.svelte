@@ -26,8 +26,22 @@
 
   const autoclose = (node: HTMLDetailsElement) => {
     const close = (e: Event) => {
-      if (e.target instanceof Element && e.target.closest("summary")) return;
-
+      const target = e.target as Element | null;
+      if (!target) { node.open = false; return; }
+      // If click is on the summary toggle, ignore (native toggle will handle)
+      if (target.closest('summary')) return;
+      const inside = node.contains(target);
+      if (inside) {
+        // Keep menu OPEN for general interactions inside the menu, except
+        // when an actual action control is activated (buttons/links/menuitems).
+        if (target.closest('.picker, label[for="native-date-snooze"], input[type="date"]')) return;
+        if (target.closest('button, [role="menuitem"], a[href]')) {
+          node.open = false; // selecting a chip/menuitem closes the menu
+          return;
+        }
+        return; // clicks on other inner areas do not close
+      }
+      // Click outside → close
       node.open = false;
     };
     // Use capture so it still fires even if inner handlers stop propagation
@@ -46,7 +60,7 @@
     {@render children()}
   </button>
   <details class="align-{x} align-{y}" use:autoclose ontoggle={(e) => { const isOpen = (e.currentTarget as HTMLDetailsElement).open; open = isOpen; dispatch('toggle', isOpen); }}>
-    <summary class="split" aria-haspopup="menu" aria-expanded={open}>
+    <summary class="split" aria-haspopup="menu" aria-expanded={open} onpointerdown={(e) => e.stopPropagation()} onclick={(e) => e.stopPropagation()}>
       <Layer />
       <Icon icon={iconExpand} width="1.375rem" height="1.375rem" />
     </summary>

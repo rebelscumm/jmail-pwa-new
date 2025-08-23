@@ -4,7 +4,20 @@
   let { children }: { children: Snippet } = $props();
 </script>
 
-<div class="m3-container" role="menu" aria-orientation="vertical" aria-label="Menu">
+<div
+  class="m3-container"
+  role="menu"
+  aria-orientation="vertical"
+  aria-label="Menu"
+  tabindex="0"
+  onclick={(e) => { e.preventDefault(); e.stopPropagation(); }}
+  onpointerdown={(e) => e.stopPropagation()}
+  onmousedown={(e) => e.stopPropagation()}
+  onmouseup={(e) => e.stopPropagation()}
+  ontouchstart={(e) => e.stopPropagation()}
+  ontouchend={(e) => e.stopPropagation()}
+  onkeydown={(e) => { if (e.key === 'Escape') { (e.currentTarget as HTMLElement).blur(); } }}
+>
   {@render children()}
 </div>
 

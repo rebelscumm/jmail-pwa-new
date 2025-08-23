@@ -17,6 +17,16 @@ export type AppSettings = {
   trailingRefreshDelayMs?: number;
   /** Duration for residual slide-out on refresh/removal (ms) */
   trailingSlideOutDurationMs?: number;
+  /** Primary action when swiping to the right */
+  swipeRightPrimary?: 'archive' | 'delete';
+  /** Primary action when swiping to the left */
+  swipeLeftPrimary?: 'archive' | 'delete';
+  /** Ask for confirmation before Delete (keyboard or swipe) */
+  confirmDelete?: boolean;
+  /** Commit by velocity >= this px/s (recommended 800-1200) */
+  swipeCommitVelocityPxPerSec?: number;
+  /** Total duration for swipe disappear (exit+collapse) in ms */
+  swipeDisappearMs?: number;
 };
 
 const DEFAULTS: AppSettings = {
@@ -26,7 +36,12 @@ const DEFAULTS: AppSettings = {
   labelMapping: {},
   notifEnabled: false,
   trailingRefreshDelayMs: 5000,
-  trailingSlideOutDurationMs: 260
+  trailingSlideOutDurationMs: 260,
+  swipeRightPrimary: 'archive',
+  swipeLeftPrimary: 'delete',
+  confirmDelete: false,
+  swipeCommitVelocityPxPerSec: 1000,
+  swipeDisappearMs: 5000
 };
 
 export const settings = writable<AppSettings>({ ...DEFAULTS });
