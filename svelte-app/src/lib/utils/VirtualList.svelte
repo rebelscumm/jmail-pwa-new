@@ -80,13 +80,40 @@
     };
   }
   onMount(() => {
+    let pending = false;
+    let pendingUpdates: Array<{ idx: number; height: number }> = [];
+    const flush = () => {
+      pending = false;
+      if (!pendingUpdates.length) return;
+      const updates = pendingUpdates;
+      pendingUpdates = [];
+      // Temporarily disconnect to avoid triggering ResizeObserver loop when mutating layout
+      observer?.disconnect();
+      let changed = false;
+      for (const { idx, height: h } of updates) {
+        if (h > 0 && heights[idx] !== h) {
+          heights[idx] = h;
+          changed = true;
+        }
+      }
+      if (changed) {
+        // Nudge Svelte state
+        heights = heights;
+      }
+      // Re-observe all known elements after state update
+      for (const el of indexToEl.values()) observer?.observe(el);
+    };
     observer = new ResizeObserver((entries) => {
       for (const entry of entries) {
         const el = entry.target as HTMLElement;
         const idx = elToIndex.get(el);
         if (idx === undefined) continue;
         const newH = Math.ceil(entry.contentRect.height);
-        if (newH > 0 && heights[idx] !== newH) { heights[idx] = newH; heights = heights; }
+        pendingUpdates.push({ idx, height: newH });
+      }
+      if (!pending) {
+        pending = true;
+        requestAnimationFrame(flush);
       }
     });
     for (const el of indexToEl.values()) observer.observe(el);
