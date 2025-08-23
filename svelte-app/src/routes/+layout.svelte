@@ -32,6 +32,7 @@
   import { queueSendRaw } from "$lib/queue/intents";
   import { copyGmailDiagnosticsToClipboard } from "$lib/gmail/api";
   import { startUpdateChecker } from "$lib/update/checker";
+  import KeyboardShortcutsDialog from "$lib/misc/KeyboardShortcutsDialog.svelte";
   
   if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
 
@@ -145,6 +146,39 @@
     window.addEventListener('offline', updateOfflineState);
     setTimeout(updateOfflineState, 0);
 
+    // Global keyboard shortcuts (Gmail-like)
+    const isFromInput = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (!t) return false;
+      const tag = (t.tagName || '').toLowerCase();
+      const editable = (t as any).isContentEditable;
+      return tag === 'input' || tag === 'textarea' || editable;
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      // '?' help dialog
+      if (e.key === '?' || (e.shiftKey && e.key === '/')) {
+        if (isFromInput(e)) return;
+        e.preventDefault();
+        try { kbdDialog?.show(); } catch {}
+        return;
+      }
+      // '/' focus search in top app bar
+      if (e.key === '/' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (isFromInput(e)) return;
+        e.preventDefault();
+        try { (window as any).jmailFocusSearch?.(); } catch {}
+        return;
+      }
+      // 'c' compose
+      if ((e.key === 'c' || e.key === 'C') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (isFromInput(e)) return;
+        e.preventDefault();
+        showCompose = true;
+        return;
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+
     // Ensure first-run shows connect wizard at root
     (async () => {
       try {
@@ -194,6 +228,13 @@
     } catch (_) {}
   }
 
+  // Cleanup global listeners when layout unmounts
+  $effect(() => {
+    return () => {
+      try { window.removeEventListener('keydown', (onKeyDown as any)); } catch {}
+    };
+  });
+
   let { children }: { children: Snippet } = $props();
 
   const paths = [
@@ -218,6 +259,7 @@
   let snackbar: ReturnType<typeof Snackbar>;
   let preAuthDialog: ReturnType<typeof PreAuthDialog>;
   let isOffline = $state(false);
+  let kbdDialog: ReturnType<typeof KeyboardShortcutsDialog>;
 
   $effect(() => { if (snackbar) registerSnackbar(snackbar.show); });
   $effect(() => { if (preAuthDialog) registerPreAuth(preAuthDialog.show); });
@@ -292,6 +334,7 @@
     {/if}
     <Snackbar bind:this={snackbar} />
     <PreAuthDialog bind:this={preAuthDialog} />
+    <KeyboardShortcutsDialog bind:this={kbdDialog} />
   </div>
 </div>
 
