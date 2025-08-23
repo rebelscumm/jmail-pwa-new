@@ -49,7 +49,7 @@
   const weekdayKeys = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
   const timeKeys = ['6am','2pm','7pm'];
   const persistentKeys = ['Desktop','long-term'];
-  $: ruleKeys = [ ...new Set([ ...quickKeys, ...hourKeys, ...dayKeys, ...weekdayKeys, ...timeKeys, ...persistentKeys ]) ];
+  const ruleKeys = [ ...new Set([ ...quickKeys, ...hourKeys, ...dayKeys, ...weekdayKeys, ...timeKeys, ...persistentKeys ]) ];
 
   // Tabs
   let currentTab: 'app' | 'mapping' | 'backups' = 'app';
