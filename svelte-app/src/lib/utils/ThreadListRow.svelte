@@ -402,11 +402,8 @@
     try {
       if (!snoozeDetails) return;
       snoozeDetails.open = true;
-      requestAnimationFrame(() => {
-        try {
-          (document.getElementById('native-date-snooze') as any)?.showPicker?.();
-        } catch {}
-      });
+      // Menu opens; embedded MD3 date picker is visible without native showPicker
+      requestAnimationFrame(() => {});
     } catch {}
   }
 
@@ -446,7 +443,7 @@
     <div class="snooze-wrap" role="button" tabindex="0" data-no-row-nav onclick={(e) => { const t = e.target as Element; if (t?.closest('summary,button,input,select,textarea,a,[role="menu"],[role="menuitem"]')) { e.stopPropagation(); return; } e.preventDefault(); e.stopPropagation(); }} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { const t = e.target as Element; if (t?.closest('summary,button,input,select,textarea,a,[role="menu"],[role="menuitem"]')) { e.stopPropagation(); return; } e.preventDefault(); e.stopPropagation(); } }}>
       <Button variant="text" onclick={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); openSnoozeMenuAndShowPicker(); }}>{fourthSnoozeKey}</Button>
       <div class="snooze-buttons">
-        <details class="menu-toggle" bind:this={snoozeDetails} use:autoclose ontoggle={(e) => { const isOpen = (e.currentTarget as HTMLDetailsElement).open; snoozeMenuOpen = isOpen; if (isOpen) { setTimeout(() => { try { (document.getElementById('native-date-snooze') as any)?.showPicker?.(); } catch {} }, 0); } }}>
+        <details class="menu-toggle" bind:this={snoozeDetails} use:autoclose ontoggle={(e) => { const isOpen = (e.currentTarget as HTMLDetailsElement).open; snoozeMenuOpen = isOpen; }}>
           <summary aria-label="Snooze menu" aria-haspopup="menu" aria-expanded={snoozeMenuOpen} onpointerdown={(e: PointerEvent) => e.stopPropagation()} onclick={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); const d = snoozeDetails || (e.currentTarget as HTMLElement).closest('details') as HTMLDetailsElement | null; if (!d) return; if (!d.open) { openSnoozeMenuAndShowPicker(); } else { d.open = false; } }}>
             <Button variant="text" iconType="full" aria-label="Snooze menu" class="expand-button">
               <Icon icon={iconExpand} />
@@ -455,7 +452,7 @@
           <div class="snooze-menu">
             <Menu>
               {#if mappedKeys.length > 0}
-                <SnoozePanel onSelect={(rk) => { lastSelectedSnoozeRuleKey.set(normalizeRuleKey(rk)); trySnooze(rk); }} />
+                <SnoozePanel onSelect={(rk) => { lastSelectedSnoozeRuleKey.set(normalizeRuleKey(rk)); trySnooze(rk); (snoozeDetails && (snoozeDetails.open = false)); }} />
               {:else}
                 <div style="padding:0.5rem 0.75rem; max-width: 18rem;" class="m3-font-body-small">No snooze labels configured. Map them in Settings.</div>
               {/if}
@@ -562,7 +559,7 @@
   .actions :global(.m3-container.text span) { white-space: normal; }
   /* Ensure 30d and 1h actions can sit on the same line */
   .snooze-wrap { display:inline-flex; align-items:center; gap: 0.5rem; flex: 0 0 auto; flex-wrap: nowrap; }
-  .snooze-menu :global(.m3-container) { padding: 0.75rem; max-width: 24rem; }
+  .snooze-menu :global(.m3-container) { padding: 0.5rem; max-width: 24rem; }
   /* Separate snooze and toggle button styles */
   .snooze-buttons { display:inline-flex; align-items:center; position: relative; gap: 0.5rem; flex-wrap: nowrap; }
   .menu-toggle { position: relative; }

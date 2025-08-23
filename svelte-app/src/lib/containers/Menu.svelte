@@ -30,16 +30,16 @@
     position: relative;
     overflow: visible; /* allow native pickers/popovers to escape */
     flex-direction: column;
-    padding: 0.75rem 0.75rem; /* slightly roomier MD3 menu container padding */
-    gap: 0.375rem; /* add space between menu items */
+    padding: 0.5rem; /* MD3 menu uses comfortable but tighter padding */
+    gap: 0.5rem; /* MD3 item spacing */
     border-radius: var(--m3-menu-shape);
     min-width: 7rem;
-    max-width: 17.5rem;
+    max-width: 24rem; /* allow date picker width */
     max-height: min(72vh, 32rem);
     overflow-y: auto;
     overscroll-behavior: contain;
     background-color: rgb(var(--m3-scheme-surface-container));
-    z-index: 10001; /* above list row so native pickers are visible */
+    z-index: 10001; /* above list row so date picker is visible */
     box-shadow: var(--m3-util-elevation-3);
   }
   @media (max-width: 480px) {
