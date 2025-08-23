@@ -31,6 +31,7 @@
   import Button from "$lib/buttons/Button.svelte";
   import { queueSendRaw } from "$lib/queue/intents";
   import { copyGmailDiagnosticsToClipboard } from "$lib/gmail/api";
+  import { startUpdateChecker } from "$lib/update/checker";
   
   if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
 
@@ -117,6 +118,24 @@
     import('$lib/db/backups').then((m) => m.maybeCreateWeeklySnapshot());
     // Keep optional: legacy local snooze viewer; safe if empty
     import('$lib/stores/snooze').then((m)=>m.loadSnoozes());
+
+    // Check for newer app version and offer a reload
+    try {
+      startUpdateChecker(() => {
+        showSnackbar({
+          message: 'A new version is available',
+          actions: {
+            Reload: () => {
+              const url = new URL(window.location.href);
+              url.searchParams.set('__hardreload', String(Date.now()));
+              window.location.assign(url.toString());
+            }
+          },
+          closable: true,
+          timeout: null
+        });
+      }, { intervalMs: 5 * 60 * 1000, immediate: true });
+    } catch (_) {}
 
     // Offline banner
     const updateOfflineState = () => {
