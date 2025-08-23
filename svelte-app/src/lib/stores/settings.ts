@@ -27,6 +27,8 @@ export type AppSettings = {
   swipeCommitVelocityPxPerSec?: number;
   /** Total duration for swipe disappear (exit+collapse) in ms */
   swipeDisappearMs?: number;
+  /** Sorting preference for inbox thread list */
+  inboxSort?: 'date_desc' | 'date_asc' | 'unread_first' | 'sender_az' | 'sender_za' | 'subject_az' | 'subject_za';
 };
 
 const DEFAULTS: AppSettings = {
@@ -41,7 +43,8 @@ const DEFAULTS: AppSettings = {
   swipeLeftPrimary: 'delete',
   confirmDelete: false,
   swipeCommitVelocityPxPerSec: 1000,
-  swipeDisappearMs: 5000
+  swipeDisappearMs: 5000,
+  inboxSort: 'date_desc'
 };
 
 export const settings = writable<AppSettings>({ ...DEFAULTS });

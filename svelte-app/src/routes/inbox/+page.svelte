@@ -15,14 +15,26 @@
   import { snoozeByThread } from '$lib/stores/snooze';
   import { archiveThread, trashThread, undoLast } from '$lib/queue/intents';
   import { snoozeThreadByRule } from '$lib/snooze/actions';
-  import { settings } from '$lib/stores/settings';
+  import { settings, updateAppSettings } from '$lib/stores/settings';
   import { show as showSnackbar } from '$lib/containers/snackbar';
   import iconInbox from '@ktibow/iconset-material-symbols/inbox';
   import iconMarkEmailUnread from '@ktibow/iconset-material-symbols/mark-email-unread';
   import iconSnooze from '@ktibow/iconset-material-symbols/snooze';
   import { getLabel } from '$lib/gmail/api';
   import { trailingHolds } from '$lib/stores/holds';
+  import Menu from '$lib/containers/Menu.svelte';
+  import MenuItem from '$lib/containers/MenuItem.svelte';
 
+  type InboxSort = NonNullable<import('$lib/stores/settings').AppSettings['inboxSort']>;
+  const sortOptions: { key: InboxSort; label: string }[] = [
+    { key: 'date_desc', label: 'Date (newest first)' },
+    { key: 'date_asc', label: 'Date (oldest first)' },
+    { key: 'unread_first', label: 'Unread first' },
+    { key: 'sender_az', label: 'Sender (A–Z)' },
+    { key: 'sender_za', label: 'Sender (Z–A)' },
+    { key: 'subject_az', label: 'Subject (A–Z)' },
+    { key: 'subject_za', label: 'Subject (Z–A)' }
+  ];
   let CLIENT_ID: string = import.meta.env.VITE_GOOGLE_CLIENT_ID as string;
 
   let loading = $state(true);
@@ -97,6 +109,67 @@
           return subj.includes(q) || from.includes(q);
         })
   );
+  function cmp(a: string, b: string): number { return a.localeCompare(b); }
+  function num(n: unknown): number { return typeof n === 'number' && !Number.isNaN(n) ? n : 0; }
+  function getSender(a: import('$lib/types').GmailThread): string {
+    const raw = a.lastMsgMeta.from || '';
+    const m = raw.match(/^(.*?)\s*<([^>]+)>/);
+    return (m ? (m[1] || m[2]) : raw).toLowerCase();
+  }
+  function getSubject(a: import('$lib/types').GmailThread): string { return (a.lastMsgMeta.subject || '').toLowerCase(); }
+  function getDate(a: import('$lib/types').GmailThread): number { return num(a.lastMsgMeta.date) || 0; }
+  function isUnread(a: import('$lib/types').GmailThread): boolean { return (a.labelIds || []).includes('UNREAD'); }
+  const currentSort: InboxSort = $derived(($settings.inboxSort || 'date_desc') as InboxSort);
+  const sortedVisibleThreads = $derived((() => {
+    const arr = [...visibleThreads];
+    switch (currentSort) {
+      case 'date_asc':
+        arr.sort((a, b) => getDate(a) - getDate(b));
+        break;
+      case 'unread_first':
+        arr.sort((a, b) => {
+          const d = (isUnread(b) as any) - (isUnread(a) as any);
+          if (d !== 0) return d;
+          return getDate(b) - getDate(a);
+        });
+        break;
+      case 'sender_az':
+        arr.sort((a, b) => {
+          const s = cmp(getSender(a), getSender(b));
+          if (s !== 0) return s;
+          return getDate(b) - getDate(a);
+        });
+        break;
+      case 'sender_za':
+        arr.sort((a, b) => {
+          const s = cmp(getSender(b), getSender(a));
+          if (s !== 0) return s;
+          return getDate(b) - getDate(a);
+        });
+        break;
+      case 'subject_az':
+        arr.sort((a, b) => {
+          const s = cmp(getSubject(a), getSubject(b));
+          if (s !== 0) return s;
+          return getDate(b) - getDate(a);
+        });
+        break;
+      case 'subject_za':
+        arr.sort((a, b) => {
+          const s = cmp(getSubject(b), getSubject(a));
+          if (s !== 0) return s;
+          return getDate(b) - getDate(a);
+        });
+        break;
+      case 'date_desc':
+      default:
+        arr.sort((a, b) => getDate(b) - getDate(a));
+        break;
+    }
+    return arr;
+  })());
+  const currentSortLabel = $derived((sortOptions.find(o => o.key === currentSort)?.label) || 'Date (newest first)');
+  function setSort(next: InboxSort) { updateAppSettings({ inboxSort: next }); }
   // Selection state keyed by threadId
   let selectedMap = $state<Record<string, true>>({});
   const selectedCount = $derived(Object.keys(selectedMap).length);
@@ -555,6 +628,20 @@
       <Chip variant="general" icon={iconInbox} disabled title="Inbox threads" onclick={() => {}}>{inboxCount}</Chip>
       <Chip variant="general" icon={iconMarkEmailUnread} disabled title="Unread threads" onclick={() => {}}>{unreadCount}</Chip>
       <Chip variant="general" icon={iconSnooze} disabled title="Snoozed due in 24h" onclick={() => {}}>{soonSnoozedCount}</Chip>
+      <details class="sort">
+        <summary class="summary-btn">
+          <Button variant="text">
+            {#snippet children()}
+              <span class="label">Sort: {currentSortLabel}</span>
+            {/snippet}
+          </Button>
+        </summary>
+        <Menu>
+          {#each sortOptions as opt}
+            <MenuItem onclick={() => setSort(opt.key)}>{opt.label}{opt.key === currentSort ? ' ✓' : ''}</MenuItem>
+          {/each}
+        </Menu>
+      </details>
       <Button variant="outlined" disabled={!nextPageToken || syncing} onclick={loadMore}>
         {#if syncing}
           Loading…
@@ -603,7 +690,7 @@
     </Card>
   {/if}
   <div class="inbox-list-wrap" class:locked={listLocked} style="height:70vh">
-    <VirtualList items={visibleThreads} rowHeight={88} getKey={(t: import('$lib/types').GmailThread) => t.threadId} persistKey="inbox:threads">
+    <VirtualList items={sortedVisibleThreads} rowHeight={88} getKey={(t: import('$lib/types').GmailThread) => t.threadId} persistKey="inbox:threads">
       {#snippet children(item: import('$lib/types').GmailThread)}
       <ThreadListRow thread={item} />
       {/snippet}
@@ -613,5 +700,9 @@
 
 <style>
   .inbox-list-wrap.locked { pointer-events: none; }
+  .sort { position: relative; }
+  .sort > summary { list-style: none; }
+  .summary-btn { cursor: pointer; }
+  .sort[open] > :global(.m3-container) { position: absolute; right: 0; margin-top: 0.25rem; }
 </style>
 
