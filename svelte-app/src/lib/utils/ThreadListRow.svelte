@@ -2,7 +2,10 @@
   import ListItem from '$lib/containers/ListItem.svelte';
   import Button from '$lib/buttons/Button.svelte';
   import SplitButton from '$lib/buttons/SplitButton.svelte';
-  import Menu from '$lib/containers/Menu.svelte';
+  import Card from '$lib/containers/Card.svelte';
+  import DatePickerDocked from '$lib/forms/DatePickerDocked.svelte';
+  import Icon from '$lib/misc/_icon.svelte';
+  import iconCalendar from '@ktibow/iconset-material-symbols/calendar-today-outline';
   import { archiveThread, trashThread, markRead, markUnread, undoLast } from '$lib/queue/intents';
   import { snoozeThreadByRule, manualUnsnoozeThread, isSnoozedThread } from '$lib/snooze/actions';
   import { settings } from '$lib/stores/settings';
@@ -34,6 +37,7 @@
   let downInInteractive = $state(false);
   let startTarget: HTMLElement | null = null;
   let snoozeMenuOpen = $state(false);
+  let showInlineDatePicker = $state(false);
   let mappedKeys = $derived(Array.from(new Set(Object.keys($settings.labelMapping || {}).filter((k) => $settings.labelMapping[k]).map((k) => normalizeRuleKey(k)))));
   let defaultSnoozeKey = $derived(mappedKeys.includes('1h') ? '1h' : (mappedKeys[0] || null));
   
@@ -82,6 +86,17 @@
       return;
     }
     await animateAndSnooze(key, 'Snoozed');
+  }
+  function dateWithinRangeValidator(date: string): boolean {
+    try {
+      const picked = new Date(date + 'T00:00:00');
+      const now = new Date();
+      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+      const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 30);
+      return picked >= start && picked <= end;
+    } catch {
+      return false;
+    }
   }
   
   // Unified slide-out performer used by all trailing actions
@@ -241,28 +256,38 @@
         {/snippet}
         {#snippet menu()}
           <div class="snooze-menu">
-            <Menu>
-              {#if mappedKeys.length > 0}
+            {#if mappedKeys.length > 0}
+              <Card variant="filled" class="panel">
                 <div class="list">
                   {#each ['2p','6a','7p','2d','4d','mon','fri','7 day','14 day','30 days','1h','2h','3h'] as item}
                     {#if isMapped(toRuleKey(item))}
                       <Button variant="text" onclick={() => trySnooze(toRuleKey(item))}>{item}</Button>
                     {/if}
                   {/each}
-                  <div class="date-row">
-                    <label class="m3-font-body-small" for={`native-date-${thread.threadId}`}>Pick date</label>
-                    <input id={`native-date-${thread.threadId}`}
-                      type="date"
-                      min={(new Date(Date.now()+24*60*60*1000)).toISOString().slice(0,10)}
-                      max={(new Date(Date.now()+30*24*60*60*1000)).toISOString().slice(0,10)}
-                      onchange={(e) => { const v = (e.currentTarget as HTMLInputElement).value; if (v) { onDatePicked(v); (e.currentTarget as HTMLInputElement).value = ''; } }}
+                </div>
+                <div class="footer">
+                  <Button variant="text" onclick={() => (showInlineDatePicker = !showInlineDatePicker)}>
+                    <Icon icon={iconCalendar} />
+                    <span>Pick date</span>
+                  </Button>
+                </div>
+                {#if showInlineDatePicker}
+                  <div class="inline-date-picker">
+                    <DatePickerDocked
+                      date={''}
+                      clearable={true}
+                      close={() => (showInlineDatePicker = false)}
+                      dateValidator={dateWithinRangeValidator}
+                      setDate={(d) => { showInlineDatePicker = false; if (d) onDatePicked(d); }}
                     />
                   </div>
-                </div>
-              {:else}
+                {/if}
+              </Card>
+            {:else}
+              <Card variant="filled" class="panel">
                 <div style="padding:0.5rem 0.75rem; max-width: 18rem;" class="m3-font-body-small">No snooze labels configured. Map them in Settings.</div>
-              {/if}
-            </Menu>
+              </Card>
+            {/if}
           </div>
         {/snippet}
       </SplitButton>
@@ -373,12 +398,12 @@
   }
   .residual.left { justify-content: flex-start; }
   .actions { display:flex; flex-direction: column; gap:0.25rem; align-items:flex-end; }
-  .snooze-menu :global(.m3-container) { padding: 0; }
-  .snooze-menu .list { display:flex; flex-direction: column; gap: 0.125rem; padding: 0.25rem; }
-  .snooze-menu .list :global(button) { justify-content: flex-start; }
+  .snooze-menu :global(.m3-container) { padding: 0; min-width: 18rem; max-width: 28rem; }
+  .snooze-menu .list { display:grid; grid-template-columns: repeat(auto-fit, minmax(4.25rem, 1fr)); gap: 0.25rem; padding: 0.5rem; }
+  .snooze-menu .list :global(button) { justify-content: center; }
   .snooze-menu .footer { display:flex; justify-content:flex-end; padding: 0.25rem 0.5rem; border-top: 1px solid rgb(var(--m3-scheme-outline-variant)); }
-  .snooze-menu .date-row { display:flex; align-items:center; justify-content:space-between; gap:0.5rem; padding: 0.25rem 0.5rem; }
-  .snooze-menu .date-row input[type="date"] { background: transparent; color: inherit; border: 1px solid rgb(var(--m3-scheme-outline-variant)); border-radius: 0.5rem; padding: 0.25rem 0.5rem; }
+  .snooze-menu .footer :global(svg) { width: 1.25rem; height: 1.25rem; margin-right: 0.25rem; color: rgb(var(--m3-scheme-on-surface-variant)); }
+  .snooze-menu .inline-date-picker { padding: 0.5rem; display:flex; justify-content:flex-end; }
   .leading-checkbox {
     display: inline-flex;
     align-items: center;
