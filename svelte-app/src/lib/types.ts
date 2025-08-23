@@ -74,6 +74,7 @@ export type QueuedOp = {
 export type AccountAuthMeta = {
   sub: string;
   email?: string;
+  accessToken?: string; // persisted OAuth access token (expires quickly; refreshed as needed)
   tokenExpiry?: number; // ms epoch
 };
 
