@@ -31,7 +31,7 @@
   import { copyGmailDiagnosticsToClipboard } from "$lib/gmail/api";
   
   if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js').catch(() => {});
+
     navigator.serviceWorker.addEventListener('message', (e) => {
       const msg = e.data || {};
       if (msg.type === 'NOTIFICATION_ACTION') {
@@ -55,22 +55,55 @@
       const currentUrl = new URL(window.location.href);
       if (currentUrl.searchParams.has('refresh')) {
         (async () => {
+          const log = (...args: any[]) => { try { console.log('[ForceRefresh]', ...args); } catch {} };
+          const collect = async (stage: string) => {
+            const registrations = await (async () => {
+              try {
+                if (!('serviceWorker' in navigator)) return [] as any[];
+                const regs = await navigator.serviceWorker.getRegistrations();
+                return regs.map((r) => ({ scope: r.scope, active: !!r.active, waiting: !!r.waiting, installing: !!r.installing }));
+              } catch { return [] as any[]; }
+            })();
+            const cacheKeys = await (async () => { try { return await caches.keys(); } catch { return [] as string[]; } })();
+            const controller = (() => { try { return navigator.serviceWorker?.controller?.scriptURL || null; } catch { return null; } })();
+            const diag = {
+              stage,
+              time: Date.now(),
+              href: window.location.href,
+              userAgent: navigator.userAgent,
+              controller,
+              registrations,
+              cacheKeys,
+              doc: { readyState: document.readyState, visibilityState: (document as any).visibilityState }
+            };
+            log('diag', diag);
+            try { await navigator.clipboard.writeText(JSON.stringify(diag, null, 2)); } catch {}
+            return diag;
+          };
+
           try {
+            await collect('before');
             if ('caches' in window) {
-              const cacheKeys = await caches.keys();
-              await Promise.all(cacheKeys.map((key) => caches.delete(key)));
+              try {
+                const keys = await caches.keys();
+                await Promise.all(keys.map((k) => caches.delete(k)));
+              } catch {}
             }
             if ('serviceWorker' in navigator) {
-              const regs = await navigator.serviceWorker.getRegistrations();
-              await Promise.all(regs.map((r) => r.unregister()));
+              try {
+                const regs = await navigator.serviceWorker.getRegistrations();
+                await Promise.all(regs.map((r) => r.unregister()));
+              } catch {}
             }
-          } catch (_) {
-            // ignore
-          } finally {
-            currentUrl.searchParams.delete('refresh');
-            const cleanPath = currentUrl.pathname + (currentUrl.search || '') + currentUrl.hash;
-            window.location.replace(cleanPath || '/');
-          }
+            await collect('after');
+          } catch (_) {}
+
+          currentUrl.searchParams.delete('refresh');
+          const cleanPath = currentUrl.pathname + (currentUrl.search || '') + currentUrl.hash;
+          const sep = cleanPath.includes('?') ? '&' : '?';
+          const target = (cleanPath || '/') + sep + '__hardreload=' + Date.now();
+          log('navigating to', target);
+          window.location.assign(target);
         })();
       }
     } catch (_) {}

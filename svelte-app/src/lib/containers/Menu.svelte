@@ -22,7 +22,7 @@
     min-width: 7rem;
     max-width: 17.5rem;
     background-color: rgb(var(--m3-scheme-surface-container));
-    z-index: 2;
-    box-shadow: var(--m3-util-elevation-2);
+    z-index: 10001; /* above list row so native pickers are visible */
+    box-shadow: var(--m3-util-elevation-3);
   }
 </style>

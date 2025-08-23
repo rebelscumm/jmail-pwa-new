@@ -64,7 +64,10 @@
   .m3-container {
     display: inline-grid;
     grid-template-columns: 1fr auto;
-    gap: 0.125rem;
+    gap: 0; /* unify halves */
+    position: relative;
+    border-radius: var(--m3-split-button-outer-shape);
+    overflow: hidden; /* make outline wrap both halves and clip layers */
 
     &.elevated .split {
       background-color: rgb(var(--m3-scheme-surface-container-low));
@@ -85,11 +88,23 @@
       color: rgb(var(--m3-scheme-on-secondary-container));
     }
 
-    &.outlined .split {
+    /* Outlined variant: single outline around both halves */
+    &.outlined {
       outline: 1px solid rgb(var(--m3-scheme-outline-variant));
       outline-offset: -1px;
+    }
+    &.outlined .split {
       color: rgb(var(--m3-scheme-on-surface-variant));
     }
+    /* Divider between halves for outlined variant */
+    &.outlined summary {
+      border-left: 1px solid rgb(var(--m3-scheme-outline-variant));
+    }
+  }
+
+  /* Allow dropdowns to overflow the split button when open */
+  .m3-container:has(details[open]) {
+    overflow: visible;
   }
 
   .split {
@@ -146,36 +161,34 @@
     }
     border-start-end-radius: var(--m3-split-button-outer-shape);
     border-end-end-radius: var(--m3-split-button-outer-shape);
-    &:is(details[open] summary) {
+    /* Reset default summary marker */
+    list-style: none;
+  }
+  summary::-webkit-details-marker { display: none; }
+
+    summary:is(details[open] summary) {
       padding-inline-start: 0.8125rem;
       padding-inline-end: 0.8125rem;
       border-radius: var(--m3-split-button-outer-shape);
-      > :global(.tint) {
-        opacity: 0.08;
-      }
-      > :global(svg) {
-        rotate: 180deg;
-      }
     }
-    > :global(svg) {
+    summary:is(details[open] summary) > :global(.tint) {
+      opacity: 0.08;
+    }
+    summary:is(details[open] summary) > :global(svg) {
+      rotate: 180deg;
+    }
+    summary > :global(svg) {
       transition: rotate var(--m3-util-easing-fast);
     }
-  }
-  details > :global(:not(summary)) :global {
-    position: absolute !important;
-    &:is(details.align-inner > *) {
-      left: 0;
-    }
-    &:is(details.align-right > *) {
-      right: 0;
-    }
-    &:is(details.align-down > *) {
-      top: 100%;
-    }
-    &:is(details.align-up > *) {
-      bottom: 100%;
-    }
-  }
+
+  	details > :global(:not(summary)) {
+		position: absolute !important;
+		z-index: 10;
+	}
+	details.align-inner > :global(:not(summary)) { left: 0; }
+	details.align-right > :global(:not(summary)) { right: 0; }
+	details.align-down > :global(:not(summary)) { top: 100%; }
+	details.align-up > :global(:not(summary)) { bottom: 100%; }
 
   .m3-container {
     print-color-adjust: exact;

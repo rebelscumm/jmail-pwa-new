@@ -15,6 +15,8 @@ export type AppSettings = {
   aiPageFetchOptIn?: boolean;
   taskFilePath?: string;
   trailingRefreshDelayMs?: number;
+  /** Duration for residual slide-out on refresh/removal (ms) */
+  trailingSlideOutDurationMs?: number;
 };
 
 const DEFAULTS: AppSettings = {
@@ -23,7 +25,8 @@ const DEFAULTS: AppSettings = {
   unreadOnUnsnooze: true,
   labelMapping: {},
   notifEnabled: false,
-  trailingRefreshDelayMs: 5000
+  trailingRefreshDelayMs: 5000,
+  trailingSlideOutDurationMs: 260
 };
 
 export const settings = writable<AppSettings>({ ...DEFAULTS });
@@ -39,7 +42,22 @@ export async function loadSettings(): Promise<void> {
     ...(app as Partial<AppSettings> | undefined),
     labelMapping: (mapping as LabelMapping | undefined) || {}
   };
+  // Normalize slide-out duration back to normal pace if previously slowed
+  const normalSlideMs = 260;
+  let needsWrite = false;
+  if (
+    typeof merged.trailingSlideOutDurationMs !== 'number' ||
+    merged.trailingSlideOutDurationMs <= 0 ||
+    merged.trailingSlideOutDurationMs > normalSlideMs
+  ) {
+    merged.trailingSlideOutDurationMs = normalSlideMs;
+    needsWrite = true;
+  }
   settings.set(merged);
+  if (needsWrite) {
+    const nextApp = { ...(app as object), trailingSlideOutDurationMs: normalSlideMs };
+    await db.put('settings', nextApp, 'app');
+  }
 }
 
 export async function saveLabelMapping(newMapping: LabelMapping): Promise<void> {

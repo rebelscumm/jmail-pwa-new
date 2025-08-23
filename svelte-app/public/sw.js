@@ -29,7 +29,24 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   const { request } = event;
-  if (request.method !== 'GET' || new URL(request.url).origin !== self.location.origin) {
+  const url = new URL(request.url);
+  if (request.method !== 'GET' || url.origin !== self.location.origin) {
+    return;
+  }
+
+  // Never cache navigations; always go to network to avoid serving stale index.html
+  if (request.mode === 'navigate') {
+    event.respondWith(
+      (async () => {
+        try {
+          return await fetch(request);
+        } catch {
+          const cache = await caches.open(CACHE_NAME);
+          const cached = await cache.match(request);
+          return cached || Response.error();
+        }
+      })()
+    );
     return;
   }
 

@@ -195,15 +195,17 @@
         <span class="label">Undo</span>
       {/snippet}
       {#snippet menu()}
-        <Menu>
-          {#if undoItems.length}
-            {#each undoItems as it, idx}
-              <MenuItem onclick={() => doUndo(idx + 1)}>{it.description}</MenuItem>
-            {/each}
-          {:else}
-            <MenuItem disabled={true} onclick={() => {}}>No actions to undo</MenuItem>
-          {/if}
-        </Menu>
+        <div class="history-menu">
+          <Menu>
+            {#if undoItems.length}
+              {#each undoItems as it, idx}
+                <MenuItem onclick={() => doUndo(idx + 1)}>{it.description}</MenuItem>
+              {/each}
+            {:else}
+              <MenuItem disabled={true} onclick={() => {}}>No actions to undo</MenuItem>
+            {/if}
+          </Menu>
+        </div>
       {/snippet}
     </SplitButton>
 
@@ -213,15 +215,17 @@
         <span class="label">Redo</span>
       {/snippet}
       {#snippet menu()}
-        <Menu>
-          {#if redoItems.length}
-            {#each redoItems as it, idx}
-              <MenuItem onclick={() => doRedo(idx + 1)}>{it.description}</MenuItem>
-            {/each}
-          {:else}
-            <MenuItem disabled={true} onclick={() => {}}>No actions to redo</MenuItem>
-          {/if}
-        </Menu>
+        <div class="history-menu">
+          <Menu>
+            {#if redoItems.length}
+              {#each redoItems as it, idx}
+                <MenuItem onclick={() => doRedo(idx + 1)}>{it.description}</MenuItem>
+              {/each}
+            {:else}
+              <MenuItem disabled={true} onclick={() => {}}>No actions to redo</MenuItem>
+            {/if}
+          </Menu>
+        </div>
       {/snippet}
     </SplitButton>
   </div>
@@ -296,6 +300,8 @@
   .about .row { display:flex; justify-content:space-between; gap:1rem; }
   .about .k { color: rgb(var(--m3-scheme-on-surface-variant)); }
   .about .v { color: rgb(var(--m3-scheme-on-surface)); font-variant-numeric: tabular-nums; }
+  /* Make Undo/Redo dropdowns wider to accommodate longer text */
+  .history-menu :global(.m3-container) { max-width: 28rem; }
 </style>
 
 

@@ -3,15 +3,16 @@
   import Button from '$lib/buttons/Button.svelte';
   import SplitButton from '$lib/buttons/SplitButton.svelte';
   import Menu from '$lib/containers/Menu.svelte';
-  import { archiveThread, trashThread, markRead, markUnread, undoLast } from '$lib/queue/intents';
+  import { archiveThread, trashThread, undoLast } from '$lib/queue/intents';
   import { snoozeThreadByRule, manualUnsnoozeThread, isSnoozedThread } from '$lib/snooze/actions';
   import { settings } from '$lib/stores/settings';
   import { base } from '$app/paths';
   import { show as showSnackbar } from '$lib/containers/snackbar';
   import { fade } from 'svelte/transition';
-  import { rules, DEFAULTS, normalizeRuleKey, resolveRule } from '$lib/snooze/rules';
+  import { DEFAULTS, normalizeRuleKey, resolveRule } from '$lib/snooze/rules';
   import { holdThread } from '$lib/stores/holds';
   import SnoozePanel from '$lib/snooze/SnoozePanel.svelte';
+
   // Lazy import to avoid circular or route coupling; fallback no-op if route not mounted
   async function scheduleReload() {
     try {
@@ -26,7 +27,7 @@
   }
 
   let { thread, selected = false, onToggleSelected = undefined }: { thread: import('$lib/types').GmailThread; selected?: boolean; onToggleSelected?: ((next: boolean, ev: Event) => void) | undefined } = $props();
-  
+
   let dx = $state(0);
   let startX = $state(0);
   let dragging = $state(false);
@@ -79,8 +80,8 @@
     }
     await animateAndSnooze(key, 'Snoozed');
   }
-  
-  // Unified slide-out performer used by all trailing actions
+
+  // Unified slide-out performer used by all trailing actions (restore original behavior)
   async function animateAndPerform(label: string, doIt: () => Promise<void>, _isError = false): Promise<void> {
     animating = true;
     dx = 160;
@@ -99,7 +100,7 @@
     // Schedule a reload to refresh list after trailing action
     scheduleReload();
   }
-  
+
   function onPointerDown(e: PointerEvent) {
     startTarget = e.target as HTMLElement;
     downInInteractive = !!startTarget?.closest(
@@ -111,7 +112,7 @@
     startX = e.clientX;
     // Do not capture immediately; only capture after small movement to allow native click
   }
-  
+
   async function onPointerUp(e: PointerEvent) {
     if (!dragging) return;
     if (downInInteractive) {
@@ -138,7 +139,7 @@
     }
     setTimeout(() => (animating = false), 150);
   }
-  
+
   function onPointerMove(e: PointerEvent) {
     if (!dragging || downInInteractive) return;
     const delta = e.clientX - startX;
@@ -148,23 +149,23 @@
     }
     dx = Math.max(Math.min(delta, 160), -160);
   }
-  
+
   async function animateAndDelete(): Promise<void> {
     await animateAndPerform('Deleted', () => trashThread(thread.threadId, { optimisticLocal: false }), true);
   }
-  
+
   async function animateAndArchive(): Promise<void> {
     await animateAndPerform('Archived', () => archiveThread(thread.threadId, { optimisticLocal: false }));
   }
-  
+
   async function animateAndUnsnooze(): Promise<void> {
     await animateAndPerform('Unsnoozed', () => manualUnsnoozeThread(thread.threadId, { optimisticLocal: false }));
   }
-  
+
   async function animateAndSnooze(ruleKey: string, label = 'Snoozed'): Promise<void> {
     await animateAndPerform(label, () => snoozeThreadByRule(thread.threadId, ruleKey, { optimisticLocal: false }));
   }
-  
+
   function formatDateTime(ts?: number): string {
     if (!ts) return '';
     try {
@@ -178,7 +179,7 @@
       return '';
     }
   }
-  
+
   function pickShortestSnooze(keys: string[]): string | null {
     try {
       const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
@@ -197,7 +198,7 @@
       return keys[0] || null;
     }
   }
-  
+
   $effect(() => {
     if (mappedKeys && mappedKeys.length) {
       const shortest = pickShortestSnooze(mappedKeys);
@@ -311,7 +312,6 @@
     text-align: center;
     box-shadow: var(--m3-util-elevation-1);
   }
-  /* Residue Undo button removed in favor of global snackbar per MD3 */
   .fg {
     position: relative;
     background: transparent;

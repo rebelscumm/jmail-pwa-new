@@ -82,7 +82,8 @@
   .panel { display:flex; flex-direction:column; gap:0.5rem; padding:0.25rem; min-width: 18rem; }
   .tabs { padding: 0 0.25rem; }
   .grid { display:flex; flex-wrap: wrap; gap:0.25rem; align-items:flex-start; }
-  .picker { display:flex; align-items:center; gap:0.5rem; padding: 0.25rem 0.25rem; }
+  .picker { display:flex; align-items:center; gap:0.5rem; padding: 0.25rem 0.25rem; position: relative; z-index: 3; }
+  .picker > input[type="date"] { background: transparent; color: inherit; border: 1px solid rgb(var(--m3-scheme-outline-variant)); border-radius: 0.5rem; padding: 0.25rem 0.5rem; }
   /* Grid contains MD3 assist chips */
   .preview { font-size:0.875rem; color: rgb(var(--m3-scheme-on-surface-variant)); }
 </style>
