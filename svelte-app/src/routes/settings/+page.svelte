@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { onDestroy } from 'svelte';
+  import { beforeNavigate } from '$app/navigation';
   import { getDB } from '$lib/db/indexeddb';
   import { listLabels } from '$lib/gmail/api';
   import type { GmailLabel } from '$lib/types';
@@ -83,6 +85,67 @@
     const tx = db.transaction('labels');
     labels = await tx.store.getAll();
     backups = await listBackups();
+  });
+
+  // Track dirty state for guards
+  let initialLoaded = $state(false);
+  let isDirty = $derived(() => {
+    // Compare current UI state against $settings where possible
+    const s = $settings as AppSettings;
+    if (!initialLoaded || !s) return false;
+    try {
+      const mappingChanged = mappingJson.trim() !== JSON.stringify(s.labelMapping, null, 2).trim();
+      const uiMappingChanged = JSON.stringify(uiMapping) !== JSON.stringify(s.labelMapping);
+      const appChanged = (
+        _anchorHour !== s.anchorHour ||
+        _roundMinutes !== s.roundMinutes ||
+        _unreadOnUnsnooze !== !!s.unreadOnUnsnooze ||
+        _notifEnabled !== !!s.notifEnabled ||
+        _aiProvider !== (s.aiProvider || 'openai') ||
+        _aiApiKey !== (s.aiApiKey || '') ||
+        _aiModel !== (s.aiModel || '') ||
+        _aiPageFetchOptIn !== !!s.aiPageFetchOptIn ||
+        _taskFilePath !== (s.taskFilePath || '') ||
+        Number(_trailingRefreshDelayMs || 0) !== Number(s.trailingRefreshDelayMs || 5000) ||
+        Number(_trailingSlideOutDurationMs || 0) !== Number((s as any).trailingSlideOutDurationMs || 260) ||
+        (_swipeRightPrimary as any) !== (s.swipeRightPrimary || 'archive') ||
+        (_swipeLeftPrimary as any) !== (s.swipeLeftPrimary || 'delete') ||
+        !!_confirmDelete !== !!s.confirmDelete ||
+        Number(_swipeCommitVelocityPxPerSec || 1000) !== Number(s.swipeCommitVelocityPxPerSec || 1000) ||
+        Number(_swipeDisappearMs || 5000) !== Number(s.swipeDisappearMs || 800)
+      );
+      return mappingChanged || uiMappingChanged || appChanged;
+    } catch { return false; }
+  });
+
+  $effect(() => { if ($settings) initialLoaded = true; });
+
+  // SvelteKit navigation guard
+  let removeBeforeUnload: (() => void) | null = null;
+  const removeBeforeNavigate = beforeNavigate((nav) => {
+    if (!isDirty) return;
+    const msg = 'You have unsaved changes. Discard them?';
+    if (!confirm(msg)) {
+      nav.cancel();
+      return;
+    }
+  });
+
+  // Browser unload guard
+  $effect(() => {
+    if (isDirty) {
+      const handler = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ''; };
+      window.addEventListener('beforeunload', handler);
+      removeBeforeUnload = () => window.removeEventListener('beforeunload', handler);
+    } else if (removeBeforeUnload) {
+      removeBeforeUnload();
+      removeBeforeUnload = null;
+    }
+  });
+
+  onDestroy(() => {
+    try { removeBeforeNavigate(); } catch {}
+    try { if (removeBeforeUnload) removeBeforeUnload(); } catch {}
   });
 
   async function discoverLabels() {
