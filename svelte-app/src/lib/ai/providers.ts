@@ -18,6 +18,18 @@ async function safeParseJson(res: Response): Promise<any> {
   }
 }
 
+function getOpenAIRateLimitHeaders(res: Response): Record<string, string | null> {
+  const h = res.headers;
+  return {
+    'x-ratelimit-limit-requests': h.get('x-ratelimit-limit-requests'),
+    'x-ratelimit-remaining-requests': h.get('x-ratelimit-remaining-requests'),
+    'x-ratelimit-limit-tokens': h.get('x-ratelimit-limit-tokens'),
+    'x-ratelimit-remaining-tokens': h.get('x-ratelimit-remaining-tokens'),
+    'retry-after': h.get('retry-after'),
+    'x-request-id': h.get('x-request-id') || h.get('openai-request-id')
+  };
+}
+
 async function callOpenAI(prompt: string): Promise<AIResult> {
   const s = get(settings);
   const key = s.aiApiKey || '';
@@ -28,7 +40,22 @@ async function callOpenAI(prompt: string): Promise<AIResult> {
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
     body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], temperature: 0.2 })
   });
-  if (!res.ok) throw new Error(`OpenAI error ${res.status}`);
+  if (!res.ok) {
+    const headers = getOpenAIRateLimitHeaders(res);
+    let body: any = undefined;
+    try {
+      body = await res.clone().json();
+    } catch (_) {
+      try {
+        body = await res.clone().text();
+      } catch (_) {
+        body = undefined;
+      }
+    }
+    const info = { status: res.status, statusText: res.statusText, headers, body };
+    // Surface details for troubleshooting which quota was tripped
+    throw new Error(`OpenAI error ${res.status}: ${JSON.stringify(info)}`);
+  }
   const data = await safeParseJson(res);
   const text = data?.choices?.[0]?.message?.content?.trim?.() || '';
   return { text };
