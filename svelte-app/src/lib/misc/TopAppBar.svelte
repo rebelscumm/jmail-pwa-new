@@ -72,6 +72,7 @@
   }
 
   let search = $state('');
+  let searchOpen = $state(false);
   $effect(() => {
     import('$lib/stores/search').then(m => m.searchQuery.set(search));
   });
@@ -241,6 +242,27 @@
     {/if}
   </div>
   <div class="right">
+    {#if searchOpen || search.length > 0}
+      <div class="search-field">
+        <TextField label="Search" leadingIcon={iconSearch} bind:value={search} enter={() => { import('$lib/stores/search').then(m => m.searchQuery.set(search)); }} trailing={{ icon: iconSearch, onclick: () => { import('$lib/stores/search').then(m => m.searchQuery.set(search)); } }} on:blur={() => { if (!search) searchOpen = false; }} />
+      </div>
+    {:else}
+      <Button variant="text" iconType="full" aria-label="Search" onclick={() => { searchOpen = true; }}>
+        <Icon icon={iconSearch} />
+      </Button>
+    {/if}
+
+    <Button variant="outlined" iconType="left" onclick={doSync}>
+      {#snippet children()}
+        <Icon icon={iconSync} />
+        {#if $syncState.pendingOps > 0}
+          <span class="label">{$syncState.pendingOps} pending</span>
+        {:else}
+          <span class="last-sync m3-font-label-small">{formatLastSync($syncState.lastUpdatedAt)}</span>
+        {/if}
+      {/snippet}
+    </Button>
+
     <SplitButton variant="filled" x="inner" y="down" onclick={() => doUndo(1)} on:toggle={(e) => { if (e.detail) refreshUndo(); }}>
       {#snippet children()}
         <Icon icon={iconUndo} />
@@ -281,19 +303,6 @@
       {/snippet}
     </SplitButton>
 
-    <div class="search-field">
-      <TextField label="Search" leadingIcon={iconSearch} bind:value={search} enter={() => { import('$lib/stores/search').then(m => m.searchQuery.set(search)); }} trailing={{ icon: iconSearch, onclick: () => { import('$lib/stores/search').then(m => m.searchQuery.set(search)); } }} />
-    </div>
-    <Button variant="outlined" iconType="left" onclick={doSync}>
-      {#snippet children()}
-        <Icon icon={iconSync} />
-        {#if $syncState.pendingOps > 0}
-          <span class="label">{$syncState.pendingOps} pending</span>
-        {:else}
-          <span class="last-sync m3-font-label-small">{formatLastSync($syncState.lastUpdatedAt)}</span>
-        {/if}
-      {/snippet}
-    </Button>
     <details class="overflow" bind:this={overflowDetails}>
       <summary aria-label="More actions" class="summary-btn" onclick={toggleOverflow}>
         <Button variant="text" iconType="full" aria-label="More actions">
@@ -331,11 +340,12 @@
     justify-content: space-between;
     gap: 0.5rem;
     padding: 0.25rem 0;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
   }
   .left, .right { display: flex; align-items: center; gap: 0.5rem; }
   .right { flex-wrap: wrap; min-width: 0; }
   .label { margin-inline-start: 0.25rem; }
+  .search { display: flex; align-items: center; }
   .search-field { flex: 1 1 12rem; min-width: 0; }
   .search-field :global(.m3-container) {
     min-width: 12rem;
@@ -353,5 +363,3 @@
   /* Make Undo/Redo dropdowns wider to accommodate longer text */
   .history-menu :global(.m3-container) { max-width: 28rem; }
 </style>
-
-
