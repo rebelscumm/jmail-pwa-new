@@ -33,6 +33,7 @@
   import { copyGmailDiagnosticsToClipboard } from "$lib/gmail/api";
   import { startUpdateChecker } from "$lib/update/checker";
   import KeyboardShortcutsDialog from "$lib/misc/KeyboardShortcutsDialog.svelte";
+  import { settings as appSettings } from "$lib/stores/settings";
   
   if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
 
@@ -260,7 +261,16 @@
   let preAuthDialog: ReturnType<typeof PreAuthDialog>;
   let isOffline = $state(false);
   let kbdDialog: ReturnType<typeof KeyboardShortcutsDialog>;
-
+  
+  $effect(() => {
+    const percent = (typeof ($appSettings as any)?.fontScalePercent === 'number' ? ($appSettings as any).fontScalePercent : 100);
+    try {
+      if (typeof document !== 'undefined') {
+        document.documentElement.style.setProperty('--m3-font-scale', `${percent}%`);
+      }
+    } catch {}
+  });
+  
   $effect(() => { if (snackbar) registerSnackbar(snackbar.show); });
   $effect(() => { if (preAuthDialog) registerPreAuth(preAuthDialog.show); });
 
