@@ -18,17 +18,23 @@ async function safeParseJson(res: Response): Promise<any> {
   }
 }
 
-async function callOpenAI(prompt: string): Promise<AIResult> {
+async function callOpenAI(prompt: string, modelOverride?: string): Promise<AIResult> {
   const s = get(settings);
   const key = s.aiApiKey || '';
-  const model = s.aiModel || 'gpt-4o-mini';
+  if (!key) throw new Error('OpenAI API key missing. Add it in Settings.');
+  const model = modelOverride || s.aiModel || 'gpt-4o-mini';
   const url = 'https://api.openai.com/v1/chat/completions';
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
     body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], temperature: 0.2 })
   });
-  if (!res.ok) throw new Error(`OpenAI error ${res.status}`);
+  if (!res.ok) {
+    const data = await safeParseJson(res);
+    const detail = (data?.error?.message || '').toString();
+    if (res.status === 401) throw new Error('OpenAI unauthorized (401). Check API key and project access.');
+    throw new Error(`OpenAI error ${res.status}${detail ? `: ${detail}` : ''}`);
+  }
   const data = await safeParseJson(res);
   const text = data?.choices?.[0]?.message?.content?.trim?.() || '';
   return { text };
@@ -71,8 +77,8 @@ export async function aiSummarizeEmail(subject: string, bodyText?: string, bodyH
   const text = bodyText || htmlToText(bodyHtml) || '';
   const redacted = redactPII(`${subject}\n\n${text}`);
   const prompt = `You are a concise assistant. Provide a short bullet list of the most important points in this email, most important first. Keep it under 6 bullets.\n\nEmail:\n${redacted}`;
-  const provider = s.aiProvider || 'openai';
-  const out = provider === 'anthropic' ? await callAnthropic(prompt) : provider === 'gemini' ? await callGemini(prompt) : await callOpenAI(prompt);
+  // Force summarization to use OpenAI GPT-5 nano regardless of selected provider
+  const out = await callOpenAI(prompt, 'gpt-5-nano');
   return out.text;
 }
 
