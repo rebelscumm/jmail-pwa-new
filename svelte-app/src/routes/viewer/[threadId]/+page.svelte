@@ -209,9 +209,18 @@
   async function summarize(mid: string) {
     const m = $messages[mid];
     if (!m) return;
-    const text = await aiSummarizeEmail(m.headers?.Subject || '', m.bodyText, m.bodyHtml);
-    navigator.clipboard.writeText(text);
-    alert('Summary copied to clipboard.');
+    try {
+      const text = await aiSummarizeEmail(m.headers?.Subject || '', m.bodyText, m.bodyHtml);
+      if (!text) {
+        alert('No summary generated.');
+        return;
+      }
+      navigator.clipboard.writeText(text);
+      alert('Summary copied to clipboard.');
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      alert(`Failed to summarize: ${msg}`);
+    }
   }
   async function replyDraft(mid: string) {
     const m = $messages[mid]; if (!m) return;
