@@ -35,7 +35,8 @@
     border-radius: var(--m3-menu-shape);
     min-width: 7rem;
     max-width: 17.5rem;
-    max-height: min(72vh, 32rem);
+    /* Slightly taller so snooze date picker buttons are not clipped */
+    max-height: min(80vh, 36rem);
     overflow-y: auto;
     overscroll-behavior: contain;
     background-color: rgb(var(--m3-scheme-surface-container));

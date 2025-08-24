@@ -102,3 +102,58 @@ export function startUpdateChecker(
 	intervalId = window.setInterval(() => { void checkOnce(); }, intervalMs);
 	return stop;
 }
+
+/** Returns the current app version information. */
+export function getCurrentVersionInfo(): VersionInfo {
+	return { appVersion, buildId };
+}
+
+/** Fetches the remote version information from '/version.json'. Returns null on failure. */
+export async function fetchRemoteVersionInfo(): Promise<VersionInfo | null> {
+	try {
+		const res = await fetch(`/version.json?ts=${Date.now()}`, { cache: 'no-store' });
+		if (!res.ok) return null;
+		const data = (await res.json()) as VersionInfo;
+		if (!data || !data.buildId) return null;
+		return data;
+	} catch {
+		return null;
+	}
+}
+
+export type CheckOnceResult =
+	| { status: 'new'; remote: VersionInfo; current: VersionInfo }
+	| { status: 'same'; current: VersionInfo; remote?: VersionInfo }
+	| { status: 'offline'; current: VersionInfo }
+	| { status: 'error'; current: VersionInfo };
+
+/**
+ * Performs a one-shot update check and returns a structured result.
+ * Does not schedule future checks.
+ */
+export async function checkForUpdateOnce(): Promise<CheckOnceResult> {
+	const current = getCurrentVersionInfo();
+	try {
+		if (typeof navigator !== 'undefined' && 'onLine' in navigator && (navigator as any).onLine === false) {
+			return { status: 'offline', current };
+		}
+	} catch {}
+	const remote = await fetchRemoteVersionInfo();
+	if (!remote) return { status: 'error', current };
+	if (
+		remote.buildId &&
+		(remote.appVersion !== current.appVersion || remote.buildId !== current.buildId)
+	) {
+		return { status: 'new', remote, current };
+	}
+	return { status: 'same', current, remote };
+}
+
+/** Navigates with a hard reload parameter to ensure newest assets are loaded. */
+export function hardReloadNow(): void {
+	try {
+		const url = new URL(window.location.href);
+		url.searchParams.set('__hardreload', String(Date.now()));
+		window.location.assign(url.toString());
+	} catch {}
+}

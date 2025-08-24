@@ -14,6 +14,7 @@
     error = false,
     value = $bindable(),
     enter,
+    onBlur,
     ...extra
   }: {
     label: string;
@@ -24,6 +25,7 @@
     error?: boolean;
     value?: string;
     enter?: () => void;
+    onBlur?: (e: FocusEvent) => void;
   } & HTMLInputAttributes = $props();
   const id = $props.id();
 </script>
@@ -39,10 +41,11 @@
     placeholder=" "
     bind:value
     onkeydown={(e) => e.key == "Enter" && enter?.()}
+    onblur={onBlur}
     {id}
     {disabled}
     {required}
-    {...extra}
+    {...(extra as any)}
     defaultValue={extra.defaultValue}
   />
   <!-- TODO: once https://github.com/sveltejs/svelte/pull/16481 is finished, remove the defaultvalue thing -->
@@ -53,7 +56,7 @@
   {/if}
   {#if trailing}
     {@const { icon, ...extra } = trailing}
-    <button type="button" class="trailing" {...extra}>
+    <button type="button" class="trailing" {...(extra as any)}>
       <Layer />
       <Icon {icon} />
     </button>

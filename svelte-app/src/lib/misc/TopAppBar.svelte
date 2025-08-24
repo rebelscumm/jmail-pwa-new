@@ -12,6 +12,7 @@
   import { copyGmailDiagnosticsToClipboard } from '$lib/gmail/api';
   import Dialog from '$lib/containers/Dialog.svelte';
   import { appVersion, buildId } from '$lib/utils/version';
+  import { checkForUpdateOnce, hardReloadNow } from '$lib/update/checker';
   import { signOut, acquireTokenInteractive, resolveGoogleClientId, initAuth } from '$lib/gmail/auth';
   import iconSearch from '@ktibow/iconset-material-symbols/search';
   import iconMore from '@ktibow/iconset-material-symbols/more-vert';
@@ -222,6 +223,38 @@
 
   let cacheVersion = $state('unknown');
 
+  let checkingUpdate = $state(false);
+  async function doCheckForUpdates() {
+    if (checkingUpdate) return;
+    checkingUpdate = true;
+    try {
+      showSnackbar({ message: 'Checking for updates…' });
+    } catch {}
+    try {
+      const res = await checkForUpdateOnce();
+      if (res.status === 'new') {
+        showSnackbar({
+          message: 'A new version is available',
+          actions: {
+            Reload: () => hardReloadNow()
+          },
+          closable: true,
+          timeout: null
+        });
+      } else if (res.status === 'same') {
+        showSnackbar({ message: 'You are up to date', timeout: 2500 });
+      } else if (res.status === 'offline') {
+        showSnackbar({ message: 'You are offline. Connect to the internet to check.', closable: true });
+      } else {
+        showSnackbar({ message: 'Could not check for updates. Try again later.', closable: true });
+      }
+    } catch (_) {
+      showSnackbar({ message: 'Could not check for updates. Try again later.', closable: true });
+    } finally {
+      checkingUpdate = false;
+    }
+  }
+
   onMount(async () => {
     try {
       const keys = await caches.keys();
@@ -244,7 +277,7 @@
   <div class="right">
     {#if searchOpen || search.length > 0}
       <div class="search-field">
-        <TextField label="Search" leadingIcon={iconSearch} bind:value={search} enter={() => { import('$lib/stores/search').then(m => m.searchQuery.set(search)); }} trailing={{ icon: iconSearch, onclick: () => { import('$lib/stores/search').then(m => m.searchQuery.set(search)); } }} on:blur={() => { if (!search) searchOpen = false; }} />
+        <TextField label="Search" leadingIcon={iconSearch} bind:value={search} enter={() => { import('$lib/stores/search').then(m => m.searchQuery.set(search)); }} trailing={{ icon: iconSearch, onclick: () => { import('$lib/stores/search').then(m => m.searchQuery.set(search)); } }} onBlur={() => { if (!search) searchOpen = false; }} />
       </div>
     {:else}
       <Button variant="text" iconType="full" aria-label="Search" onclick={() => { searchOpen = true; }}>
@@ -327,6 +360,7 @@
         </div>
       {/snippet}
       {#snippet buttons()}
+        <Button variant="text" disabled={checkingUpdate} onclick={doCheckForUpdates}>{checkingUpdate ? 'Checking…' : 'Check for updates'}</Button>
         <Button variant="text" onclick={() => (aboutOpen = false)}>Close</Button>
       {/snippet}
     </Dialog>
