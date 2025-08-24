@@ -16,19 +16,98 @@
   import { acquireTokenForScopes, SCOPES, fetchTokenInfo, signOut, acquireTokenInteractive } from "$lib/gmail/auth";
   import { aiSummarizeEmail, aiDraftReply, findUnsubscribeTarget, aiExtractUnsubscribeUrl } from "$lib/ai/providers";
   import { filters, deleteSavedFilter, type ThreadFilter } from "$lib/stores/filters";
+  import { applyFilterToThreads } from "$lib/stores/filters";
   import FilterBar from "$lib/utils/FilterBar.svelte";
   import Menu from "$lib/containers/Menu.svelte";
   import MenuItem from "$lib/containers/MenuItem.svelte";
   import Icon from "$lib/misc/_icon.svelte";
   import iconBack from "@ktibow/iconset-material-symbols/chevron-left";
+  import iconForward from "@ktibow/iconset-material-symbols/chevron-right";
   import iconArrowDown from "@ktibow/iconset-material-symbols/arrow-downward";
   import iconArrowUp from "@ktibow/iconset-material-symbols/arrow-upward";
+  import { searchQuery } from "$lib/stores/search";
   const threadId = $page.params.threadId;
   const currentThread = $derived($threads.find((t) => t.threadId === threadId));
   function copyText(text: string) { navigator.clipboard.writeText(text); }
   let loadingMap: Record<string, boolean> = $state({});
   let errorMap: Record<string, string> = $state({});
   let autoTried: Record<string, boolean> = $state({});
+  // Derive adjacent thread navigation using Inbox context + global search/filter/sort
+  const inboxThreads = $derived(($threads || []).filter((t) => (t.labelIds || []).includes('INBOX')));
+  const visibleCandidates = $derived((() => {
+    const q = ($searchQuery || '').trim().toLowerCase();
+    if (!q) return inboxThreads;
+    return inboxThreads.filter((t) => {
+      const subj = (t.lastMsgMeta.subject || '').toLowerCase();
+      const from = (t.lastMsgMeta.from || '').toLowerCase();
+      return subj.includes(q) || from.includes(q);
+    });
+  })());
+  const filteredCandidates = $derived(applyFilterToThreads(visibleCandidates, $messages || {}, $filters.active));
+  function cmp(a: string, b: string): number { return a.localeCompare(b); }
+  function num(n: unknown): number { return typeof n === 'number' && !Number.isNaN(n) ? n : 0; }
+  function getSender(a: import('$lib/types').GmailThread): string {
+    const raw = a.lastMsgMeta.from || '';
+    const m = raw.match(/^(.*?)\s*<([^>]+)>/);
+    return (m ? (m[1] || m[2]) : raw).toLowerCase();
+  }
+  function getSubject(a: import('$lib/types').GmailThread): string { return (a.lastMsgMeta.subject || '').toLowerCase(); }
+  function getDate(a: import('$lib/types').GmailThread): number { return num(a.lastMsgMeta.date) || 0; }
+  function isUnread(a: import('$lib/types').GmailThread): boolean { return (a.labelIds || []).includes('UNREAD'); }
+  const currentSort: NonNullable<import('$lib/stores/settings').AppSettings['inboxSort']> = $derived(($settings.inboxSort || 'date_desc') as NonNullable<import('$lib/stores/settings').AppSettings['inboxSort']>);
+  const sortedCandidates = $derived((() => {
+    const arr = [...filteredCandidates];
+    switch (currentSort) {
+      case 'date_asc':
+        arr.sort((a, b) => getDate(a) - getDate(b));
+        break;
+      case 'unread_first':
+        arr.sort((a, b) => {
+          const d = (isUnread(b) as any) - (isUnread(a) as any);
+          if (d !== 0) return d;
+          return getDate(b) - getDate(a);
+        });
+        break;
+      case 'sender_az':
+        arr.sort((a, b) => {
+          const s = cmp(getSender(a), getSender(b));
+          if (s !== 0) return s;
+          return getDate(b) - getDate(a);
+        });
+        break;
+      case 'sender_za':
+        arr.sort((a, b) => {
+          const s = cmp(getSender(b), getSender(a));
+          if (s !== 0) return s;
+          return getDate(b) - getDate(a);
+        });
+        break;
+      case 'subject_az':
+        arr.sort((a, b) => {
+          const s = cmp(getSubject(a), getSubject(b));
+          if (s !== 0) return s;
+          return getDate(b) - getDate(a);
+        });
+        break;
+      case 'subject_za':
+        arr.sort((a, b) => {
+          const s = cmp(getSubject(b), getSubject(a));
+          if (s !== 0) return s;
+          return getDate(b) - getDate(a);
+        });
+        break;
+      case 'date_desc':
+      default:
+        arr.sort((a, b) => getDate(b) - getDate(a));
+        break;
+    }
+    return arr;
+  })());
+  const currentIndex = $derived(sortedCandidates.findIndex((t) => t.threadId === threadId));
+  const prevThreadId = $derived(currentIndex > 0 ? (sortedCandidates[currentIndex - 1]?.threadId || null) : null);
+  const nextThreadId = $derived(currentIndex >= 0 && currentIndex < sortedCandidates.length - 1 ? (sortedCandidates[currentIndex + 1]?.threadId || null) : null);
+  function gotoPrev() { if (prevThreadId) goto(`/viewer/${prevThreadId}`); }
+  function gotoNext() { if (nextThreadId) goto(`/viewer/${nextThreadId}`); }
   let threadLoading: boolean = $state(false);
   let threadError: string | null = $state(null);
   function formatDateTime(ts?: number | string): string {
@@ -315,7 +394,19 @@ function scrollToBottom() {
         <Button variant="text" onclick={() => replyDraft(mid)}>Reply (AI) → Clipboard</Button>
         <Button variant="text" onclick={() => createTask(mid)}>Create Task</Button>
       {/if}
-      <Button variant="text" iconType="left" onclick={scrollToBottom} aria-label="Scroll to bottom" style="margin-left:auto">
+      <Button variant="text" iconType="left" disabled={!prevThreadId} onclick={gotoPrev} aria-label="Previous conversation" style="margin-left:auto">
+        {#snippet children()}
+          <Icon icon={iconBack} />
+          <span class="label">Previous</span>
+        {/snippet}
+      </Button>
+      <Button variant="text" iconType="left" disabled={!nextThreadId} onclick={gotoNext} aria-label="Next conversation">
+        {#snippet children()}
+          <Icon icon={iconForward} />
+          <span class="label">Next</span>
+        {/snippet}
+      </Button>
+      <Button variant="text" iconType="left" onclick={scrollToBottom} aria-label="Scroll to bottom">
         {#snippet children()}
           <Icon icon={iconArrowDown} />
           <span class="label">Bottom</span>
@@ -444,6 +535,18 @@ function scrollToBottom() {
         </Button>
       </div>
       <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+        <Button variant="text" iconType="left" disabled={!prevThreadId} onclick={gotoPrev} aria-label="Previous conversation">
+          {#snippet children()}
+            <Icon icon={iconBack} />
+            <span class="label">Previous</span>
+          {/snippet}
+        </Button>
+        <Button variant="text" iconType="left" disabled={!nextThreadId} onclick={gotoNext} aria-label="Next conversation">
+          {#snippet children()}
+            <Icon icon={iconForward} />
+            <span class="label">Next</span>
+          {/snippet}
+        </Button>
         <Button variant="text" iconType="left" onclick={scrollToTop} aria-label="Scroll to top">
           {#snippet children()}
             <Icon icon={iconArrowUp} />

@@ -80,8 +80,10 @@ export async function loadSettings(): Promise<void> {
 
 export async function saveLabelMapping(newMapping: LabelMapping): Promise<void> {
   const db = await getDB();
-  await db.put('settings', newMapping, 'labelMapping');
-  settings.update((s) => ({ ...s, labelMapping: newMapping }));
+  // Ensure we persist a plain object (avoid Svelte $state proxies not being cloneable)
+  const clean: LabelMapping = JSON.parse(JSON.stringify(newMapping));
+  await db.put('settings', clean, 'labelMapping');
+  settings.update((s) => ({ ...s, labelMapping: clean }));
 }
 
 export async function updateAppSettings(patch: Partial<AppSettings>): Promise<void> {
