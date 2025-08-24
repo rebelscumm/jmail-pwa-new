@@ -614,5 +614,19 @@ function scrollToBottom() {
     max-width: 100% !important;
     height: auto !important;
   }
+  /* Mobile: avoid clipping wide email layouts; prefer container scroll to hidden overflow */
+  .html-body {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  /* Override inline min-widths commonly set by marketing emails */
+  :global(.html-body [style*="min-width"]) {
+    min-width: 0 !important;
+  }
+  /* Ensure attribute-sized tables scale down */
+  :global(.html-body table[width]) {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
 </style>
 

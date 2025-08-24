@@ -50,6 +50,7 @@
   const timeKeys = ['6am','2pm','7pm'];
   const persistentKeys = ['Desktop','long-term'];
   const ruleKeys = [ ...new Set([ ...quickKeys, ...hourKeys, ...dayKeys, ...weekdayKeys, ...timeKeys, ...persistentKeys ]) ];
+  let _fontScalePercent = $state(100);
 
   // Tabs
   let currentTab = $state<'app' | 'mapping' | 'backups'>('app');
@@ -80,6 +81,7 @@
     _swipeDisappearMs = Number(s.swipeDisappearMs || 5000);
     mappingJson = JSON.stringify(s.labelMapping, null, 2);
     uiMapping = { ...s.labelMapping };
+    _fontScalePercent = Number((s as any).fontScalePercent || 100);
 
     const db = await getDB();
     const tx = db.transaction('labels');
@@ -114,7 +116,7 @@
         Number(_swipeCommitVelocityPxPerSec || 1000) !== Number(s.swipeCommitVelocityPxPerSec || 1000) ||
         Number(_swipeDisappearMs || 5000) !== Number(s.swipeDisappearMs || 800)
       );
-      return mappingChanged || uiMappingChanged || appChanged;
+      return mappingChanged || uiMappingChanged || appChanged || (Number(_fontScalePercent || 100) !== Number((s as any).fontScalePercent || 100));
     } catch { return false; }
   });
 
@@ -238,7 +240,7 @@
   }
 
   async function saveAppSettings() {
-    await updateAppSettings({ anchorHour: _anchorHour, roundMinutes: _roundMinutes, unreadOnUnsnooze: _unreadOnUnsnooze, notifEnabled: _notifEnabled, aiProvider: _aiProvider, aiApiKey: _aiApiKey, aiModel: _aiModel, aiPageFetchOptIn: _aiPageFetchOptIn, taskFilePath: _taskFilePath, trailingRefreshDelayMs: Math.max(0, Number(_trailingRefreshDelayMs || 0)), trailingSlideOutDurationMs: Math.max(0, Number(_trailingSlideOutDurationMs || 0)), swipeRightPrimary: _swipeRightPrimary, swipeLeftPrimary: _swipeLeftPrimary, confirmDelete: _confirmDelete, swipeCommitVelocityPxPerSec: Math.max(100, Number(_swipeCommitVelocityPxPerSec || 1000)), swipeDisappearMs: Math.max(100, Number(_swipeDisappearMs || 800)) });
+    await updateAppSettings({ anchorHour: _anchorHour, roundMinutes: _roundMinutes, unreadOnUnsnooze: _unreadOnUnsnooze, notifEnabled: _notifEnabled, aiProvider: _aiProvider, aiApiKey: _aiApiKey, aiModel: _aiModel, aiPageFetchOptIn: _aiPageFetchOptIn, taskFilePath: _taskFilePath, trailingRefreshDelayMs: Math.max(0, Number(_trailingRefreshDelayMs || 0)), trailingSlideOutDurationMs: Math.max(0, Number(_trailingSlideOutDurationMs || 0)), swipeRightPrimary: _swipeRightPrimary, swipeLeftPrimary: _swipeLeftPrimary, confirmDelete: _confirmDelete, swipeCommitVelocityPxPerSec: Math.max(100, Number(_swipeCommitVelocityPxPerSec || 1000)), swipeDisappearMs: Math.max(100, Number(_swipeDisappearMs || 800)), fontScalePercent: Math.max(50, Math.min(200, Number(_fontScalePercent || 100))) });
     if (_notifEnabled && 'Notification' in window) {
       const p = await Notification.requestPermission();
       if (p !== 'granted') {
@@ -295,6 +297,11 @@
       <TextFieldOutlined label="Round minutes (1-60)" type="number" min="1" max="60" step="1" bind:value={(_roundMinutes as any)} />
       <TextFieldOutlined label="Trailing refresh delay (ms)" type="number" min="0" step="100" bind:value={(_trailingRefreshDelayMs as any)} />
       <TextFieldOutlined label="Slide-out duration on refresh (ms)" type="number" min="0" step="20" bind:value={(_trailingSlideOutDurationMs as any)} />
+      <div style="display:flex; gap:0.5rem; align-items:center;">
+        <TextFieldOutlined label="Font size (%)" type="number" min="50" max="200" step="1" bind:value={(_fontScalePercent as any)} />
+        <Button variant="outlined" onclick={() => (_fontScalePercent = Math.max(50, Math.min(200, Number(_fontScalePercent || 0) - 1)))}>-1%</Button>
+        <Button variant="outlined" onclick={() => (_fontScalePercent = Math.max(50, Math.min(200, Number(_fontScalePercent || 0) + 1)))}>+1%</Button>
+      </div>
       <label style="display:flex; align-items:center; gap:0.5rem;">
         <Checkbox>
           <input type="checkbox" bind:checked={_unreadOnUnsnooze} />

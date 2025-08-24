@@ -29,6 +29,8 @@ export type AppSettings = {
   swipeDisappearMs?: number;
   /** Sorting preference for inbox thread list */
   inboxSort?: 'date_desc' | 'date_asc' | 'unread_first' | 'sender_az' | 'sender_za' | 'subject_az' | 'subject_za';
+  /** Global font scale percent for rem-based MD3 typography (100 = default) */
+  fontScalePercent?: number;
 };
 
 const DEFAULTS: AppSettings = {
@@ -44,7 +46,8 @@ const DEFAULTS: AppSettings = {
   confirmDelete: false,
   swipeCommitVelocityPxPerSec: 1000,
   swipeDisappearMs: 5000,
-  inboxSort: 'date_desc'
+  inboxSort: 'date_desc',
+  fontScalePercent: 100
 };
 
 export const settings = writable<AppSettings>({ ...DEFAULTS });
