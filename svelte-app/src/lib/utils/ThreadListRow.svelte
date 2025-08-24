@@ -19,6 +19,10 @@
   import iconSnooze from '@ktibow/iconset-material-symbols/snooze';
   import { onMount } from 'svelte';
   import iconSchedule from '@ktibow/iconset-material-symbols/schedule';
+  import Chip from '$lib/forms/Chip.svelte';
+  import iconX from '@ktibow/iconset-material-symbols/close';
+  import { labels as labelsStore } from '$lib/stores/labels';
+  import { queueThreadModify, recordIntent } from '$lib/queue/intents';
 
   // Lazy import to avoid circular or route coupling; fallback no-op if route not mounted
   async function scheduleReload() {
@@ -349,10 +353,41 @@
 
   async function animateAndSnooze(ruleKey: string, label = 'Snoozed'): Promise<void> { await commitAction('snooze', { ruleKey }); }
 
+  // User label chips for inline removal
+  const labelById = $derived(Object.fromEntries(($labelsStore || []).filter((l) => l && l.type === 'user').map((l) => [l.id, l])) as Record<string, import('$lib/types').GmailLabel>);
+  const userLabelsForThread = $derived((thread.labelIds || []).map((id) => labelById[id]).filter(Boolean) as import('$lib/types').GmailLabel[]);
+
+  async function removeLabelInline(labelId: string, labelName?: string): Promise<void> {
+    try {
+      await queueThreadModify(thread.threadId, [], [labelId], { optimisticLocal: true });
+      await recordIntent(thread.threadId, { type: 'removeLabel', addLabelIds: [], removeLabelIds: [labelId] }, { addLabelIds: [labelId], removeLabelIds: [] });
+      showSnackbar({ message: `Removed label${labelName ? ` “${labelName}”` : ''}`, actions: { Undo: () => undoLast(1) }, timeout: 4000 });
+    } catch {
+      showSnackbar({ message: 'Failed to remove label' });
+    }
+  }
+
   function formatDateTime(ts?: number): string {
     if (!ts) return '';
     try {
-      return new Date(ts).toLocaleString(undefined, {
+      const date = new Date(ts);
+      const today = new Date();
+      const timeStr = date.toLocaleString(undefined, { hour: 'numeric', minute: '2-digit' });
+      const isToday = (date.getFullYear() === today.getFullYear() &&
+                       date.getMonth() === today.getMonth() &&
+                       date.getDate() === today.getDate());
+      if (isToday) {
+        return `Today, ${timeStr}`;
+      }
+      const yesterday = new Date(today);
+      yesterday.setDate(today.getDate() - 1);
+      const isYesterday = (date.getFullYear() === yesterday.getFullYear() &&
+                           date.getMonth() === yesterday.getMonth() &&
+                           date.getDate() === yesterday.getDate());
+      if (isYesterday) {
+        return `Yesterday, ${timeStr}`;
+      }
+      return date.toLocaleString(undefined, {
         month: 'short',
         day: 'numeric',
         hour: 'numeric',
@@ -456,14 +491,22 @@
 {#snippet threadHeadline()}
   <span class="row-headline">
     <span class="title">{thread.lastMsgMeta.subject || '(no subject)'}</span>
-    {#if thread.lastMsgMeta?.date}
-      <span class="meta"><Icon icon={iconSchedule} /><span class="meta-text">{formatDateTime(thread.lastMsgMeta.date)}</span></span>
-    {/if}
   </span>
 {/snippet}
 
 {#snippet threadSupporting()}
-  {#if isSnoozedThread(thread)}<span class="badge">Snoozed</span>{/if}
+  <div class="supporting">
+    {#if userLabelsForThread.length}
+      <div class="labels-wrap">
+        {#each userLabelsForThread as l}
+          <Chip variant="input" trailingIcon={iconX} onclick={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); removeLabelInline(l.id, l.name || l.id); }}>{l.name || l.id}</Chip>
+        {/each}
+      </div>
+    {/if}
+    {#if thread.lastMsgMeta?.date}
+      <span class="meta"><Icon icon={iconSchedule} /><span class="meta-text">{formatDateTime(thread.lastMsgMeta.date)}</span></span>
+    {/if}
+  </div>
 {/snippet}
 
 {#snippet trailing()}
@@ -486,7 +529,7 @@
           <div class="snooze-menu">
             <Menu>
               {#if mappedKeys.length > 0}
-                <SnoozePanel onSelect={(rk) => { lastSelectedSnoozeRuleKey.set(normalizeRuleKey(rk)); trySnooze(rk); }} />
+                <SnoozePanel onSelect={(rk) => { lastSelectedSnoozeRuleKey.set(normalizeRuleKey(rk)); trySnooze(rk); const d = snoozeDetails; if (d) d.open = false; }} />
               {:else}
                 <div style="padding:0.5rem 0.75rem; max-width: 21rem;" class="m3-font-body-small">No snooze labels configured. Map them in Settings.</div>
               {/if}
@@ -655,7 +698,8 @@
     flex: 1 1 auto;
     overflow: hidden;
     text-overflow: ellipsis;
-    white-space: nowrap;
+    white-space: normal; /* Allow wrapping for multiline */
+    font-weight: 500;
   }
   .row-headline .meta {
     flex: 0 0 auto;
@@ -666,6 +710,8 @@
     white-space: nowrap;
   }
   .row-headline .meta :global(svg) { width: 1rem; height: 1rem; }
+  .supporting { display: flex; align-items: center; gap: 0.5rem; }
+  .labels-wrap { display:flex; gap: 0.25rem; flex-wrap: wrap; }
 </style>
 
 

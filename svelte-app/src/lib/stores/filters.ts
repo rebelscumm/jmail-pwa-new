@@ -37,8 +37,9 @@ export async function loadFilters(): Promise<void> {
 
 export async function saveActiveFilter(next: ThreadFilter | null): Promise<void> {
   const db = await getDB();
-  await db.put('settings', next, ACTIVE_KEY);
-  filters.update((s) => ({ ...s, active: next }));
+  const plain = next ? JSON.parse(JSON.stringify(next)) : null;
+  await db.put('settings', plain, ACTIVE_KEY);
+  filters.update((s) => ({ ...s, active: plain }));
 }
 
 function generateId(): string {
@@ -50,9 +51,10 @@ export async function upsertSavedFilter(f: ThreadFilter & { id?: string; name: s
   const current = ((await db.get('settings', SAVED_KEY)) as FiltersState['saved'] | undefined) || [];
   const id = f.id || generateId();
   const entry = { ...f, id } as Required<Pick<ThreadFilter, 'id'>> & ThreadFilter;
+  const plainEntry = JSON.parse(JSON.stringify(entry));
   const idx = current.findIndex((x) => x.id === id);
   const next = [...current];
-  if (idx >= 0) next[idx] = entry; else next.push(entry);
+  if (idx >= 0) next[idx] = plainEntry; else next.push(plainEntry);
   await db.put('settings', next, SAVED_KEY);
   filters.set({ saved: next, active: null });
   return id;

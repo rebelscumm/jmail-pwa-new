@@ -8,37 +8,100 @@
   import { filters, saveActiveFilter, upsertSavedFilter, deleteSavedFilter, type ThreadFilter } from '$lib/stores/filters';
   import { labels as labelsStore } from '$lib/stores/labels';
   import ChipChooser from '$lib/utils/ChipChooser.svelte';
+  import { show as showSnackbar } from '$lib/containers/snackbar';
+
+  let { thread = null }: { thread: import('$lib/types').GmailThread | null } = $props();
+
+  $effect(() => {
+    if (thread) {
+      draft.subjectIncludes = thread.lastMsgMeta.subject || '';
+      draft.senderIncludes = thread.lastMsgMeta.from || '';
+      draft.labelIds = thread.labelIds || [];
+      // etc.
+    }
+  });
 
   let draft: ThreadFilter = $state({ subjectIncludes: '', senderIncludes: '', labelIds: [], unreadOnly: false, action: 'none', autoApply: false });
-  let savedOpen = $state(false);
   let saveName = $state('');
+  let savedDetails: HTMLDetailsElement;
+  let actionDetails: HTMLDetailsElement;
+
+  function toggleSaved(e: MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (savedDetails) savedDetails.open = !savedDetails.open;
+  }
+  function toggleAction(e: MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (actionDetails) actionDetails.open = !actionDetails.open;
+  }
+
+  // Close menus when clicking outside
+  $effect(() => {
+    function handleWindowClick(e: MouseEvent) {
+      const target = e.target as Node | null;
+      if (savedDetails && savedDetails.open) {
+        if (target && (savedDetails === target || savedDetails.contains(target))) {
+          // inside
+        } else {
+          savedDetails.open = false;
+        }
+      }
+      if (actionDetails && actionDetails.open) {
+        if (target && (actionDetails === target || actionDetails.contains(target))) {
+          // inside
+        } else {
+          actionDetails.open = false;
+        }
+      }
+    }
+    window.addEventListener('click', handleWindowClick);
+    return () => {
+      window.removeEventListener('click', handleWindowClick);
+    };
+  });
 
   function resetDraft() {
     draft = { subjectIncludes: '', senderIncludes: '', labelIds: [], unreadOnly: false, action: 'none', autoApply: false };
   }
-  function applyDraft() { saveActiveFilter({ ...draft }); }
+  function applyDraft() {
+    saveActiveFilter({ ...draft });
+    try {
+      const parts: string[] = [];
+      if (draft.subjectIncludes) parts.push(`subject: “${draft.subjectIncludes}”`);
+      if (draft.senderIncludes) parts.push(`from: “${draft.senderIncludes}”`);
+      if (draft.unreadOnly) parts.push('unread');
+      if ((draft.labelIds || []).length) parts.push(`labels: ${(draft.labelIds || []).length}`);
+      showSnackbar({ message: `Filter applied${parts.length ? ' • ' + parts.join(', ') : ''}` });
+    } catch {}
+  }
   async function saveDraft() {
     const name = (saveName || '').trim();
     if (!name) return;
     await upsertSavedFilter({ ...draft, name });
     saveName = '';
+    try { showSnackbar({ message: `Saved filter “${name}”` }); } catch {}
   }
   function loadSaved(f: ThreadFilter) {
     draft = { subjectIncludes: f.subjectIncludes, senderIncludes: f.senderIncludes, labelIds: f.labelIds, unreadOnly: f.unreadOnly, action: f.action, autoApply: f.autoApply };
     applyDraft();
+    try { if (savedDetails && savedDetails.open) savedDetails.open = false; } catch {}
   }
   async function removeSaved(id?: string) {
     if (!id) return;
     await deleteSavedFilter(id);
+    try { showSnackbar({ message: 'Deleted saved filter' }); } catch {}
+    try { if (savedDetails && savedDetails.open) savedDetails.open = false; } catch {}
   }
 
   const labelOptions = $derived(($labelsStore || []).map((l) => ({ label: l.name || l.id, value: l.id })));
 </script>
 
 <div class="bar">
-  <details class="saved" bind:open={savedOpen}>
-    <summary class="summary-btn">
-      <Button variant="text">{#snippet children()}Saved filters{/snippet}</Button>
+  <details class="saved" bind:this={savedDetails}>
+    <summary class="summary-btn" onclick={toggleSaved}>
+      <Button variant="outlined">Saved filters</Button>
     </summary>
     <Menu>
       {#if ($filters.saved || []).length === 0}
@@ -56,11 +119,6 @@
   <TextFieldOutlined label="Subject contains" value={draft.subjectIncludes || ''} oninput={(e: Event) => draft.subjectIncludes = (e.currentTarget as HTMLInputElement).value} style="min-width:12rem;" />
   <TextFieldOutlined label="Sender contains" value={draft.senderIncludes || ''} oninput={(e: Event) => draft.senderIncludes = (e.currentTarget as HTMLInputElement).value} style="min-width:12rem;" />
 
-  <div class="labels">
-    <label class="m3-font-body-small">Labels</label>
-    <ChipChooser options={labelOptions} bind:chosenOptions={draft.labelIds} />
-  </div>
-
   <label class="check">
     <Checkbox>
       <input type="checkbox" checked={!!draft.unreadOnly} onchange={(e: Event) => draft.unreadOnly = (e.currentTarget as HTMLInputElement).checked} />
@@ -68,14 +126,14 @@
     <span>Unread only</span>
   </label>
 
-  <details class="action">
-    <summary class="summary-btn">
-      <Button variant="text">{#snippet children()}Action: {draft.action || 'none'}{/snippet}</Button>
+  <details class="action" bind:this={actionDetails}>
+    <summary class="summary-btn" onclick={toggleAction}>
+      <Button variant="outlined">Action: {draft.action || 'none'}</Button>
     </summary>
     <Menu>
-      <MenuItem onclick={() => draft.action = 'none'}>None</MenuItem>
-      <MenuItem onclick={() => draft.action = 'archive'}>Archive</MenuItem>
-      <MenuItem onclick={() => draft.action = 'delete'}>Delete</MenuItem>
+      <MenuItem onclick={() => { draft.action = 'none'; try { if (actionDetails && actionDetails.open) actionDetails.open = false; } catch {} }}>None</MenuItem>
+      <MenuItem onclick={() => { draft.action = 'archive'; try { if (actionDetails && actionDetails.open) actionDetails.open = false; } catch {} }}>Archive</MenuItem>
+      <MenuItem onclick={() => { draft.action = 'delete'; try { if (actionDetails && actionDetails.open) actionDetails.open = false; } catch {} }}>Delete</MenuItem>
     </Menu>
   </details>
 
@@ -102,8 +160,10 @@
   .check { display:flex; align-items:center; gap:0.25rem; }
   .summary-btn { cursor: pointer; }
   .action { position: relative; }
-  .action[open] > :global(.m3-container) { position:absolute; z-index:10; }
+  .action > summary { list-style: none; }
+  .action[open] > :global(.m3-container) { position:absolute; z-index:10; margin-top:0.25rem; }
   .saved { position: relative; }
-  .saved[open] > :global(.m3-container) { position:absolute; z-index:10; }
+  .saved > summary { list-style: none; }
+  .saved[open] > :global(.m3-container) { position:absolute; z-index:10; margin-top:0.25rem; }
   .buttons { display:flex; gap:0.5rem; align-items:center; margin-left:auto; }
 </style>

@@ -18,12 +18,14 @@
     return Array.from({ length: 42 }, (_, i: number) => {
       const date = new Date(year, month, i - firstDay.getDay() + 1);
       const day = date.getDate();
+      const y = date.getFullYear();
+      const m = date.getMonth();
       const iso =
-        year.toString().padStart(4, "0") +
+        y.toString().padStart(4, "0") +
         "-" +
-        (month + 1).toString().padStart(2, "0") +
+        (m + 1).toString().padStart(2, "0") +
         "-" +
-        date.getDate().toString().padStart(2, "0");
+        day.toString().padStart(2, "0");
       return { disabled: date.getMonth() != month, day, iso };
     });
   };
@@ -38,12 +40,11 @@
   {/each}
   {#each makeCalendar(focusedYear, focusedMonth) as day (day.iso + (day.disabled ? "-disabled" : ""))}
     <Item
-      disabled={day.disabled || !dateValidator(day.iso)}
-      today={!day.disabled &&
-        focusedYear == today.getFullYear() &&
+      disabled={!dateValidator(day.iso)}
+      today={focusedYear == today.getFullYear() &&
         focusedMonth == today.getMonth() &&
         day.day == today.getDate()}
-      selected={!day.disabled && day.iso == chosenDate}
+      selected={day.iso == chosenDate}
       label={day.day.toString()}
       onclick={() => (chosenDate = day.iso)}
     />

@@ -14,6 +14,7 @@
     startYear = now.getFullYear() - 50,
     endYear = now.getFullYear() + 10,
     dateValidator = (_date: string) => true,
+    autoOk = false,
     close,
     setDate,
   }: {
@@ -24,6 +25,7 @@
     startYear?: number;
     endYear?: number;
     dateValidator?: (date: string) => boolean;
+    autoOk?: boolean;
     close: () => void;
     setDate: (date: string) => void;
   } = $props();
@@ -32,6 +34,14 @@
   let chosenDate = $state(date);
   $effect(() => {
     chosenDate = date;
+  });
+
+  // Auto-apply the selected date when enabled
+  $effect(() => {
+    if (autoOk && chosenDate && chosenDate !== date) {
+      setDate(chosenDate);
+      close();
+    }
   });
 
   const getLongMonth = (month: number) =>

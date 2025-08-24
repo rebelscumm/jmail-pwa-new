@@ -65,16 +65,6 @@
 </script>
 
 <div class="panel" role="menu" aria-label="Snooze options">
-  <div class="picker" role="group" aria-label="Pick a date">
-    <DatePickerDocked
-      clearable={false}
-      date={''}
-      dateValidator={isValidDate}
-      close={() => {}}
-      setDate={onDateChosen}
-    />
-  </div>
-
   <div class="tabs" role="group" aria-label="Snooze presets">
     <div class="grid" role="group" aria-label="Snooze presets">
       {#each orderedLabels as label}
@@ -83,6 +73,17 @@
         {/if}
       {/each}
     </div>
+  </div>
+
+  <div class="picker" role="group" aria-label="Pick a date">
+    <DatePickerDocked
+      clearable={false}
+      date={''}
+      dateValidator={isValidDate}
+      autoOk={true}
+      close={() => {}}
+      setDate={onDateChosen}
+    />
   </div>
 
   {#if selectedRule}

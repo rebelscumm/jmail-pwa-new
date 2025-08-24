@@ -15,6 +15,14 @@
   import { getDB } from "$lib/db/indexeddb";
   import { acquireTokenForScopes, SCOPES, fetchTokenInfo, signOut, acquireTokenInteractive } from "$lib/gmail/auth";
   import { aiSummarizeEmail, aiDraftReply, findUnsubscribeTarget, aiExtractUnsubscribeUrl } from "$lib/ai/providers";
+  import { filters, deleteSavedFilter, type ThreadFilter } from "$lib/stores/filters";
+  import FilterBar from "$lib/utils/FilterBar.svelte";
+  import Menu from "$lib/containers/Menu.svelte";
+  import MenuItem from "$lib/containers/MenuItem.svelte";
+  import Icon from "$lib/misc/_icon.svelte";
+  import iconBack from "@ktibow/iconset-material-symbols/chevron-left";
+  import iconArrowDown from "@ktibow/iconset-material-symbols/arrow-downward";
+  import iconArrowUp from "@ktibow/iconset-material-symbols/arrow-upward";
   const threadId = $page.params.threadId;
   const currentThread = $derived($threads.find((t) => t.threadId === threadId));
   function copyText(text: string) { navigator.clipboard.writeText(text); }
@@ -27,7 +35,30 @@
     if (!ts) return '';
     const n = typeof ts === 'string' ? Number(ts) : ts;
     try {
-      return new Date(n).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+      const date = new Date(n);
+      const today = new Date();
+      const timeStr = date.toLocaleString(undefined, { hour: 'numeric', minute: '2-digit' });
+      const isToday = (date.getFullYear() === today.getFullYear() &&
+                       date.getMonth() === today.getMonth() &&
+                       date.getDate() === today.getDate());
+      if (isToday) {
+        return `Today, ${timeStr}`;
+      }
+      const yesterday = new Date(today);
+      yesterday.setDate(today.getDate() - 1);
+      const isYesterday = (date.getFullYear() === yesterday.getFullYear() &&
+                           date.getMonth() === yesterday.getMonth() &&
+                           date.getDate() === yesterday.getDate());
+      if (isYesterday) {
+        return `Yesterday, ${timeStr}`;
+      }
+      return date.toLocaleString(undefined, {
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit'
+      });
     } catch { return ''; }
   }
   async function copyDiagnostics(reason: string, mid?: string, error?: unknown) {
@@ -220,9 +251,29 @@
       }
     } catch { alert(line); }
   }
+  async function loadForEdit(filter: ThreadFilter) {
+    // This function is not yet implemented in FilterBar, so we'll just alert for now
+    alert(`Load filter "${filter.name}" for editing.`);
+    // In a real app, you'd set the filter's state in FilterBar
+  }
+  async function onDeleteSavedFilter(id: string) {
+    if (confirm(`Are you sure you want to delete filter with ID "${id}"? This action cannot be undone.`)) {
+      await deleteSavedFilter(id);
+      showSnackbar({ message: 'Filter deleted', closable: true });
+    }
+  }
   if (typeof window !== 'undefined') {
     (window as any).__copyViewerDiagnostics = async () => { await copyDiagnostics('viewer_toolbar_copy'); };
   }
+
+function scrollToTop() {
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function scrollToBottom() {
+  window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' });
+}
+
 </script>
 
 {#if currentThread}
@@ -264,7 +315,15 @@
         <Button variant="text" onclick={() => replyDraft(mid)}>Reply (AI) → Clipboard</Button>
         <Button variant="text" onclick={() => createTask(mid)}>Create Task</Button>
       {/if}
+      <Button variant="text" iconType="left" onclick={scrollToBottom} aria-label="Scroll to bottom" style="margin-left:auto">
+        {#snippet children()}
+          <Icon icon={iconArrowDown} />
+          <span class="label">Bottom</span>
+        {/snippet}
+      </Button>
     </div>
+
+    <Divider />
 
     <div class="messages">
       {#each currentThread.messageIds as mid, idx}
@@ -359,6 +418,40 @@
         <Button variant="text" onclick={() => replyDraft(mid)}>Reply (AI) → Clipboard</Button>
         <Button variant="text" onclick={() => createTask(mid)}>Create Task</Button>
       {/if}
+    </div>
+    <Divider />
+
+    <h3 class="m3-font-title-medium" style="margin:0.5rem 0 0.25rem;">Create Filter from this Thread</h3>
+    <FilterBar thread={currentThread} />
+
+    <details class="manage-filters">
+      <summary>Manage Saved Filters</summary>
+      <Menu>
+        {#each $filters.saved as f}
+          <MenuItem onclick={() => loadForEdit(f)}>{f.name}</MenuItem>
+          <MenuItem onclick={() => onDeleteSavedFilter(f.id)}>Delete</MenuItem>
+        {/each}
+      </Menu>
+    </details>
+
+    <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.5rem;">
+      <div>
+        <Button variant="text" iconType="left" onclick={() => goto('/inbox')} aria-label="Back to inbox">
+          {#snippet children()}
+            <Icon icon={iconBack} />
+            <span class="label">Back to inbox</span>
+          {/snippet}
+        </Button>
+      </div>
+      <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+        <Button variant="text" iconType="left" onclick={scrollToTop} aria-label="Scroll to top">
+          {#snippet children()}
+            <Icon icon={iconArrowUp} />
+            <span class="label">Top</span>
+          {/snippet}
+        </Button>
+        
+      </div>
     </div>
   </div>
 {:else}

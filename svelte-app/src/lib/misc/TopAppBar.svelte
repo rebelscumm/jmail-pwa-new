@@ -25,6 +25,7 @@
   import iconLogout from '@ktibow/iconset-material-symbols/logout';
   import iconBack from '@ktibow/iconset-material-symbols/chevron-left';
   import iconCopy from '@ktibow/iconset-material-symbols/content-copy-outline';
+  import { onMount } from 'svelte';
   let { onSyncNow, backHref, backLabel }: { onSyncNow?: () => void; backHref?: string; backLabel?: string } = $props();
   let overflowDetails: HTMLDetailsElement;
   let aboutOpen = $state(false);
@@ -217,6 +218,18 @@
     const ok = await copyGmailDiagnosticsToClipboard({ reason: 'topbar_manual_copy' });
     showSnackbar({ message: ok ? 'Diagnostics copied' : 'Failed to copy diagnostics', closable: true });
   }
+
+  let cacheVersion = $state('unknown');
+
+  onMount(async () => {
+    try {
+      const keys = await caches.keys();
+      const cache = keys.find((k: string) => k.startsWith('Jmail-v'));
+      if (cache) cacheVersion = cache.replace('Jmail-v', '');
+    } catch (e) {
+      console.error(e);
+    }
+  });
 </script>
 
 <div class="topbar">
@@ -301,6 +314,7 @@
         <div class="about">
           <div class="row"><span class="k">Version</span><span class="v">{appVersion}</span></div>
           <div class="row"><span class="k">Build</span><span class="v">{buildId}</span></div>
+          <div class="row"><span class="k">Cache</span><span class="v">{cacheVersion}</span></div>
         </div>
       {/snippet}
       {#snippet buttons()}

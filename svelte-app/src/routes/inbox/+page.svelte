@@ -705,14 +705,6 @@
     </div>
   </div>
 
-  <FilterBar />
-
-  <div style="display:flex; justify-content:flex-end; margin: 0 0 0.5rem;">
-    <Button variant="outlined" disabled={!$filtersStore.active || !$filtersStore.active.action || $filtersStore.active.action === 'none' || filteredThreads.length === 0} onclick={bulkApplyActiveFilterAction}>
-      Apply action to filtered ({filteredThreads.length})
-    </Button>
-  </div>
-
   {#if selectedCount > 0}
     <Card variant="elevated" style="margin: 0 0 0.5rem 0;">
       <div style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem; flex-wrap:wrap;">
