@@ -590,7 +590,6 @@ function scrollToBottom() {
   .html-body {
     min-width: 0;
     max-width: 100%;
-    overflow-x: hidden;
     word-break: break-word;
   }
   :global(.html-body *), :global(.html-body *::before), :global(.html-body *::after) {
@@ -618,6 +617,20 @@ function scrollToBottom() {
   .html-body {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
+  }
+  /* Avoid viewport expansion from wide children on mobile browsers */
+  :global(.html-body > *) {
+    max-width: 100% !important;
+  }
+  /* Neutralize common email inline styles that force wide layout */
+  :global(.html-body [style*="min-width"]) {
+    min-width: 0 !important;
+  }
+  :global(.html-body [style*="width:"]) {
+    max-width: 100% !important;
+  }
+  :global(.html-body [width]) {
+    max-width: 100% !important;
   }
   /* Override inline min-widths commonly set by marketing emails */
   :global(.html-body [style*="min-width"]) {
