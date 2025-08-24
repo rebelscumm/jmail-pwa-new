@@ -52,6 +52,16 @@ const DEFAULTS: AppSettings = {
 
 export const settings = writable<AppSettings>({ ...DEFAULTS });
 
+// Ensure only plain, structured-cloneable data is written to IndexedDB
+function toPlain<T>(value: T): T {
+  try {
+    return value === undefined ? (undefined as unknown as T) : JSON.parse(JSON.stringify(value));
+  } catch (_) {
+    // Best-effort fallback: drop value if it can't be cloned
+    return undefined as unknown as T;
+  }
+}
+
 export async function loadSettings(): Promise<void> {
   const db = await getDB();
   const [app, mapping] = await Promise.all([
@@ -77,13 +87,13 @@ export async function loadSettings(): Promise<void> {
   settings.set(merged);
   if (needsWrite) {
     const nextApp = { ...(app as object), trailingSlideOutDurationMs: normalSlideMs };
-    await db.put('settings', nextApp, 'app');
+    await db.put('settings', toPlain(nextApp), 'app');
   }
 }
 
 export async function saveLabelMapping(newMapping: LabelMapping): Promise<void> {
   const db = await getDB();
-  await db.put('settings', newMapping, 'labelMapping');
+  await db.put('settings', toPlain(newMapping), 'labelMapping');
   settings.update((s) => ({ ...s, labelMapping: newMapping }));
 }
 
@@ -91,7 +101,7 @@ export async function updateAppSettings(patch: Partial<AppSettings>): Promise<vo
   settings.update((s) => ({ ...s, ...patch }));
   const db = await getDB();
   const current = await db.get('settings', 'app');
-  await db.put('settings', { ...(current as object), ...patch }, 'app');
+  await db.put('settings', toPlain({ ...(current as object), ...patch }), 'app');
 }
 
 export function seedDefaultMapping(): Record<string, string> {
