@@ -1,10 +1,11 @@
 export const prerender = false;
 
 import type { RequestHandler } from '@sveltejs/kit';
-import { OPENAI_API_KEY } from '$env/static/private';
+import { env } from '$env/dynamic/private';
 
 export const POST: RequestHandler = async ({ request }) => {
-  if (!OPENAI_API_KEY) {
+  const apiKey = env.OPENAI_API_KEY;
+  if (!apiKey) {
     return new Response(JSON.stringify({ error: 'OPENAI_API_KEY not set' }), { status: 500 });
   }
 
@@ -16,7 +17,7 @@ export const POST: RequestHandler = async ({ request }) => {
   const r = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${OPENAI_API_KEY}`,
+      Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({ model, messages, temperature })

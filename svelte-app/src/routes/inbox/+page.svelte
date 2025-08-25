@@ -306,6 +306,14 @@
     }
   }
 
+  export async function resetInboxCache() {
+    const db = await getDB();
+    try { await db.clear('threads'); } catch {}
+    try { await db.clear('messages'); } catch {}
+    threadsStore.set([]);
+    messagesStore.set({});
+  }
+
   onMount(() => {
     const unsub = authState.subscribe((s) => (ready = s.ready));
     if (($threadsStore || []).length) loading = false;
@@ -347,6 +355,8 @@
       try {
         showSnackbar({ message: 'Refreshing inbox…' });
         syncing = true;
+        // Clear stale local cache before fetching fresh data
+        try { await resetInboxCache(); } catch {}
         await hydrate();
         showSnackbar({ message: 'Inbox up to date', timeout: 3000 });
       } catch (e) {
