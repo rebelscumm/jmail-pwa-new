@@ -132,7 +132,7 @@
           actions: {
             Reload: () => {
               const url = new URL(window.location.href);
-              url.searchParams.set('__hardreload', String(Date.now()));
+              url.searchParams.set('refresh', '1');
               window.location.assign(url.toString());
             }
           },

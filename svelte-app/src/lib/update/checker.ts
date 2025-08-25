@@ -82,11 +82,7 @@ export function startUpdateChecker(
 		if (stopped) return;
 		const remote = await fetchRemote();
 		if (!remote) return;
-		if (
-			remote.buildId &&
-			remote.buildId !== current.buildId &&
-			(remote.appVersion !== current.appVersion || remote.buildId !== current.buildId)
-		) {
+		if (isRemoteNewer(remote, current)) {
 			onNewVersion(remote, current);
 			notifyAllTabs(remote);
 			stop();
@@ -140,10 +136,7 @@ export async function checkForUpdateOnce(): Promise<CheckOnceResult> {
 	} catch {}
 	const remote = await fetchRemoteVersionInfo();
 	if (!remote) return { status: 'error', current };
-	if (
-		remote.buildId &&
-		(remote.appVersion !== current.appVersion || remote.buildId !== current.buildId)
-	) {
+	if (isRemoteNewer(remote, current)) {
 		return { status: 'new', remote, current };
 	}
 	return { status: 'same', current, remote };
@@ -153,7 +146,49 @@ export async function checkForUpdateOnce(): Promise<CheckOnceResult> {
 export function hardReloadNow(): void {
 	try {
 		const url = new URL(window.location.href);
-		url.searchParams.set('__hardreload', String(Date.now()));
+		// Use the existing refresh flow in +layout to clear caches and unregister SW
+		url.searchParams.set('refresh', '1');
 		window.location.assign(url.toString());
 	} catch {}
+}
+
+/** Returns true if the remote version is actually newer than current. */
+function isRemoteNewer(remote: VersionInfo, current: VersionInfo): boolean {
+	// 1) Try semver compare on appVersion
+	const semverCmp = compareSemver(remote.appVersion, current.appVersion);
+	if (semverCmp !== 0) return semverCmp > 0;
+
+	// 2) Fallback to timestamp-like buildId compare (e.g., YYYYMMDDHHmmss); lexicographic compare works when lengths match
+	if (remote.buildId && current.buildId && remote.buildId.length === current.buildId.length) {
+		if (isAllDigits(remote.buildId) && isAllDigits(current.buildId)) {
+			return remote.buildId > current.buildId;
+		}
+		return remote.buildId > current.buildId;
+	}
+
+	// 3) If we cannot determine recency, do not prompt
+	return false;
+}
+
+function isAllDigits(s: string): boolean {
+	for (let i = 0; i < s.length; i++) {
+		const c = s.charCodeAt(i);
+		if (c < 48 || c > 57) return false;
+	}
+	return true;
+}
+
+/** Simple semver comparator: returns 1 if a>b, -1 if a<b, 0 if equal */
+function compareSemver(a: string, b: string): number {
+	const parse = (v: string) => v.split('.').map((x) => parseInt(x, 10)).map((n) => (Number.isFinite(n) ? n : 0));
+	const aa = parse(a);
+	const bb = parse(b);
+	const len = Math.max(aa.length, bb.length);
+	for (let i = 0; i < len; i++) {
+		const ai = aa[i] ?? 0;
+		const bi = bb[i] ?? 0;
+		if (ai > bi) return 1;
+		if (ai < bi) return -1;
+	}
+	return 0;
 }

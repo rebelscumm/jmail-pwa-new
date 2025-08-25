@@ -1,9 +1,10 @@
 export const prerender = false;
 
 import type { RequestHandler } from '@sveltejs/kit';
-import { OPENAI_API_KEY } from '$env/static/private';
+import { env } from '$env/dynamic/private';
 
 export const POST: RequestHandler = async ({ request }) => {
+  const OPENAI_API_KEY = env.OPENAI_API_KEY;
   if (!OPENAI_API_KEY) {
     return new Response(JSON.stringify({ error: 'OPENAI_API_KEY not set' }), { status: 500 });
   }
