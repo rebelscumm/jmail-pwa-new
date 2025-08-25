@@ -258,11 +258,17 @@ export async function aiSummarizeEmail(subject: string, bodyText?: string, bodyH
   return result;
 }
 
-export async function aiSummarizeSubject(subject: string, bodyText?: string, bodyHtml?: string): Promise<string> {
+export async function aiSummarizeSubject(subject: string, bodyText?: string, bodyHtml?: string, messageSummary?: string): Promise<string> {
   const s = get(settings);
+  const hasSummary = !!(messageSummary && messageSummary.trim());
   const text = bodyText || htmlToText(bodyHtml) || '';
-  const redacted = redactPII(text ? `Subject: ${subject}\n\nEmail:\n${text}` : `Subject: ${subject}`);
-  const prompt = `You improve email subjects using the actual email content. Write a single-line subject that better summarizes the most important point(s). Use 15 words or fewer. Avoid prefixes like "Re:" or "Fwd:", avoid quotes, emojis, sender names, or dates. Return ONLY the subject text as plain text on one line.\n\n${redacted}`;
+  const base = hasSummary
+    ? `Subject: ${subject}\n\nAI Summary:\n${messageSummary}`
+    : (text ? `Subject: ${subject}\n\nEmail:\n${text}` : `Subject: ${subject}`);
+  const redacted = redactPII(base);
+  const prompt = hasSummary
+    ? `You improve email subjects using an AI message summary of the content below. Write a single-line subject that better summarizes the most important point(s). Use 15 words or fewer. Avoid prefixes like "Re:" or "Fwd:", avoid quotes, emojis, sender names, or dates. Return ONLY the subject text as plain text on one line.\n\n${redacted}`
+    : `You improve email subjects using the actual email content. Write a single-line subject that better summarizes the most important point(s). Use 15 words or fewer. Avoid prefixes like "Re:" or "Fwd:", avoid quotes, emojis, sender names, or dates. Return ONLY the subject text as plain text on one line.\n\n${redacted}`;
   const provider = s.aiProvider || 'gemini';
   const model = s.aiSummaryModel || s.aiModel || (provider === 'gemini' ? 'gemini-2.5-flash-lite' : provider === 'anthropic' ? 'claude-3-haiku-20240307' : 'gpt-4o-mini');
   const out = provider === 'anthropic' ? await callAnthropic(prompt, model) : provider === 'gemini' ? await callGemini(prompt, model) : await callOpenAI(prompt, model);

@@ -25,7 +25,7 @@
   import { searchQuery } from '$lib/stores/search';
   import FilterBar from '$lib/utils/FilterBar.svelte';
   import { filters as filtersStore, applyFilterToThreads, loadFilters } from '$lib/stores/filters';
-  import { aiSummarizeSubject } from '$lib/ai/providers';
+  import { aiSummarizeSubject, aiSummarizeEmail } from '$lib/ai/providers';
 
   type InboxSort = NonNullable<import('$lib/stores/settings').AppSettings['inboxSort']>;
   const sortOptions: { key: InboxSort; label: string }[] = [
@@ -729,10 +729,14 @@
         return { t, subject, bodyText, bodyHtml };
       });
 
-      // Summarize with modest concurrency
+      // Summarize with modest concurrency: compute message summary first, then subject from that
       const results = await mapWithConcurrency(prepared, 2, async (p) => {
         try {
-          const text = await aiSummarizeSubject(p.subject, p.bodyText, p.bodyHtml);
+          const readySummary = (p.t.summary && p.t.summaryStatus === 'ready') ? p.t.summary : '';
+          const messageSummary = readySummary && readySummary.trim()
+            ? readySummary
+            : await aiSummarizeEmail(p.subject, p.bodyText, p.bodyHtml);
+          const text = await aiSummarizeSubject(p.subject, undefined, undefined, messageSummary);
           return { id: p.t.threadId, ok: true, text } as const;
         } catch (e) {
           return { id: p.t.threadId, ok: false, error: e } as const;

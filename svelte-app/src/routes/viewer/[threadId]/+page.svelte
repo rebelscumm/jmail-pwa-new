@@ -405,10 +405,9 @@
       } catch (_) {}
       const bodyText = m.bodyText || m.snippet;
       const bodyHtml = m.bodyHtml;
-      const [subjectText, bodyTextOut] = await Promise.all([
-        aiSummarizeSubject(subject, bodyText, bodyHtml),
-        aiSummarizeEmail(subject, bodyText, bodyHtml, m.attachments)
-      ]);
+      // Compute full message summary first (token heavy), then derive subject from it (token light)
+      const bodyTextOut = await aiSummarizeEmail(subject, bodyText, bodyHtml, m.attachments);
+      const subjectText = await aiSummarizeSubject(subject, undefined, undefined, bodyTextOut);
       aiSubjectSummary = subjectText;
       aiBodySummary = bodyTextOut;
       // Persist AI results to cache to minimize future calls

@@ -186,16 +186,26 @@ export async function tickPrecompute(limit = 10): Promise<void> {
       const mismatch = (t.subjectVersion || 0) !== nowVersion;
       return !t.aiSubject || t.aiSubjectStatus === 'none' || t.aiSubjectStatus === 'error' || mismatch;
     });
+    // Ensure we have message summaries available for any subject work
+    const needsSummaryForSubject = prepared.filter((p) => {
+      const t = p.thread;
+      return (!!t && (!t.summary || t.summaryStatus !== 'ready')) && wantsSubject.some((x) => x.thread.threadId === t.threadId);
+    });
+    const summaryEntries: Array<[string, any]> = [
+      ...wantsSummary.map((p: any) => [p.thread.threadId as string, p] as [string, any]),
+      ...needsSummaryForSubject.map((p: any) => [p.thread.threadId as string, p] as [string, any])
+    ];
+    const summaryTargets = Array.from(new Map(summaryEntries).values()) as any[];
 
     let summaryResults: Record<string, string> = {};
-    if (wantsSummary.length) {
+    if (summaryTargets.length) {
       if (s.precomputeUseBatch) {
-        const items = wantsSummary.map((p) => ({ id: p.thread.threadId, text: p.text || p.subject || '' }));
+        const items = summaryTargets.map((p) => ({ id: p.thread.threadId, text: p.text || p.subject || '' }));
         const map = await summarizeBatchRemote(items, s.aiApiKey, s.aiSummaryModel || s.aiModel, s.precomputeUseContextCache);
         if (map && Object.keys(map).length) summaryResults = map;
       }
       if (!Object.keys(summaryResults).length) {
-        const out = await mapWithConcurrency(wantsSummary, 2, async (p: any) => {
+        const out = await mapWithConcurrency(summaryTargets, 2, async (p: any) => {
           const text = await summarizeDirect(p.subject, p.bodyText, p.bodyHtml, p.attachments);
           return { id: p.thread.threadId, text };
         });
@@ -206,14 +216,28 @@ export async function tickPrecompute(limit = 10): Promise<void> {
     let subjectResults: Record<string, string> = {};
     if (wantsSubject.length) {
       if (s.precomputeUseBatch) {
-        const items = wantsSubject.map((p) => ({ id: p.thread.threadId, text: p.text || p.subject || '' }));
+        const items = wantsSubject.map((p) => {
+          const t = p.thread as GmailThread;
+          const readySummary = (t.summaryStatus === 'ready' && t.summary) ? t.summary : (summaryResults[t.threadId] || '');
+          const text = readySummary && readySummary.trim()
+            ? `Subject: ${p.subject}\n\nAI Summary:\n${readySummary}`
+            : (p.text || p.subject || '');
+        return { id: p.thread.threadId, text };
+        });
         const map = await summarizeSubjectBatchRemote(items, s.aiApiKey, s.aiSummaryModel || s.aiModel, s.precomputeUseContextCache);
         if (map && Object.keys(map).length) subjectResults = map;
       }
       if (!Object.keys(subjectResults).length) {
         const out = await mapWithConcurrency(wantsSubject, 2, async (p) => {
-          const text = await aiSummarizeSubject(p.subject, p.bodyText, p.bodyHtml);
-          return { id: p.thread.threadId, text };
+          const t = p.thread as GmailThread;
+          const readySummary = (t.summaryStatus === 'ready' && t.summary) ? t.summary : (summaryResults[t.threadId] || '');
+          if (readySummary && readySummary.trim()) {
+            const text = await aiSummarizeSubject(p.subject, undefined, undefined, readySummary);
+            return { id: p.thread.threadId, text };
+          } else {
+            const text = await aiSummarizeSubject(p.subject, p.bodyText, p.bodyHtml);
+            return { id: p.thread.threadId, text };
+          }
         });
         subjectResults = Object.fromEntries(out.map((o) => [o.id, o.text]));
       }
@@ -231,12 +255,15 @@ export async function tickPrecompute(limit = 10): Promise<void> {
         const subjOk = !!(subjText && subjText.trim());
         const needsSum = !!wantsSummary.find((x) => x.thread.threadId === t.threadId);
         const needsSubj = !!wantsSubject.find((x) => x.thread.threadId === t.threadId);
+        const hadReadySummary = t.summaryStatus === 'ready' && !!t.summary;
+        const computedButWasntRequested = !needsSum && sumOk && !hadReadySummary;
+        const setSummaryFields = needsSum || computedButWasntRequested;
         const next: GmailThread = {
           ...t,
-          summary: sumOk ? sumText.trim() : t.summary,
-          summaryStatus: needsSum ? (sumOk ? 'ready' : (t.summaryStatus || 'error')) : t.summaryStatus,
-          summaryVersion: needsSum ? nowVersion : t.summaryVersion,
-          summaryUpdatedAt: needsSum ? nowMs : t.summaryUpdatedAt,
+          summary: setSummaryFields && sumOk ? sumText.trim() : t.summary,
+          summaryStatus: setSummaryFields ? (sumOk ? 'ready' : (t.summaryStatus || 'error')) : t.summaryStatus,
+          summaryVersion: setSummaryFields ? nowVersion : t.summaryVersion,
+          summaryUpdatedAt: setSummaryFields ? nowMs : t.summaryUpdatedAt,
           bodyHash: p.bodyHash
         };
         if (needsSubj) {

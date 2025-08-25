@@ -59,11 +59,17 @@ async function callGeminiGenerate(text: string, apiKey: string, model: string, u
   if (mode === 'summary') {
     parts.push({ text: `\n\nEmail:\n${text}` });
   } else {
-    const segments = (text || '').split(/\r?\n\r?\n/);
-    const subjectLine = (segments[0] || '').trim();
-    const body = segments.slice(1).join('\n\n').trim();
-    if (subjectLine) parts.push({ text: `\n\nSubject: ${subjectLine}` });
-    if (body) parts.push({ text: `\n\nEmail:\n${body}` }); else if (!subjectLine) parts.push({ text: `\n\nEmail:\n${text}` });
+    // Subject mode supports either full email or an AI summary block
+    // If the provided text contains an "AI Summary:" block, prefer that to save tokens
+    if (/AI Summary:/i.test(text)) {
+      parts.push({ text: `\n\n${text}` });
+    } else {
+      const segments = (text || '').split(/\r?\n\r?\n/);
+      const subjectLine = (segments[0] || '').trim();
+      const body = segments.slice(1).join('\n\n').trim();
+      if (subjectLine) parts.push({ text: `\n\nSubject: ${subjectLine}` });
+      if (body) parts.push({ text: `\n\nEmail:\n${body}` }); else if (!subjectLine) parts.push({ text: `\n\nEmail:\n${text}` });
+    }
   }
   const r = await fetch(url, {
     method: 'POST',
