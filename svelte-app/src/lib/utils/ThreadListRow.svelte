@@ -207,12 +207,12 @@
     // Translate off-screen
     const W = width || 320;
     dx = sign * (W + 40);
-    // Keep row alive just long enough for slide + collapse
-    holdThread(thread.threadId, exitMs + collapseMs + 100);
+    // Keep row alive through wait + collapse so it can clear with the group
+    holdThread(thread.threadId, disappearMs + collapseMs + 100);
     // Briefly lock list interactions during coordinated collapse
     try { window.dispatchEvent(new CustomEvent('jmail:listLock', { detail: { ms: exitMs + collapseMs + 120 } })); } catch {}
-    // Coordinate immediate group collapse right after slide completes
-    startGlobalDisappearTimer(exitMs);
+    // Start (or join) global disappear timer so all committed items clear together
+    startGlobalDisappearTimer(disappearMs);
     await new Promise((r) => setTimeout(r, exitMs));
     exiting = false;
     // Perform action + snackbar immediately after slide
@@ -236,7 +236,7 @@
     }
     if (!opts?.suppressReload) scheduleReload();
     // Start (or join) global disappear timer (no-op if already set)
-    startGlobalDisappearTimer(exitMs);
+    startGlobalDisappearTimer(disappearMs);
   }
 
   function onPointerDown(e: PointerEvent) {
