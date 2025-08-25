@@ -76,5 +76,13 @@ export type AccountAuthMeta = {
   email?: string;
   accessToken?: string; // persisted OAuth access token (expires quickly; refreshed as needed)
   tokenExpiry?: number; // ms epoch
+  /** First environment where the user successfully connected */
+  firstConnectedOrigin?: string;
+  firstConnectedUrl?: string;
+  firstConnectedAt?: number; // ms epoch
+  /** Most recent environment where a token was acquired */
+  lastConnectedOrigin?: string;
+  lastConnectedUrl?: string;
+  lastConnectedAt?: number; // ms epoch
 };
 

@@ -202,11 +202,26 @@ export async function acquireTokenInteractive(prompt: 'none' | 'consent' | 'sele
     try { afterInfo = await fetchTokenInfo(); } catch (_) {}
     pushGmailDiag({ type: 'auth_popup_after', flow: 'interactive', prompt, reason, tokenInfo: afterInfo, expiresIn: token.expires_in });
     try {
-      // Persist token and expiry for continuity between sessions
+      // Persist token, expiry, and connection metadata for continuity and troubleshooting
       const { getDB } = await import('$lib/db/indexeddb');
       const db = await getDB();
-      const account = { sub: 'me', tokenExpiry: expiryMs, accessToken: token.access_token } satisfies AccountAuthMeta;
-      await db.put('auth', account, account.sub);
+      const prev = (await db.get('auth', 'me')) as AccountAuthMeta | undefined;
+      const href = typeof window !== 'undefined' ? window.location.href : undefined;
+      const origin = typeof window !== 'undefined' ? window.location.origin : undefined;
+      const nowMs = Date.now();
+      const next: AccountAuthMeta = {
+        ...(prev || { sub: 'me' }),
+        sub: 'me',
+        accessToken: token.access_token,
+        tokenExpiry: expiryMs,
+        lastConnectedAt: nowMs,
+        lastConnectedOrigin: origin,
+        lastConnectedUrl: href,
+        firstConnectedAt: prev?.firstConnectedAt || nowMs,
+        firstConnectedOrigin: prev?.firstConnectedOrigin || origin,
+        firstConnectedUrl: prev?.firstConnectedUrl || href
+      };
+      await db.put('auth', next, 'me');
     } catch (_) {
       // non-fatal
     }
@@ -272,8 +287,23 @@ export async function acquireTokenForScopes(scopes: string, prompt: 'none' | 'co
     try {
       const { getDB } = await import('$lib/db/indexeddb');
       const db = await getDB();
-      const account = { sub: 'me', tokenExpiry: expiryMs, accessToken: token.access_token } satisfies AccountAuthMeta;
-      await db.put('auth', account, account.sub);
+      const prev = (await db.get('auth', 'me')) as AccountAuthMeta | undefined;
+      const href = typeof window !== 'undefined' ? window.location.href : undefined;
+      const origin = typeof window !== 'undefined' ? window.location.origin : undefined;
+      const nowMs = Date.now();
+      const next: AccountAuthMeta = {
+        ...(prev || { sub: 'me' }),
+        sub: 'me',
+        accessToken: token.access_token,
+        tokenExpiry: expiryMs,
+        lastConnectedAt: nowMs,
+        lastConnectedOrigin: origin,
+        lastConnectedUrl: href,
+        firstConnectedAt: prev?.firstConnectedAt || nowMs,
+        firstConnectedOrigin: prev?.firstConnectedOrigin || origin,
+        firstConnectedUrl: prev?.firstConnectedUrl || href
+      };
+      await db.put('auth', next, 'me');
     } catch (_) {}
     return true;
   }, { flow: 'scope_upgrade', reason, requestedScopes: scopes });
@@ -318,8 +348,23 @@ export async function ensureValidToken(): Promise<string> {
     try {
       const { getDB } = await import('$lib/db/indexeddb');
       const db = await getDB();
-      const account = { sub: 'me', tokenExpiry: expiryMs, accessToken: token.access_token } satisfies AccountAuthMeta;
-      await db.put('auth', account, account.sub);
+      const prev = (await db.get('auth', 'me')) as AccountAuthMeta | undefined;
+      const href = typeof window !== 'undefined' ? window.location.href : undefined;
+      const origin = typeof window !== 'undefined' ? window.location.origin : undefined;
+      const nowMs = Date.now();
+      const next: AccountAuthMeta = {
+        ...(prev || { sub: 'me' }),
+        sub: 'me',
+        accessToken: token.access_token,
+        tokenExpiry: expiryMs,
+        lastConnectedAt: nowMs,
+        lastConnectedOrigin: origin,
+        lastConnectedUrl: href,
+        firstConnectedAt: prev?.firstConnectedAt || nowMs,
+        firstConnectedOrigin: prev?.firstConnectedOrigin || origin,
+        firstConnectedUrl: prev?.firstConnectedUrl || href
+      };
+      await db.put('auth', next, 'me');
     } catch (_) {}
     return token.access_token;
   }, { flow: 'silent' });
