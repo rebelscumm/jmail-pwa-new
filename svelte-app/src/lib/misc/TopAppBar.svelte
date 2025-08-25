@@ -14,6 +14,7 @@
   import { appVersion, buildId } from '$lib/utils/version';
   import { checkForUpdateOnce, hardReloadNow } from '$lib/update/checker';
   import { signOut, acquireTokenInteractive, resolveGoogleClientId, initAuth } from '$lib/gmail/auth';
+  import { threads as threadsStore } from '$lib/stores/threads';
   import iconSearch from '@ktibow/iconset-material-symbols/search';
   import iconMore from '@ktibow/iconset-material-symbols/more-vert';
   import iconInfo from '@ktibow/iconset-material-symbols/info';
@@ -26,6 +27,8 @@
   import iconLogout from '@ktibow/iconset-material-symbols/logout';
   import iconBack from '@ktibow/iconset-material-symbols/chevron-left';
   import iconCopy from '@ktibow/iconset-material-symbols/content-copy-outline';
+  import iconInbox from '@ktibow/iconset-material-symbols/inbox';
+  import iconMarkEmailUnread from '@ktibow/iconset-material-symbols/mark-email-unread';
   import { onMount } from 'svelte';
   let { onSyncNow, backHref, backLabel }: { onSyncNow?: () => void; backHref?: string; backLabel?: string } = $props();
   let overflowDetails: HTMLDetailsElement;
@@ -269,6 +272,11 @@
       console.error(e);
     }
   });
+
+  // Inbox counters (local view based on cached threads)
+  const inboxThreads = $derived(($threadsStore || []).filter((t) => (t.labelIds || []).includes('INBOX')));
+  const inboxCount = $derived(inboxThreads.length);
+  const unreadCount = $derived(inboxThreads.filter((t) => (t.labelIds || []).includes('UNREAD')).length);
 </script>
 
 <div class="topbar">
@@ -340,6 +348,11 @@
         </div>
       {/snippet}
     </SplitButton>
+
+    <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+      <Chip variant="general" icon={iconInbox} disabled title="Inbox threads" onclick={() => {}}>{inboxCount}</Chip>
+      <Chip variant="general" icon={iconMarkEmailUnread} disabled title="Unread threads" onclick={() => {}}>{unreadCount}</Chip>
+    </div>
 
     <details class="overflow" bind:this={overflowDetails}>
       <summary aria-label="More actions" class="summary-btn" onclick={toggleOverflow}>
