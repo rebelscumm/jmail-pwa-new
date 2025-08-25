@@ -85,14 +85,33 @@ async function callOpenAI(prompt: string): Promise<AIResult> {
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], temperature: 0.2 })
+    body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], temperature: 0.2, apiKey: s.aiApiKey || undefined })
   });
   if (!res.ok) {
     const headers = getOpenAIRateLimitHeaders(res);
     let body: any = undefined;
-    try { body = await res.clone().json(); } catch (_) { try { body = await res.clone().text(); } catch (_) { body = undefined; } }
-    const baseMsg = res.status === 429 ? 'OpenAI rate limit exceeded' : `OpenAI error ${res.status}`;
-    throw new AIProviderError({ provider: 'openai', message: baseMsg, status: res.status, headers, body });
+    let textFallback: string | undefined = undefined;
+    try {
+      body = await res.clone().json();
+    } catch (_) {
+      try { textFallback = await res.clone().text(); } catch (_) { /* ignore */ }
+    }
+
+    const errorCode = typeof body?.error?.code === 'string' ? body.error.code : undefined;
+    const errorMessageFromBody = typeof body?.error?.message === 'string' ? body.error.message : undefined;
+
+    let baseMsg = `OpenAI error ${res.status}`;
+    if (res.status === 429 && errorCode === 'insufficient_quota') {
+      baseMsg = 'OpenAI insufficient quota';
+    } else if (res.status === 401 || errorCode === 'invalid_api_key') {
+      baseMsg = 'OpenAI invalid API key';
+    } else if (res.status === 429) {
+      baseMsg = 'OpenAI rate limit exceeded';
+    } else if (errorMessageFromBody) {
+      baseMsg = `OpenAI error ${res.status}: ${errorMessageFromBody}`;
+    }
+
+    throw new AIProviderError({ provider: 'openai', message: baseMsg, status: res.status, headers, body: body ?? textFallback });
   }
   const data = await safeParseJson(res);
   const text = data?.choices?.[0]?.message?.content?.trim?.() || '';

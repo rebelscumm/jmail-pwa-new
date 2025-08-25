@@ -4,12 +4,12 @@ import type { RequestHandler } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 
 export const POST: RequestHandler = async ({ request }) => {
-  const apiKey = env.OPENAI_API_KEY;
+  const body = await request.json().catch(() => ({}));
+  const bodyKey = (body?.apiKey as string | undefined) || undefined;
+  const apiKey = env.OPENAI_API_KEY || (bodyKey ? String(bodyKey) : '');
   if (!apiKey) {
     return new Response(JSON.stringify({ error: 'OPENAI_API_KEY not set' }), { status: 500 });
   }
-
-  const body = await request.json().catch(() => ({}));
   const messages = body?.messages ?? [{ role: 'user', content: 'Hello' }];
   const model = body?.model ?? 'gpt-4o-mini';
   const temperature = body?.temperature ?? 0.2;

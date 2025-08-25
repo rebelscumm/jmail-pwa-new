@@ -96,6 +96,12 @@
     }
     return a.type;
   }
+  // Use on-container colors for the inline Undo action to match the filled background
+  function getUndoTextColor(): string {
+    const t = lastCommittedAction?.type;
+    if (t === 'delete') return 'rgb(var(--m3-scheme-on-error-container))';
+    return 'rgb(var(--m3-scheme-on-secondary-container))';
+  }
 
   function cancelGlobalDisappearTimer(): void {
     try {
@@ -567,9 +573,9 @@
       <div class={`affordance ${dx > 0 ? 'left' : 'right'}`} style={`opacity:${0.3 + Math.min(1, Math.abs(dx)/(width*0.5)) * 0.7}; transform: scale(${0.85 + Math.min(1, Math.abs(dx)/(width*0.5))*0.15});`}>
         <Icon icon={action === 'archive' ? iconArchive : iconDelete} />
       </div>
-      <div class="tray" style={`opacity:${Math.max(0, Math.min(1, (Math.abs(dx)/(width*0.5) - 0.2) / 0.3))}; justify-content:${dx > 0 ? 'flex-start' : 'flex-end'}` }>
+      <div class="tray" style={`opacity:${Math.max(0, Math.min(1, (Math.abs(dx)/(width*0.5) - 0.2) / 0.3))}; justify-content:center; pointer-events:${lastCommittedAction ? 'auto' : 'none'}` }>
         {#if lastCommittedAction}
-          <Button variant="text" onclick={async (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); cancelGlobalDisappearTimer(); await undoLast(1); animating = true; dx = 0; committed = false; lastCommittedAction = null; setTimeout(() => { animating = false; }, 140); }}>
+          <Button variant="text" style={`color:${getUndoTextColor()}`} onclick={async (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); cancelGlobalDisappearTimer(); await undoLast(1); animating = true; dx = 0; committed = false; lastCommittedAction = null; setTimeout(() => { animating = false; }, 140); }}>
             <span>Undo {formatUndoLabel()}</span>
           </Button>
         {/if}

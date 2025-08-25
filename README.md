@@ -13,7 +13,7 @@ urlFragment: 'https://github.com/MicrosoftDocs/mslearn-staticwebapp'
 
 - **App location**: `svelte-app`
 - **Output location**: `build`
-- **API location**: (leave empty)
+- **API location**: `api`
 - **Package manager**: `pnpm@8` (repo includes `pnpm-lock.yaml`)
 - **Node version**: Use Node 20.x (repo `engines.node` is `>=20.19.0`)
 
@@ -25,6 +25,7 @@ urlFragment: 'https://github.com/MicrosoftDocs/mslearn-staticwebapp'
     azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
     repo_token: ${{ secrets.GITHUB_TOKEN }}
     app_location: svelte-app
+    api_location: api
     output_location: build
     package_manager: pnpm@8
 ```
@@ -32,7 +33,40 @@ urlFragment: 'https://github.com/MicrosoftDocs/mslearn-staticwebapp'
 ### Portal config (if not using Actions)
 - Set App location to `svelte-app`
 - Set Output location to `build`
-- Leave API location empty
+- Set API location to `api`
+
+### OpenAI proxy with Azure Functions
+
+This repo includes an Azure Functions app under `api/` that exposes `POST /api/openai` and securely forwards requests to OpenAI with a server-side API key.
+
+- Function files:
+  - `api/host.json`
+  - `api/openai/function.json`
+  - `api/openai/index.js`
+
+#### Configure API key
+
+- In Azure Portal → your Static Web App → Configuration, add application setting `OPENAI_API_KEY` with your key.
+- For local dev, copy `api/local.settings.example.json` to `api/local.settings.json` and set `OPENAI_API_KEY`.
+
+#### Local development (frontend + functions)
+
+Use Static Web Apps CLI to run SvelteKit and the Functions API together:
+
+```bash
+npm i -g @azure/static-web-apps-cli azure-functions-core-tools@4 --unsafe-perm true
+swa start ./svelte-app --api-location ./api --run "npm run dev --prefix svelte-app"
+```
+
+This serves the app and `/api/*` locally without CORS issues. The frontend already calls `/api/openai`.
+
+#### Test the endpoint
+
+```bash
+curl -X POST http://localhost:4280/api/openai \
+  -H "Content-Type: application/json" \
+  -d '{"messages":[{"role":"user","content":"Say hi briefly"}]}'
+```
 
 ### Local build check (optional)
 - From repo root: `cd svelte-app && pnpm i && pnpm build`

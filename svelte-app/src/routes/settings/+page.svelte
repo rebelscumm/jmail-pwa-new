@@ -91,7 +91,8 @@
 
   // Track dirty state for guards
   let initialLoaded = $state(false);
-  let isDirty = $derived(() => {
+  let suppressGuards = $state(false);
+  let isDirty = $derived((): boolean => {
     // Compare current UI state against $settings where possible
     const s = $settings as AppSettings;
     if (!initialLoaded || !s) return false;
@@ -125,7 +126,7 @@
   // SvelteKit navigation guard
   let removeBeforeUnload: (() => void) | null = null;
   const removeBeforeNavigate = beforeNavigate((nav) => {
-    if (!isDirty) return;
+    if (suppressGuards || !(isDirty as unknown as boolean)) return;
     const msg = 'You have unsaved changes. Discard them?';
     if (!confirm(msg)) {
       nav.cancel();
@@ -135,7 +136,7 @@
 
   // Browser unload guard
   $effect(() => {
-    if (isDirty) {
+    if ((isDirty as unknown as boolean) && !suppressGuards) {
       const handler = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ''; };
       window.addEventListener('beforeunload', handler);
       removeBeforeUnload = () => window.removeEventListener('beforeunload', handler);
@@ -146,7 +147,7 @@
   });
 
   onDestroy(() => {
-    try { removeBeforeNavigate(); } catch {}
+    // no-op; navigation guard auto-disposes on page unload
     try { if (removeBeforeUnload) removeBeforeUnload(); } catch {}
   });
 
@@ -273,8 +274,15 @@
   }
 
   async function saveAndExit() {
-    await saveAll();
-    goto('/inbox');
+    try {
+      await saveAll();
+      suppressGuards = true;
+      try { if (removeBeforeUnload) { removeBeforeUnload(); removeBeforeUnload = null; } } catch {}
+      goto('/inbox');
+    } catch (e: unknown) {
+      suppressGuards = false;
+      info = e instanceof Error ? e.message : String(e);
+    }
   }
 
   function closeWithoutSaving() {

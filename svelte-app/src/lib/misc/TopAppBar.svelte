@@ -392,10 +392,10 @@
     justify-content: space-between;
     gap: 0.5rem;
     padding: 0.25rem 0;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
   }
   .left, .right { display: flex; align-items: center; gap: 0.5rem; }
-  .right { flex-wrap: wrap; min-width: 0; }
+  .right { flex: 1; flex-wrap: wrap; min-width: 0; justify-content: flex-end; }
   .label { margin-inline-start: 0.25rem; }
   .search { display: flex; align-items: center; }
   .search-field { flex: 1 1 12rem; min-width: 0; }
