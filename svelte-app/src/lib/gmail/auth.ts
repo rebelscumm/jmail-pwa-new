@@ -160,8 +160,20 @@ export async function acquireTokenInteractive(prompt: 'none' | 'consent' | 'sele
     // Coalesce concurrent interactive requests: if a valid token exists now, skip
     const preState = getAuthState();
     if (preState.accessToken && preState.expiryMs && preState.expiryMs > Date.now()) {
-      pushGmailDiag({ type: 'auth_interactive_skip_valid' });
-      return;
+      // Only skip if current token already has all required scopes when using consent flows.
+      // If scopes are missing, proceed to prompt so we can grant them.
+      try {
+        const info = await fetchTokenInfo();
+        const granted = typeof info?.scope === 'string' ? String(info.scope).split(/\s+/).filter(Boolean) : [];
+        const requested = String(SCOPES).split(/\s+/).filter(Boolean);
+        const missingScopes = requested.filter((s) => !granted.includes(s));
+        if (missingScopes.length === 0 && prompt !== 'select_account') {
+          pushGmailDiag({ type: 'auth_interactive_skip_valid' });
+          return;
+        }
+      } catch (_) {
+        // If token info check fails, fall through to allow prompt to fix potential auth issues
+      }
     }
     let beforeInfo: any = undefined;
     try { beforeInfo = await fetchTokenInfo(); } catch (_) {}
@@ -369,6 +381,44 @@ export async function ensureValidToken(): Promise<string> {
     return token.access_token;
   }, { flow: 'silent' });
   return accessToken;
+}
+
+// Force a silent token refresh regardless of current token validity
+export async function refreshTokenSilent(reason?: string): Promise<string> {
+  if (!tokenClient) {
+    // Attempt late init using resolved client ID
+    try {
+      const cid = resolveGoogleClientId();
+      if (cid) await initAuth(cid);
+    } catch (_) {}
+    if (!tokenClient) throw new Error('Auth not initialized');
+  }
+  pushGmailDiag({ type: 'auth_forced_silent_refresh_attempt', reason });
+  const token = await withTokenClientLock(async () => {
+    const t = await withTimeout(
+      new Promise<TokenResponse>((resolve, reject) => {
+        tokenClient!.callback = (res) => {
+          if ('error' in res) reject(new Error(res.error as string));
+          else resolve(res as unknown as TokenResponse);
+        };
+        tokenClient!.requestAccessToken({ prompt: 'none' });
+      }),
+      20000,
+      'forced_silent_token'
+    );
+    const now = Date.now();
+    const expiryMs = now + (t.expires_in - 60) * 1000;
+    authState.update((s) => ({ ...s, accessToken: t.access_token, expiryMs }));
+    try {
+      const { getDB } = await import('$lib/db/indexeddb');
+      const db = await getDB();
+      const account = { sub: 'me', tokenExpiry: expiryMs, accessToken: t.access_token } satisfies AccountAuthMeta;
+      await db.put('auth', account, account.sub);
+    } catch (_) {}
+    pushGmailDiag({ type: 'auth_forced_silent_refresh_success', expiresIn: token?.expires_in });
+    return t;
+  }, { flow: 'silent', reason: reason || 'api_401_retry' });
+  return token.access_token;
 }
 
 export function setAccount(meta: AccountAuthMeta) {

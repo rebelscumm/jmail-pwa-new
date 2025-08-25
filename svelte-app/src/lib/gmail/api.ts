@@ -1,4 +1,4 @@
-import { ensureValidToken, fetchTokenInfo, acquireTokenForScopes, SCOPES } from '$lib/gmail/auth';
+import { ensureValidToken, fetchTokenInfo, acquireTokenForScopes, SCOPES, refreshTokenSilent, acquireTokenInteractive } from '$lib/gmail/auth';
 import { pushGmailDiag, getAndClearGmailDiagnostics } from '$lib/gmail/diag';
 import type { GmailLabel, GmailMessage } from '$lib/types';
 
@@ -56,12 +56,12 @@ export async function copyGmailDiagnosticsToClipboard(extra?: Record<string, unk
 }
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const token = await ensureValidToken();
-  const tokenFp = fingerprintToken(token);
+  let token = await ensureValidToken();
+  let tokenFp = fingerprintToken(token);
   let tokenInfoAtRequest: { scope?: string; expires_in?: string; aud?: string } | undefined;
   try { tokenInfoAtRequest = await fetchTokenInfo(); } catch (_) {}
   pushGmailDiag({ type: 'api_request', path, method: (init && 'method' in (init as any) && (init as any).method) ? (init as any).method : 'GET', tokenInfo: tokenInfoAtRequest, tokenFp });
-  const res = await fetch(`${GMAIL_BASE}${path}`, {
+  let res = await fetch(`${GMAIL_BASE}${path}`, {
     ...init,
     headers: {
       Authorization: `Bearer ${token}`,
@@ -69,6 +69,39 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
       ...(init?.headers || {})
     }
   });
+  // If unauthorized, try one silent refresh and retry
+  if (res.status === 401) {
+    try {
+      pushGmailDiag({ type: 'api_401_detected', path, tokenFp });
+      token = await refreshTokenSilent('api_401_retry');
+      tokenFp = fingerprintToken(token);
+      res = await fetch(`${GMAIL_BASE}${path}`, {
+        ...init,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          ...(init?.headers || {})
+        }
+      });
+    } catch (_) {}
+  }
+  // If still unauthorized, attempt an interactive re-auth with minimal friction
+  if (res.status === 401) {
+    try {
+      pushGmailDiag({ type: 'api_401_retry_interactive', path, tokenFp });
+      await acquireTokenInteractive('consent', 'api_401_retry');
+      token = await ensureValidToken();
+      tokenFp = fingerprintToken(token);
+      res = await fetch(`${GMAIL_BASE}${path}`, {
+        ...init,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          ...(init?.headers || {})
+        }
+      });
+    } catch (_) {}
+  }
   if (!res.ok) {
     let message = `Gmail API error ${res.status}`;
     let details: unknown;
