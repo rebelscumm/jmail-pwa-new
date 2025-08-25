@@ -50,6 +50,11 @@
         const { clearAllHolds } = await import('$lib/stores/holds');
         clearAllHolds();
       } catch {}
+      // Ensure we don't show stale threads after server sync
+      try {
+        const mod = await import('../../routes/inbox/+page.svelte');
+        if (typeof (mod as any).resetInboxCache === 'function') await (mod as any).resetInboxCache();
+      } catch {}
       try {
         const mod = await import('../../routes/inbox/+page.svelte');
         if (typeof (mod as any).reloadFromCache === 'function') await (mod as any).reloadFromCache();
