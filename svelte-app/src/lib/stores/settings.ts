@@ -12,6 +12,8 @@ export type AppSettings = {
   aiProvider?: 'openai' | 'anthropic' | 'gemini';
   aiApiKey?: string;
   aiModel?: string;
+  aiSummaryModel?: string;
+  aiDraftModel?: string;
   aiPageFetchOptIn?: boolean;
   taskFilePath?: string;
   trailingRefreshDelayMs?: number;
@@ -31,6 +33,14 @@ export type AppSettings = {
   inboxSort?: 'date_desc' | 'date_asc' | 'unread_first' | 'sender_az' | 'sender_za' | 'subject_az' | 'subject_za';
   /** Global font scale percent for rem-based MD3 typography (100 = default) */
   fontScalePercent?: number;
+  /** Enable precomputation of summaries in background */
+  precomputeSummaries?: boolean;
+  /** Prefer Gemini Batch Mode for nightly backfills */
+  precomputeUseBatch?: boolean;
+  /** Use Gemini Context Caching for stable instructions/signatures */
+  precomputeUseContextCache?: boolean;
+  /** Summary prompt/schema version for cache invalidation */
+  aiSummaryVersion?: number;
 };
 
 const DEFAULTS: AppSettings = {
@@ -47,7 +57,13 @@ const DEFAULTS: AppSettings = {
   swipeCommitVelocityPxPerSec: 1000,
   swipeDisappearMs: 5000,
   inboxSort: 'date_desc',
-  fontScalePercent: 100
+  fontScalePercent: 100,
+  aiProvider: 'gemini',
+  aiSummaryModel: 'gemini-2.5-flash-lite',
+  precomputeSummaries: false,
+  precomputeUseBatch: true,
+  precomputeUseContextCache: true,
+  aiSummaryVersion: 1
 };
 
 export const settings = writable<AppSettings>({ ...DEFAULTS });

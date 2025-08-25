@@ -458,12 +458,33 @@
       }
       threadMap[m.threadId] = existing;
     }
-    const threadList = Object.entries(threadMap).map(([threadId, v]) => ({
-      threadId,
-      messageIds: v.messageIds,
-      lastMsgMeta: v.last,
-      labelIds: Object.keys(v.labelIds)
-    }));
+    // Build thread list preserving any cached AI/computed fields
+    const dbThreads = await (await getDB());
+    const threadList = [] as Array<import('$lib/types').GmailThread>;
+    for (const [threadId, v] of Object.entries(threadMap)) {
+      const base = { threadId, messageIds: v.messageIds, lastMsgMeta: v.last, labelIds: Object.keys(v.labelIds) } as import('$lib/types').GmailThread;
+      try {
+        const prev = await dbThreads.get('threads', threadId) as import('$lib/types').GmailThread | undefined;
+        if (prev) {
+          threadList.push({
+            ...base,
+            summary: prev.summary,
+            summaryStatus: prev.summaryStatus,
+            summaryVersion: prev.summaryVersion,
+            summaryUpdatedAt: prev.summaryUpdatedAt,
+            bodyHash: prev.bodyHash,
+            aiSubject: (prev as any).aiSubject,
+            aiSubjectStatus: (prev as any).aiSubjectStatus,
+            subjectVersion: (prev as any).subjectVersion,
+            aiSubjectUpdatedAt: (prev as any).aiSubjectUpdatedAt
+          });
+        } else {
+          threadList.push(base);
+        }
+      } catch {
+        threadList.push(base);
+      }
+    }
     // Persist
     const txMsgs = db.transaction('messages', 'readwrite');
     for (const m of msgs) await txMsgs.store.put(m);
@@ -474,7 +495,7 @@
     const current = $threadsStore || [];
     const merged = [...current, ...threadList].reduce((acc, t) => {
       const idx = acc.findIndex((x) => x.threadId === t.threadId);
-      if (idx >= 0) acc[idx] = t; else acc.push(t);
+      if (idx >= 0) acc[idx] = { ...acc[idx], ...t } as any; else acc.push(t);
       return acc;
     }, [] as typeof current);
     threadsStore.set(merged);

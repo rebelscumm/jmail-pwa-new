@@ -18,7 +18,6 @@
   import iconDelete from '@ktibow/iconset-material-symbols/delete';
   import iconSnooze from '@ktibow/iconset-material-symbols/snooze';
   import { onMount } from 'svelte';
-  import iconSchedule from '@ktibow/iconset-material-symbols/schedule';
   import Chip from '$lib/forms/Chip.svelte';
   import iconX from '@ktibow/iconset-material-symbols/close';
   import { labels as labelsStore } from '$lib/stores/labels';
@@ -55,6 +54,22 @@
   }
   const senderDisplay = $derived(extractSender(thread.lastMsgMeta?.from || ''));
   const senderInitial = $derived((senderDisplay?.[0] || '?').toUpperCase());
+  const threadDisplaySubject = $derived((() => {
+    try {
+      const status = (thread as any).aiSubjectStatus as ('none'|'pending'|'ready'|'error') | undefined;
+      const ai = (thread as any).aiSubject as string | undefined;
+      if (status === 'ready' && ai) return `AI: ${ai}`;
+    } catch {}
+    return thread.lastMsgMeta?.subject || '(no subject)';
+  })());
+
+  // Work around snippet type mismatches by passing as any
+  // These are stable references to snippet blocks defined below
+  const SN_defaultLeading: any = defaultLeading;
+  const SN_selectionLeading: any = selectionLeading;
+  const SN_threadHeadline: any = threadHeadline;
+  const SN_threadSupporting: any = threadSupporting;
+  const SN_trailingWithDate: any = trailingWithDate;
 
   let dx = $state(0);
   let startX = $state(0);
@@ -394,6 +409,7 @@
         return `Yesterday, ${timeStr}`;
       }
       return date.toLocaleString(undefined, {
+        weekday: 'short',
         month: 'short',
         day: 'numeric',
         hour: 'numeric',
@@ -496,7 +512,7 @@
 
 {#snippet threadHeadline()}
   <span class="row-headline">
-    <span class="title">{thread.lastMsgMeta.subject || '(no subject)'}</span>
+    <span class="title">{threadDisplaySubject}</span>
   </span>
 {/snippet}
 
@@ -510,7 +526,7 @@
       </div>
     {/if}
     {#if thread.lastMsgMeta?.date}
-      <span class="meta"><Icon icon={iconSchedule} /><span class="meta-text">{formatDateTime(thread.lastMsgMeta.date)}</span></span>
+      <span class="badge m3-font-label-small">{formatDateTime(thread.lastMsgMeta.date)}</span>
     {/if}
   </div>
 {/snippet}
@@ -584,14 +600,14 @@
   </div>
   <div class="fg" style={`transform: translateX(${dx}px); transition: ${animating ? 'transform 200ms cubic-bezier(0,0,0.2,1)' : 'none'};`} in:fade={{ duration: 180 }} out:fade={{ duration: 180 }}>
     <ListItem
-      leading={onToggleSelected ? selectionLeading : defaultLeading}
+      leading={onToggleSelected ? SN_selectionLeading : SN_defaultLeading}
       overline={senderDisplay}
-      headlineSnippet={threadHeadline}
-      supportingSnippet={threadSupporting}
+      headlineSnippet={SN_threadHeadline}
+      supportingSnippet={SN_threadSupporting}
       lines={3}
       unread={(thread.labelIds || []).includes('UNREAD')}
       href={`${base || ''}/viewer/${thread.threadId}`}
-      trailing={trailingWithDate}
+      trailing={SN_trailingWithDate}
     />
   </div>
 </div>
@@ -643,7 +659,7 @@
   .actions :global(.m3-container.text span) { white-space: normal; }
   /* Ensure 30d and 1h actions can sit on the same line */
   .snooze-wrap { display:inline-flex; align-items:center; gap: 0.5rem; flex: 0 0 auto; flex-wrap: nowrap; }
-  .snooze-menu :global(.m3-container) { padding: 0.75rem; max-width: 24rem; }
+  .snooze-menu :global(.m3-container) { padding: 0.75rem; max-width: 24rem; max-height: min(95vh, 44rem); }
   /* Separate snooze and toggle button styles */
   .snooze-buttons { display:inline-flex; align-items:center; position: relative; gap: 0.5rem; flex-wrap: nowrap; }
   .menu-toggle { position: relative; }
@@ -718,6 +734,14 @@
   .row-headline .meta :global(svg) { width: 1rem; height: 1rem; }
   .supporting { display: flex; align-items: center; gap: 0.5rem; }
   .labels-wrap { display:flex; gap: 0.25rem; flex-wrap: wrap; }
+  .badge {
+    display: inline-block;
+    padding: 0.125rem 0.375rem;
+    border-radius: var(--m3-util-rounding-extra-small);
+    background: rgb(var(--m3-scheme-secondary-container));
+    color: rgb(var(--m3-scheme-on-secondary-container));
+    white-space: nowrap;
+  }
 </style>
 
 

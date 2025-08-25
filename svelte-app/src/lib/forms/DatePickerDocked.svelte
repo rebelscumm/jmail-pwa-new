@@ -46,10 +46,23 @@
 
   const getLongMonth = (month: number) =>
     new Date(0, month).toLocaleDateString(undefined, { month: "long" });
+
+  function shouldShowYear(): boolean {
+    try {
+      const today = new Date();
+      const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+      const nextYearStart = new Date(today.getFullYear() + 1, 0, 1);
+      const diffMs = nextYearStart.getTime() - startOfToday.getTime();
+      const days = Math.ceil(diffMs / 86400000);
+      return days <= 30;
+    } catch {
+      return false;
+    }
+  }
 </script>
 
 <div class="m3-container">
-  <Header bind:currentView bind:focusedMonth bind:focusedYear {startYear} {endYear} />
+  <Header bind:currentView bind:focusedMonth bind:focusedYear {startYear} {endYear} showYear={shouldShowYear()}/>
   {#if currentView == "calendar"}
     <CalendarPicker {focusedMonth} {focusedYear} {dateValidator} bind:chosenDate />
     <Actions

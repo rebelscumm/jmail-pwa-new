@@ -11,12 +11,14 @@
     focusedYear = $bindable(),
     startYear,
     endYear,
+    showYear = true,
   }: {
     currentView: "calendar" | "year" | "month";
     focusedMonth: number;
     focusedYear: number;
     startYear: number;
     endYear: number;
+    showYear?: boolean;
   } = $props();
 
   const yearClick = () => (currentView = currentView == "calendar" ? "year" : "calendar");
@@ -50,36 +52,38 @@
       <Icon icon={iconRight} />
     </button>
   </div>
-  <div>
-    <button
-      type="button"
-      class="arrow"
-      disabled={focusedYear <= startYear}
-      onclick={() => focusedYear--}
-    >
-      <Layer />
-      <Icon icon={iconLeft} />
-    </button>
-    <button
-      type="button"
-      class="chooser m3-font-label-large"
-      onclick={yearClick}
-      disabled={currentView == "month"}
-    >
-      <Layer />
-      {focusedYear}
-      <Icon icon={iconDown} />
-    </button>
-    <button
-      type="button"
-      class="arrow"
-      disabled={focusedYear >= endYear}
-      onclick={() => focusedYear++}
-    >
-      <Layer />
-      <Icon icon={iconRight} />
-    </button>
-  </div>
+  {#if showYear}
+    <div>
+      <button
+        type="button"
+        class="arrow"
+        disabled={focusedYear <= startYear}
+        onclick={() => focusedYear--}
+      >
+        <Layer />
+        <Icon icon={iconLeft} />
+      </button>
+      <button
+        type="button"
+        class="chooser m3-font-label-large"
+        onclick={yearClick}
+        disabled={currentView == "month"}
+      >
+        <Layer />
+        {focusedYear}
+        <Icon icon={iconDown} />
+      </button>
+      <button
+        type="button"
+        class="arrow"
+        disabled={focusedYear >= endYear}
+        onclick={() => focusedYear++}
+      >
+        <Layer />
+        <Icon icon={iconRight} />
+      </button>
+    </div>
+  {/if}
 </div>
 
 <style>

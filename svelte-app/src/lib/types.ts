@@ -24,6 +24,24 @@ export type GmailThread = {
   messageIds: string[];
   lastMsgMeta: { from?: string; subject?: string; date?: number };
   labelIds: string[];
+  /** Precomputed AI summary for the thread's latest content */
+  summary?: string;
+  /** Precompute status for the summary */
+  summaryStatus?: 'none' | 'pending' | 'ready' | 'error';
+  /** App-controlled version for summary prompt/schema */
+  summaryVersion?: number;
+  /** Last update timestamp for the summary (ms epoch) */
+  summaryUpdatedAt?: number;
+  /** Hash of the content used for the current summary (subject+body) */
+  bodyHash?: string;
+  /** AI-improved subject line for the thread */
+  aiSubject?: string;
+  /** Precompute status for the AI subject */
+  aiSubjectStatus?: 'none' | 'pending' | 'ready' | 'error';
+  /** App-controlled version for subject prompt/schema */
+  subjectVersion?: number;
+  /** Last update timestamp for the AI subject (ms epoch) */
+  aiSubjectUpdatedAt?: number;
 };
 
 export type SnoozeRule = {

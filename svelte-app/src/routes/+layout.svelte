@@ -53,6 +53,8 @@
       }
       if (msg.type === 'SYNC_TICK') {
         import('$lib/db/backups').then((m) => m.maybeCreateWeeklySnapshot());
+        // Trigger background precompute tick for AI summaries (lightweight)
+        import('$lib/ai/precompute').then((m) => m.tickPrecompute(8)).catch(() => {});
       }
     });
   }
@@ -121,6 +123,8 @@
     import('$lib/stores/settings').then((m)=>m.loadSettings());
     refreshSyncState();
     import('$lib/db/backups').then((m) => m.maybeCreateWeeklySnapshot());
+    // Kick a small precompute tick shortly after startup
+    try { setTimeout(() => { import('$lib/ai/precompute').then((m) => m.tickPrecompute(6)); }, 4000); } catch {}
     // Keep optional: legacy local snooze viewer; safe if empty
     import('$lib/stores/snooze').then((m)=>m.loadSnoozes());
 

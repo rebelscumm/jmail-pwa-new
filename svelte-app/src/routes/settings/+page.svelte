@@ -19,6 +19,8 @@
   import Tabs from '$lib/nav/Tabs.svelte';
   import Radio from '$lib/forms/RadioAnim2.svelte';
   import { goto } from '$app/navigation';
+  import ActionBar from '$lib/buttons/ActionBar.svelte';
+  import { precomputeNow } from '$lib/ai/precompute';
 
   let labels = $state<GmailLabel[]>([]);
   let mappingJson = $state('');
@@ -30,10 +32,19 @@
   let _aiProvider = $state<AppSettings['aiProvider']>('openai');
   let _aiApiKey = $state('');
   let _aiModel = $state('');
+  let _aiSummaryModel = $state('');
+  let _aiDraftModel = $state('');
   let _aiPageFetchOptIn = $state(false);
+  let _aiKeyVisible = $state(false);
   let _taskFilePath = $state('');
   let _trailingRefreshDelayMs = $state(5000);
   let _trailingSlideOutDurationMs = $state(260);
+  // AI precompute
+  let _precomputeSummaries = $state(false);
+  let _precomputeUseBatch = $state(true);
+  let _precomputeUseContextCache = $state(true);
+  let _aiSummaryVersion = $state(1);
+  let _precomputeInfo = $state('');
   let importMappingInput = $state<HTMLInputElement | null>(null);
   let _swipeRightPrimary = $state<'archive' | 'delete'>('archive');
   let _swipeLeftPrimary = $state<'archive' | 'delete'>('delete');
@@ -53,9 +64,10 @@
   let _fontScalePercent = $state(100);
 
   // Tabs
-  let currentTab = $state<'app' | 'mapping' | 'backups'>('app');
+  let currentTab = $state<'app' | 'api' | 'mapping' | 'backups'>('app');
   const tabItems = [
     { name: 'App', value: 'app' },
+    { name: 'API', value: 'api' },
     { name: 'Label Mapping', value: 'mapping' },
     { name: 'Backups', value: 'backups' }
   ];
@@ -70,10 +82,16 @@
     _aiProvider = s.aiProvider || 'openai';
     _aiApiKey = s.aiApiKey || '';
     _aiModel = s.aiModel || '';
+    _aiSummaryModel = s.aiSummaryModel || '';
+    _aiDraftModel = s.aiDraftModel || '';
     _aiPageFetchOptIn = !!s.aiPageFetchOptIn;
     _taskFilePath = s.taskFilePath || '';
     _trailingRefreshDelayMs = Number(s.trailingRefreshDelayMs || 5000);
     _trailingSlideOutDurationMs = Number((s as any).trailingSlideOutDurationMs || 260);
+    _precomputeSummaries = !!(s as any).precomputeSummaries;
+    _precomputeUseBatch = (s as any).precomputeUseBatch !== false;
+    _precomputeUseContextCache = (s as any).precomputeUseContextCache !== false;
+    _aiSummaryVersion = Number((s as any).aiSummaryVersion || 1);
     _swipeRightPrimary = (s.swipeRightPrimary || 'archive') as any;
     _swipeLeftPrimary = (s.swipeLeftPrimary || 'delete') as any;
     _confirmDelete = !!s.confirmDelete;
@@ -104,9 +122,11 @@
         _roundMinutes !== s.roundMinutes ||
         _unreadOnUnsnooze !== !!s.unreadOnUnsnooze ||
         _notifEnabled !== !!s.notifEnabled ||
-        _aiProvider !== (s.aiProvider || 'openai') ||
+        _aiProvider !== (s.aiProvider || 'gemini') ||
         _aiApiKey !== (s.aiApiKey || '') ||
         _aiModel !== (s.aiModel || '') ||
+        _aiSummaryModel !== (s.aiSummaryModel || '') ||
+        _aiDraftModel !== (s.aiDraftModel || '') ||
         _aiPageFetchOptIn !== !!s.aiPageFetchOptIn ||
         _taskFilePath !== (s.taskFilePath || '') ||
         Number(_trailingRefreshDelayMs || 0) !== Number(s.trailingRefreshDelayMs || 5000) ||
@@ -241,7 +261,7 @@
   }
 
   async function saveAppSettings() {
-    await updateAppSettings({ anchorHour: _anchorHour, roundMinutes: _roundMinutes, unreadOnUnsnooze: _unreadOnUnsnooze, notifEnabled: _notifEnabled, aiProvider: _aiProvider, aiApiKey: _aiApiKey, aiModel: _aiModel, aiPageFetchOptIn: _aiPageFetchOptIn, taskFilePath: _taskFilePath, trailingRefreshDelayMs: Math.max(0, Number(_trailingRefreshDelayMs || 0)), trailingSlideOutDurationMs: Math.max(0, Number(_trailingSlideOutDurationMs || 0)), swipeRightPrimary: _swipeRightPrimary, swipeLeftPrimary: _swipeLeftPrimary, confirmDelete: _confirmDelete, swipeCommitVelocityPxPerSec: Math.max(100, Number(_swipeCommitVelocityPxPerSec || 1000)), swipeDisappearMs: Math.max(100, Number(_swipeDisappearMs || 800)), fontScalePercent: Math.max(50, Math.min(200, Number(_fontScalePercent || 100))) });
+    await updateAppSettings({ anchorHour: _anchorHour, roundMinutes: _roundMinutes, unreadOnUnsnooze: _unreadOnUnsnooze, notifEnabled: _notifEnabled, aiProvider: _aiProvider, aiApiKey: _aiApiKey, aiModel: _aiModel, aiSummaryModel: _aiSummaryModel, aiDraftModel: _aiDraftModel, aiPageFetchOptIn: _aiPageFetchOptIn, taskFilePath: _taskFilePath, trailingRefreshDelayMs: Math.max(0, Number(_trailingRefreshDelayMs || 0)), trailingSlideOutDurationMs: Math.max(0, Number(_trailingSlideOutDurationMs || 0)), swipeRightPrimary: _swipeRightPrimary, swipeLeftPrimary: _swipeLeftPrimary, confirmDelete: _confirmDelete, swipeCommitVelocityPxPerSec: Math.max(100, Number(_swipeCommitVelocityPxPerSec || 1000)), swipeDisappearMs: Math.max(100, Number(_swipeDisappearMs || 800)), fontScalePercent: Math.max(50, Math.min(200, Number(_fontScalePercent || 100))), precomputeSummaries: _precomputeSummaries, precomputeUseBatch: _precomputeUseBatch, precomputeUseContextCache: _precomputeUseContextCache, aiSummaryVersion: Math.max(1, Number(_aiSummaryVersion || 1)) });
     if (_notifEnabled && 'Notification' in window) {
       const p = await Notification.requestPermission();
       if (p !== 'granted') {
@@ -264,12 +284,44 @@
   }
 
   async function saveAll() {
-    if (currentTab === 'app') {
+    if (currentTab === 'app' || currentTab === 'api') {
       await saveAppSettings();
     } else if (currentTab === 'mapping') {
       await saveMapping();
     } else {
       info = 'Nothing to save on Backups tab.';
+    }
+  }
+
+  async function runPrecomputeNow() {
+    try {
+      _precomputeInfo = 'Starting…';
+      await precomputeNow(12);
+      _precomputeInfo = 'Precompute tick queued.';
+    } catch (e: unknown) {
+      _precomputeInfo = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  async function copyPrecomputeStats() {
+    try {
+      const db = await getDB();
+      const threads = await db.getAll('threads');
+      const counts = threads.reduce((acc, t: any) => {
+        const s = t?.summaryStatus || 'none';
+        acc[s] = (acc[s] || 0) + 1;
+        return acc;
+      }, {} as Record<string, number>);
+      const payload = {
+        at: new Date().toISOString(),
+        totalThreads: threads.length,
+        summary: counts,
+        sample: threads.slice(0, 5).map((t) => ({ id: t.threadId, status: t.summaryStatus, updatedAt: t.summaryUpdatedAt }))
+      };
+      await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+      _precomputeInfo = 'Stats copied to clipboard.';
+    } catch (e: unknown) {
+      _precomputeInfo = e instanceof Error ? e.message : String(e);
     }
   }
 
@@ -291,11 +343,7 @@
 </script>
 
 <Tabs items={tabItems} bind:tab={currentTab} secondary />
-<div style="margin-top:0.5rem; display:flex; gap:0.5rem; justify-content:flex-end;">
-  <Button variant="filled" onclick={saveAll}>Save</Button>
-  <Button variant="filled" onclick={saveAndExit}>Save & Exit</Button>
-  <Button variant="text" onclick={closeWithoutSaving}>Close</Button>
-</div>
+<ActionBar onSave={saveAll} onSaveAndExit={saveAndExit} onClose={closeWithoutSaving} />
 
 {#if currentTab === 'app'}
   <h3 style="margin-top:1rem;">App Settings</h3>
@@ -368,47 +416,81 @@
       </label>
     </div>
     <fieldset style="margin-top:0.75rem; border:1px solid var(--m3-outline-variant); padding:0.5rem; border-radius:0.5rem;">
-      <legend>AI</legend>
-      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap:0.75rem; align-items:center;">
-        <div>
-          <div class="m3-font-body-medium" style="margin-bottom:0.25rem;">Provider</div>
-          <div style="display:flex; gap:1rem; align-items:center;">
-            <label style="display:flex; align-items:center; gap:0.5rem;">
-              <Radio>
-                <input type="radio" name="aiProvider" value="openai" bind:group={_aiProvider} />
-              </Radio>
-              <span class="m3-font-body-medium">OpenAI</span>
-            </label>
-            <label style="display:flex; align-items:center; gap:0.5rem;">
-              <Radio>
-                <input type="radio" name="aiProvider" value="anthropic" bind:group={_aiProvider} />
-              </Radio>
-              <span class="m3-font-body-medium">Anthropic</span>
-            </label>
-            <label style="display:flex; align-items:center; gap:0.5rem;">
-              <Radio>
-                <input type="radio" name="aiProvider" value="gemini" bind:group={_aiProvider} />
-              </Radio>
-              <span class="m3-font-body-medium">Gemini</span>
-            </label>
-          </div>
-        </div>
-        <TextFieldOutlined label="API Key" type="password" bind:value={_aiApiKey} placeholder="sk-..." />
-        <TextFieldOutlined label="Model" bind:value={_aiModel} placeholder="gpt-4o-mini / claude-3-haiku / gemini-1.5-flash" />
-        <label style="display:flex; align-items:center; gap:0.5rem;">
-          <Checkbox>
-            <input type="checkbox" bind:checked={_aiPageFetchOptIn} />
-          </Checkbox>
-          <span class="m3-font-body-medium">Allow page fetch for link-only emails</span>
-        </label>
-      </div>
-    </fieldset>
-    <fieldset style="margin-top:0.75rem; border:1px solid var(--m3-outline-variant); padding:0.5rem; border-radius:0.5rem;">
       <legend>Tasks</legend>
       <TextFieldOutlined label="Desktop: task file path" bind:value={_taskFilePath} placeholder="C:\\path\\to\\tasks.md" />
     </fieldset>
     <div style="margin-top:0.75rem; display:flex; gap:0.5rem; justify-content:flex-end;">
       <Button variant="filled" onclick={saveAppSettings}>Save Settings</Button>
+    </div>
+  </Card>
+{/if}
+
+{#if currentTab === 'api'}
+  <h3 style="margin-top:1rem;">API Keys & Models</h3>
+  <Card variant="outlined">
+    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap:0.75rem; align-items:center;">
+      <div>
+        <div class="m3-font-body-medium" style="margin-bottom:0.25rem;">Provider</div>
+        <div style="display:flex; gap:1rem; align-items:center;">
+          <label style="display:flex; align-items:center; gap:0.5rem;">
+            <Radio>
+              <input type="radio" name="aiProvider" value="openai" bind:group={_aiProvider} />
+            </Radio>
+            <span class="m3-font-body-medium">OpenAI</span>
+          </label>
+          <label style="display:flex; align-items:center; gap:0.5rem;">
+            <Radio>
+              <input type="radio" name="aiProvider" value="anthropic" bind:group={_aiProvider} />
+            </Radio>
+            <span class="m3-font-body-medium">Anthropic</span>
+          </label>
+          <label style="display:flex; align-items:center; gap:0.5rem;">
+            <Radio>
+              <input type="radio" name="aiProvider" value="gemini" bind:group={_aiProvider} />
+            </Radio>
+            <span class="m3-font-body-medium">Gemini</span>
+          </label>
+        </div>
+      </div>
+      <div style="display:flex; gap:0.5rem; align-items:center;">
+        <TextFieldOutlined label="API Key" type={_aiKeyVisible ? 'text' : 'password'} bind:value={_aiApiKey} placeholder="OpenAI / Anthropic / Google API key" />
+        <Button variant="outlined" onclick={() => (_aiKeyVisible = !_aiKeyVisible)}>{_aiKeyVisible ? 'Hide' : 'View'}</Button>
+      </div>
+      <TextFieldOutlined label="Default model (fallback)" bind:value={_aiModel} placeholder="gpt-4o-mini / claude-3-haiku / gemini-1.5-flash" />
+      <TextFieldOutlined label="Summary model" bind:value={_aiSummaryModel} placeholder="gemini-2.5-flash-lite (default)" />
+      <TextFieldOutlined label="Draft model" bind:value={_aiDraftModel} placeholder="gemini-2.5-pro (default)" />
+      <label style="display:flex; align-items:center; gap:0.5rem;">
+        <Checkbox>
+          <input type="checkbox" bind:checked={_aiPageFetchOptIn} />
+        </Checkbox>
+        <span class="m3-font-body-medium">Allow page fetch for link-only emails</span>
+      </label>
+      <div style="grid-column: 1 / -1; height:1px; background:var(--m3-outline-variant); margin:0.25rem 0;"></div>
+      <label style="display:flex; align-items:center; gap:0.5rem;">
+        <Switch bind:checked={_precomputeSummaries} />
+        <span class="m3-font-body-medium">Precompute summaries (background)</span>
+      </label>
+      <label style="display:flex; align-items:center; gap:0.5rem;">
+        <Checkbox>
+          <input type="checkbox" bind:checked={_precomputeUseBatch} />
+        </Checkbox>
+        <span class="m3-font-body-medium">Use Gemini Batch Mode for nightly backfill (½ price)</span>
+      </label>
+      <label style="display:flex; align-items:center; gap:0.5rem;">
+        <Checkbox>
+          <input type="checkbox" bind:checked={_precomputeUseContextCache} />
+        </Checkbox>
+        <span class="m3-font-body-medium">Use Context Caching (style/signatures)</span>
+      </label>
+      <TextFieldOutlined label="Summary version" type="number" min="1" step="1" bind:value={(_aiSummaryVersion as any)} />
+    </div>
+    <div style="margin-top:0.75rem; display:flex; gap:0.5rem; justify-content:flex-end;">
+      <Button variant="filled" onclick={saveAppSettings}>Save API Settings</Button>
+      <Button variant="outlined" onclick={runPrecomputeNow}>Run precompute (quick)</Button>
+      <Button variant="text" onclick={copyPrecomputeStats}>Copy precompute stats</Button>
+      {#if _precomputeInfo}
+        <span class="m3-font-body-small">{_precomputeInfo}</span>
+      {/if}
     </div>
   </Card>
 {/if}
@@ -548,3 +630,5 @@
     </ul>
   </Card>
 {/if}
+
+<ActionBar onSave={saveAll} onSaveAndExit={saveAndExit} onClose={closeWithoutSaving} />

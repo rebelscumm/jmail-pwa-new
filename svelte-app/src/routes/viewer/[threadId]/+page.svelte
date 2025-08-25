@@ -14,7 +14,7 @@
   import { getThreadSummary } from "$lib/gmail/api";
   import { getDB } from "$lib/db/indexeddb";
   import { acquireTokenForScopes, SCOPES, fetchTokenInfo, signOut, acquireTokenInteractive } from "$lib/gmail/auth";
-  import { aiSummarizeEmail, aiDraftReply, findUnsubscribeTarget, aiExtractUnsubscribeUrl, getFriendlyAIErrorMessage, AIProviderError } from "$lib/ai/providers";
+  import { aiSummarizeEmail, aiSummarizeSubject, aiDraftReply, findUnsubscribeTarget, aiExtractUnsubscribeUrl, getFriendlyAIErrorMessage, AIProviderError } from "$lib/ai/providers";
   import { filters, deleteSavedFilter, type ThreadFilter } from "$lib/stores/filters";
   import { applyFilterToThreads } from "$lib/stores/filters";
   import FilterBar from "$lib/utils/FilterBar.svelte";
@@ -36,6 +36,8 @@
   let summarizing: boolean = $state(false);
   let replying: boolean = $state(false);
   let extractingUnsub: boolean = $state(false);
+  let aiSubjectSummary: string | null = $state(null);
+  let aiBodySummary: string | null = $state(null);
   // Derive adjacent thread navigation using Inbox context + global search/filter/sort
   const inboxThreads = $derived(($threads || []).filter((t) => (t.labelIds || []).includes('INBOX')));
   const visibleCandidates = $derived((() => {
@@ -114,6 +116,28 @@
   function gotoNext() { if (nextThreadId) goto(`/viewer/${nextThreadId}`); }
   let threadLoading: boolean = $state(false);
   let threadError: string | null = $state(null);
+  // Reset AI summaries when navigating between threads
+  $effect(() => {
+    const _tid = currentThread?.threadId;
+    aiSubjectSummary = null;
+    aiBodySummary = null;
+    summarizing = false;
+  });
+  // Surface precomputed summaries if present
+  $effect(() => {
+    try {
+      const ct = currentThread;
+      if (!ct) return;
+      if (ct.summary && ct.summaryStatus === 'ready') {
+        aiBodySummary = ct.summary;
+      }
+      const subj = (ct as any).aiSubject as string | undefined;
+      const subjStatus = (ct as any).aiSubjectStatus as ('none'|'pending'|'ready'|'error') | undefined;
+      if (subj && subjStatus === 'ready') {
+        aiSubjectSummary = subj;
+      }
+    } catch (_) {}
+  });
   function formatDateTime(ts?: number | string): string {
     if (!ts) return '';
     const n = typeof ts === 'string' ? Number(ts) : ts;
@@ -293,12 +317,66 @@
     if (summarizing) return;
     const m = $messages[mid];
     if (!m) return;
+    // Use cached AI results if available to avoid redundant calls
+    try {
+      const ct = currentThread;
+      if (ct) {
+        const hasSubject = !!(ct as any).aiSubject && ((ct as any).aiSubjectStatus === 'ready');
+        const hasSummary = !!ct.summary && ct.summaryStatus === 'ready';
+        if (hasSubject || hasSummary) {
+          if (hasSubject) aiSubjectSummary = (ct as any).aiSubject;
+          if (hasSummary) aiBodySummary = ct.summary || null;
+          showSnackbar({ message: 'AI summary ready (cached)', closable: true });
+          return;
+        }
+      }
+    } catch (_) {}
     summarizing = true;
     try { showSnackbar({ message: 'Summarizing…' }); } catch {}
     try {
-      const text = await aiSummarizeEmail(m.headers?.Subject || '', m.bodyText, m.bodyHtml);
-      await navigator.clipboard.writeText(text);
-      showSnackbar({ message: 'Summary copied to clipboard', closable: true });
+      const subject = m.headers?.Subject || currentThread?.lastMsgMeta?.subject || '';
+      const bodyText = m.bodyText || m.snippet;
+      const bodyHtml = m.bodyHtml;
+      const [subjectText, bodyTextOut] = await Promise.all([
+        aiSummarizeSubject(subject, bodyText, bodyHtml),
+        aiSummarizeEmail(subject, bodyText, bodyHtml)
+      ]);
+      aiSubjectSummary = subjectText;
+      aiBodySummary = bodyTextOut;
+      // Persist AI results to cache to minimize future calls
+      try {
+        const db = await getDB();
+        const ct = currentThread;
+        if (ct) {
+          // Compute content hash consistent with precompute
+          function simpleHash(input: string): string {
+            try { let hash = 2166136261; for (let i = 0; i < input.length; i++) { hash ^= input.charCodeAt(i); hash = (hash * 16777619) >>> 0; } return hash.toString(16).padStart(8, '0'); } catch { return `${input.length}`; }
+          }
+          const combined = `${subject}\n\n${bodyText || ''}${!bodyText && bodyHtml ? bodyHtml : ''}`.trim();
+          const bodyHash = simpleHash(combined || subject || ct.threadId);
+          const nowMs = Date.now();
+          const nowVersion = Number($settings.aiSummaryVersion || 1);
+          const next = {
+            ...ct,
+            summary: (bodyTextOut || '').trim() || ct.summary,
+            summaryStatus: (bodyTextOut && bodyTextOut.trim()) ? 'ready' : (ct.summaryStatus || 'error'),
+            summaryVersion: nowVersion,
+            summaryUpdatedAt: nowMs,
+            bodyHash,
+            aiSubject: (subjectText || '').trim() || (ct as any).aiSubject,
+            aiSubjectStatus: (subjectText && subjectText.trim()) ? 'ready' : ((ct as any).aiSubjectStatus || 'error'),
+            subjectVersion: nowVersion,
+            aiSubjectUpdatedAt: nowMs
+          } as import('$lib/types').GmailThread as any;
+          await db.put('threads', next);
+          threads.update((arr) => {
+            const idx = arr.findIndex((t) => t.threadId === ct.threadId);
+            if (idx >= 0) { const copy = arr.slice(); (copy as any)[idx] = next; return copy as any; }
+            return arr as any;
+          });
+        }
+      } catch (_) {}
+      showSnackbar({ message: 'AI summary ready', closable: true });
     } catch (e) {
       const { message, retryAfterSeconds } = getFriendlyAIErrorMessage(e, 'Summarize');
       showSnackbar({
@@ -459,10 +537,31 @@ function scrollToBottom() {
           <span class="from">{currentThread.lastMsgMeta.from}</span>
         {/if}
         {#if currentThread.lastMsgMeta?.date}
-          <span class="badge">{formatDateTime(currentThread.lastMsgMeta.date)}</span>
+          <span class="badge m3-font-label-small">{formatDateTime(currentThread.lastMsgMeta.date)}</span>
         {/if}
       </h2>
     </Card>
+
+    {#if summarizing || aiSubjectSummary || aiBodySummary}
+      <div style="display:flex; flex-direction:column; gap:0.5rem;">
+        <Card variant="outlined">
+          <div class="m3-font-title-small" style="margin:0 0 0.25rem; color:rgb(var(--m3-scheme-on-surface-variant))">AI Subject</div>
+          {#if summarizing && !aiSubjectSummary}
+            <LoadingIndicator size={20} />
+          {:else if aiSubjectSummary}
+            <pre class="m3-font-body-medium" style="white-space:pre-wrap; margin:0;">{aiSubjectSummary}</pre>
+          {/if}
+        </Card>
+        <Card variant="outlined">
+          <div class="m3-font-title-small" style="margin:0 0 0.25rem; color:rgb(var(--m3-scheme-on-surface-variant))">AI Summary</div>
+          {#if summarizing && !aiBodySummary}
+            <LoadingIndicator size={20} />
+          {:else if aiBodySummary}
+            <pre class="m3-font-body-medium" style="white-space:pre-wrap; margin:0;">{aiBodySummary}</pre>
+          {/if}
+        </Card>
+      </div>
+    {/if}
 
     <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
       <Button variant="text" onclick={() => relogin(currentThread.messageIds?.[0])}>Re-login</Button>
@@ -485,7 +584,7 @@ function scrollToBottom() {
       {#if currentThread.messageIds?.length}
         {@const mid = currentThread.messageIds[currentThread.messageIds.length-1]}
         <Button variant="text" onclick={() => unsubscribe(mid)} disabled={extractingUnsub}>{extractingUnsub ? 'Finding…' : 'Unsubscribe'}</Button>
-        <Button variant="text" onclick={() => summarize(mid)} disabled={summarizing}>{summarizing ? 'Summarizing…' : 'Summarize'}</Button>
+        <Button variant="text" onclick={() => summarize(mid)} disabled={summarizing}>{summarizing ? 'Summarizing…' : 'AI Summary'}</Button>
         <Button variant="text" onclick={() => replyDraft(mid)} disabled={replying}>{replying ? 'Generating…' : 'Reply (AI) → Clipboard'}</Button>
         <Button variant="text" onclick={() => createTask(mid)}>Create Task</Button>
       {/if}
@@ -600,7 +699,7 @@ function scrollToBottom() {
       {#if currentThread.messageIds?.length}
         {@const mid = currentThread.messageIds[currentThread.messageIds.length-1]}
         <Button variant="text" onclick={() => unsubscribe(mid)} disabled={extractingUnsub}>{extractingUnsub ? 'Finding…' : 'Unsubscribe'}</Button>
-        <Button variant="text" onclick={() => summarize(mid)} disabled={summarizing}>{summarizing ? 'Summarizing…' : 'Summarize'}</Button>
+        <Button variant="text" onclick={() => summarize(mid)} disabled={summarizing}>{summarizing ? 'Summarizing…' : 'AI Summary'}</Button>
         <Button variant="text" onclick={() => replyDraft(mid)} disabled={replying}>{replying ? 'Generating…' : 'Reply (AI) → Clipboard'}</Button>
         <Button variant="text" onclick={() => createTask(mid)}>Create Task</Button>
       {/if}

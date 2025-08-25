@@ -78,9 +78,9 @@ function getOpenAIRateLimitHeaders(res: Response): Record<string, string | null>
   };
 }
 
-async function callOpenAI(prompt: string): Promise<AIResult> {
+async function callOpenAI(prompt: string, modelOverride?: string): Promise<AIResult> {
   const s = get(settings);
-  const model = s.aiModel || 'gpt-4o-mini';
+  const model = modelOverride || s.aiModel || 'gpt-4o-mini';
   const url = '/api/openai';
   const res = await fetch(url, {
     method: 'POST',
@@ -118,10 +118,10 @@ async function callOpenAI(prompt: string): Promise<AIResult> {
   return { text };
 }
 
-async function callAnthropic(prompt: string): Promise<AIResult> {
+async function callAnthropic(prompt: string, modelOverride?: string): Promise<AIResult> {
   const s = get(settings);
   const key = s.aiApiKey || '';
-  const model = s.aiModel || 'claude-3-haiku-20240307';
+  const model = modelOverride || s.aiModel || 'claude-3-haiku-20240307';
   const url = 'https://api.anthropic.com/v1/messages';
   const res = await fetch(url, {
     method: 'POST',
@@ -139,10 +139,10 @@ async function callAnthropic(prompt: string): Promise<AIResult> {
   return { text };
 }
 
-async function callGemini(prompt: string): Promise<AIResult> {
+async function callGemini(prompt: string, modelOverride?: string): Promise<AIResult> {
   const s = get(settings);
   const key = s.aiApiKey || '';
-  const model = s.aiModel || 'gemini-1.5-flash';
+  const model = modelOverride || s.aiModel || 'gemini-1.5-flash';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
   const res = await fetch(url, {
     method: 'POST',
@@ -162,12 +162,39 @@ async function callGemini(prompt: string): Promise<AIResult> {
 
 export async function aiSummarizeEmail(subject: string, bodyText?: string, bodyHtml?: string): Promise<string> {
   const s = get(settings);
+  const hasBody = !!(bodyText || bodyHtml);
   const text = bodyText || htmlToText(bodyHtml) || '';
-  const redacted = redactPII(`${subject}\n\n${text}`);
-  const prompt = `You are a concise assistant. Provide a short bullet list of the most important points in this email, most important first. Keep it under 6 bullets. Return ONLY the list as plain text with '-' bullets, no preamble or closing sentences, no code blocks, and no additional commentary.\n\nEmail:\n${redacted}`;
-  const provider = s.aiProvider || 'openai';
-  const out = provider === 'anthropic' ? await callAnthropic(prompt) : provider === 'gemini' ? await callGemini(prompt) : await callOpenAI(prompt);
-  return out.text;
+  const redacted = redactPII(text ? `${subject}\n\n${text}` : `${subject}`);
+  const prompt = hasBody
+    ? `You are a concise assistant. Provide a short bullet list of the most important points in this email, most important first. Keep it under 6 bullets. Return ONLY the list as plain text with '-' bullets, no preamble or closing sentences, no code blocks, and no additional commentary.\n\nEmail:\n${redacted}`
+    : `You are a concise assistant. Write a single-line subject summary of this email thread using 15 words or fewer. Return ONLY the summary as plain text on one line, with no bullets, no quotes, no preamble, and no code blocks.\n\nSubject:\n${redacted}`;
+  const provider = s.aiProvider || 'gemini';
+  const model = s.aiSummaryModel || s.aiModel || (provider === 'gemini' ? 'gemini-2.5-flash-lite' : provider === 'anthropic' ? 'claude-3-haiku-20240307' : 'gpt-4o-mini');
+  const out = provider === 'anthropic' ? await callAnthropic(prompt, model) : provider === 'gemini' ? await callGemini(prompt, model) : await callOpenAI(prompt, model);
+  let result = out.text || '';
+  if (!hasBody) {
+    // Normalize and hard-cap at 15 words as a safety net
+    result = result.replace(/^[\s\-•]+/, '').replace(/\s+/g, ' ').trim();
+    const words = result.split(/\s+/).filter(Boolean);
+    if (words.length > 15) result = words.slice(0, 15).join(' ');
+  }
+  return result;
+}
+
+export async function aiSummarizeSubject(subject: string, bodyText?: string, bodyHtml?: string): Promise<string> {
+  const s = get(settings);
+  const text = bodyText || htmlToText(bodyHtml) || '';
+  const redacted = redactPII(text ? `Subject: ${subject}\n\nEmail:\n${text}` : `Subject: ${subject}`);
+  const prompt = `You improve email subjects using the actual email content. Write a single-line subject that better summarizes the most important point(s). Use 15 words or fewer. Avoid prefixes like "Re:" or "Fwd:", avoid quotes, emojis, sender names, or dates. Return ONLY the subject text as plain text on one line.\n\n${redacted}`;
+  const provider = s.aiProvider || 'gemini';
+  const model = s.aiSummaryModel || s.aiModel || (provider === 'gemini' ? 'gemini-2.5-flash-lite' : provider === 'anthropic' ? 'claude-3-haiku-20240307' : 'gpt-4o-mini');
+  const out = provider === 'anthropic' ? await callAnthropic(prompt, model) : provider === 'gemini' ? await callGemini(prompt, model) : await callOpenAI(prompt, model);
+  let result = out.text || '';
+  // Normalize and hard-cap at 15 words
+  result = result.replace(/^[\s\-•]+/, '').replace(/\s+/g, ' ').trim();
+  const words = result.split(/\s+/).filter(Boolean);
+  if (words.length > 15) result = words.slice(0, 15).join(' ');
+  return result || subject || '';
 }
 
 export async function aiDraftReply(subject: string, bodyText?: string, bodyHtml?: string): Promise<string> {
@@ -175,8 +202,9 @@ export async function aiDraftReply(subject: string, bodyText?: string, bodyHtml?
   const text = bodyText || htmlToText(bodyHtml) || '';
   const redacted = redactPII(`${subject}\n\n${text}`);
   const prompt = `Write a brief, polite email reply in plain text. Include a short greeting and a concise closing. Keep it under 120 words. Do not include the original message, disclaimers, markdown, or code blocks. Return ONLY the reply body.\nSubject: ${subject}\nEmail:\n${redacted}`;
-  const provider = s.aiProvider || 'openai';
-  const out = provider === 'anthropic' ? await callAnthropic(prompt) : provider === 'gemini' ? await callGemini(prompt) : await callOpenAI(prompt);
+  const provider = s.aiProvider || 'gemini';
+  const model = s.aiDraftModel || s.aiModel || (provider === 'gemini' ? 'gemini-2.5-pro' : provider === 'anthropic' ? 'claude-3-haiku-20240307' : 'gpt-4o-mini');
+  const out = provider === 'anthropic' ? await callAnthropic(prompt, model) : provider === 'gemini' ? await callGemini(prompt, model) : await callOpenAI(prompt, model);
   return out.text;
 }
 
@@ -202,7 +230,7 @@ export async function aiExtractUnsubscribeUrl(subject: string, bodyText?: string
   const text = bodyText || htmlToText(bodyHtml) || '';
   const redacted = redactPII(`${subject}\n\n${text}`);
   const prompt = `From the following email content, extract a single unsubscribe URL or mailto link if present. Respond with ONLY the URL, nothing else. If none is present, respond with "NONE".\n\n${redacted}`;
-  const provider = s.aiProvider || 'openai';
+  const provider = s.aiProvider || 'gemini';
   const out = provider === 'anthropic' ? await callAnthropic(prompt) : provider === 'gemini' ? await callGemini(prompt) : await callOpenAI(prompt);
   const line = (out.text || '').trim();
   if (!line || /^none$/i.test(line)) return null;
