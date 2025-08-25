@@ -124,22 +124,24 @@
     // Keep optional: legacy local snooze viewer; safe if empty
     import('$lib/stores/snooze').then((m)=>m.loadSnoozes());
 
-    // Check for newer app version and offer a reload
+    // Check for newer app version and offer a reload (disabled in dev)
     try {
-      startUpdateChecker(() => {
-        showSnackbar({
-          message: 'A new version is available',
-          actions: {
-            Reload: () => {
-              const url = new URL(window.location.href);
-              url.searchParams.set('__hardreload', String(Date.now()));
-              window.location.assign(url.toString());
-            }
-          },
-          closable: true,
-          timeout: null
-        });
-      }, { intervalMs: 5 * 60 * 1000, immediate: true });
+      if (!(import.meta as any).env?.DEV) {
+        startUpdateChecker(() => {
+          showSnackbar({
+            message: 'A new version is available',
+            actions: {
+              Reload: () => {
+                const url = new URL(window.location.href);
+                url.searchParams.set('__hardreload', String(Date.now()));
+                window.location.assign(url.toString());
+              }
+            },
+            closable: true,
+            timeout: null
+          });
+        }, { intervalMs: 5 * 60 * 1000, immediate: true });
+      }
     } catch (_) {}
 
     // Offline banner
