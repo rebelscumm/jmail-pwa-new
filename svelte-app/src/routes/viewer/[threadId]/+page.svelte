@@ -14,7 +14,7 @@
   import { getThreadSummary } from "$lib/gmail/api";
   import { getDB } from "$lib/db/indexeddb";
   import { acquireTokenForScopes, SCOPES, fetchTokenInfo, signOut, acquireTokenInteractive } from "$lib/gmail/auth";
-  import { aiSummarizeEmail, aiDraftReply, findUnsubscribeTarget, aiExtractUnsubscribeUrl } from "$lib/ai/providers";
+  import { aiSummarizeEmail, aiDraftReply, findUnsubscribeTarget, aiExtractUnsubscribeUrl, getFriendlyAIErrorMessage, AIProviderError } from "$lib/ai/providers";
   import { filters, deleteSavedFilter, type ThreadFilter } from "$lib/stores/filters";
   import { applyFilterToThreads } from "$lib/stores/filters";
   import FilterBar from "$lib/utils/FilterBar.svelte";
@@ -32,6 +32,10 @@
   let loadingMap: Record<string, boolean> = $state({});
   let errorMap: Record<string, string> = $state({});
   let autoTried: Record<string, boolean> = $state({});
+  // Local AI action busy flags (prevents duplicate requests and enables immediate feedback)
+  let summarizing: boolean = $state(false);
+  let replying: boolean = $state(false);
+  let extractingUnsub: boolean = $state(false);
   // Derive adjacent thread navigation using Inbox context + global search/filter/sort
   const inboxThreads = $derived(($threads || []).filter((t) => (t.labelIds || []).includes('INBOX')));
   const visibleCandidates = $derived((() => {
@@ -286,28 +290,119 @@
     }
   });
   async function summarize(mid: string) {
+    if (summarizing) return;
     const m = $messages[mid];
     if (!m) return;
-    const text = await aiSummarizeEmail(m.headers?.Subject || '', m.bodyText, m.bodyHtml);
-    navigator.clipboard.writeText(text);
-    alert('Summary copied to clipboard.');
+    summarizing = true;
+    try { showSnackbar({ message: 'Summarizing…' }); } catch {}
+    try {
+      const text = await aiSummarizeEmail(m.headers?.Subject || '', m.bodyText, m.bodyHtml);
+      await navigator.clipboard.writeText(text);
+      showSnackbar({ message: 'Summary copied to clipboard', closable: true });
+    } catch (e) {
+      const { message, retryAfterSeconds } = getFriendlyAIErrorMessage(e, 'Summarize');
+      showSnackbar({
+        message,
+        actions: {
+          Retry: () => { void summarize(mid); },
+          Copy: async () => {
+            const diag = buildAiDiag('ai_summarize_error', e, { mid });
+            const ok = await copyGmailDiagnosticsToClipboard(diag);
+            showSnackbar({ message: ok ? 'Diagnostics copied' : 'Failed to copy diagnostics', closable: true });
+          }
+        },
+        closable: true,
+        timeout: retryAfterSeconds && retryAfterSeconds > 0 ? Math.min(8000, (retryAfterSeconds + 2) * 1000) : 6000
+      });
+    } finally {
+      summarizing = false;
+    }
   }
   async function replyDraft(mid: string) {
+    if (replying) return;
     const m = $messages[mid]; if (!m) return;
-    const draft = await aiDraftReply(m.headers?.Subject || '', m.bodyText, m.bodyHtml);
-    navigator.clipboard.writeText(draft);
-    alert('Reply draft copied to clipboard.');
+    replying = true;
+    try { showSnackbar({ message: 'Generating reply…' }); } catch {}
+    try {
+      const draft = await aiDraftReply(m.headers?.Subject || '', m.bodyText, m.bodyHtml);
+      await navigator.clipboard.writeText(draft);
+      showSnackbar({ message: 'Reply draft copied to clipboard', closable: true });
+    } catch (e) {
+      const { message, retryAfterSeconds } = getFriendlyAIErrorMessage(e, 'Reply');
+      showSnackbar({
+        message,
+        actions: {
+          Retry: () => { void replyDraft(mid); },
+          Copy: async () => {
+            const diag = buildAiDiag('ai_reply_error', e, { mid });
+            const ok = await copyGmailDiagnosticsToClipboard(diag);
+            showSnackbar({ message: ok ? 'Diagnostics copied' : 'Failed to copy diagnostics', closable: true });
+          }
+        },
+        closable: true,
+        timeout: retryAfterSeconds && retryAfterSeconds > 0 ? Math.min(8000, (retryAfterSeconds + 2) * 1000) : 6000
+      });
+    } finally {
+      replying = false;
+    }
   }
   async function unsubscribe(mid: string) {
+    if (extractingUnsub) return;
     const m = $messages[mid]; if (!m) return;
-    let target = findUnsubscribeTarget(m.headers, m.bodyHtml);
-    if (!target) target = await aiExtractUnsubscribeUrl(m.headers?.Subject || '', m.bodyText, m.bodyHtml);
-    if (target) {
-      const ok = confirm(`Open unsubscribe target?\n${target}`);
-      if (ok) window.open(target, '_blank');
-    } else {
-      alert('No unsubscribe target found.');
+    extractingUnsub = true;
+    try { showSnackbar({ message: 'Looking for unsubscribe link…' }); } catch {}
+    try {
+      let target = findUnsubscribeTarget(m.headers, m.bodyHtml);
+      if (!target) target = await aiExtractUnsubscribeUrl(m.headers?.Subject || '', m.bodyText, m.bodyHtml);
+      if (target) {
+        const ok = confirm(`Open unsubscribe target?\n${target}`);
+        if (ok) window.open(target, '_blank');
+      } else {
+        showSnackbar({ message: 'No unsubscribe target found', closable: true });
+      }
+    } catch (e) {
+      const { message } = getFriendlyAIErrorMessage(e, 'Unsubscribe');
+      showSnackbar({
+        message,
+        actions: {
+          Retry: () => { void unsubscribe(mid); },
+          Copy: async () => {
+            const diag = buildAiDiag('ai_unsubscribe_error', e, { mid });
+            const ok = await copyGmailDiagnosticsToClipboard(diag);
+            showSnackbar({ message: ok ? 'Diagnostics copied' : 'Failed to copy diagnostics', closable: true });
+          }
+        },
+        closable: true,
+        timeout: 6000
+      });
+    } finally {
+      extractingUnsub = false;
     }
+  }
+
+  function buildAiDiag(reason: string, e: unknown, extra?: Record<string, unknown>) {
+    let status: number | undefined;
+    let headers: Record<string, string | null> | undefined;
+    let requestId: string | null | undefined;
+    let retryAfterSeconds: number | null | undefined;
+    let body: unknown;
+    if (e instanceof AIProviderError) {
+      status = e.status;
+      headers = e.headers;
+      requestId = e.requestId;
+      retryAfterSeconds = e.retryAfterSeconds;
+      body = e.body;
+    }
+    return {
+      reason,
+      error: e instanceof Error ? { name: e.name, message: e.message, stack: e.stack } : String(e),
+      status,
+      requestId,
+      retryAfterSeconds,
+      headers,
+      body,
+      ...extra
+    };
   }
   async function createTask(mid: string) {
     const m = $messages[mid]; if (!m) return;
@@ -389,9 +484,9 @@ function scrollToBottom() {
       <Button variant="text" onclick={() => copyText(currentThread.lastMsgMeta.subject || '')}>Copy Subject</Button>
       {#if currentThread.messageIds?.length}
         {@const mid = currentThread.messageIds[currentThread.messageIds.length-1]}
-        <Button variant="text" onclick={() => unsubscribe(mid)}>Unsubscribe</Button>
-        <Button variant="text" onclick={() => summarize(mid)}>Summarize</Button>
-        <Button variant="text" onclick={() => replyDraft(mid)}>Reply (AI) → Clipboard</Button>
+        <Button variant="text" onclick={() => unsubscribe(mid)} disabled={extractingUnsub}>{extractingUnsub ? 'Finding…' : 'Unsubscribe'}</Button>
+        <Button variant="text" onclick={() => summarize(mid)} disabled={summarizing}>{summarizing ? 'Summarizing…' : 'Summarize'}</Button>
+        <Button variant="text" onclick={() => replyDraft(mid)} disabled={replying}>{replying ? 'Generating…' : 'Reply (AI) → Clipboard'}</Button>
         <Button variant="text" onclick={() => createTask(mid)}>Create Task</Button>
       {/if}
       <Button variant="text" iconType="left" disabled={!prevThreadId} onclick={gotoPrev} aria-label="Previous conversation" style="margin-left:auto">
@@ -504,9 +599,9 @@ function scrollToBottom() {
       <Button variant="text" onclick={() => copyText(currentThread.lastMsgMeta.subject || '')}>Copy Subject</Button>
       {#if currentThread.messageIds?.length}
         {@const mid = currentThread.messageIds[currentThread.messageIds.length-1]}
-        <Button variant="text" onclick={() => unsubscribe(mid)}>Unsubscribe</Button>
-        <Button variant="text" onclick={() => summarize(mid)}>Summarize</Button>
-        <Button variant="text" onclick={() => replyDraft(mid)}>Reply (AI) → Clipboard</Button>
+        <Button variant="text" onclick={() => unsubscribe(mid)} disabled={extractingUnsub}>{extractingUnsub ? 'Finding…' : 'Unsubscribe'}</Button>
+        <Button variant="text" onclick={() => summarize(mid)} disabled={summarizing}>{summarizing ? 'Summarizing…' : 'Summarize'}</Button>
+        <Button variant="text" onclick={() => replyDraft(mid)} disabled={replying}>{replying ? 'Generating…' : 'Reply (AI) → Clipboard'}</Button>
         <Button variant="text" onclick={() => createTask(mid)}>Create Task</Button>
       {/if}
     </div>

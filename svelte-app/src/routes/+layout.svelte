@@ -34,6 +34,9 @@
   import { startUpdateChecker } from "$lib/update/checker";
   import KeyboardShortcutsDialog from "$lib/misc/KeyboardShortcutsDialog.svelte";
   import { settings as appSettings } from "$lib/stores/settings";
+  import { getFriendlyAIErrorMessage } from "$lib/ai/providers";
+  
+  let onKeyDownRef: ((e: KeyboardEvent) => void) | null = null;
   
   if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
 
@@ -179,6 +182,7 @@
       }
     };
     window.addEventListener('keydown', onKeyDown);
+    onKeyDownRef = onKeyDown;
 
     // Ensure first-run shows connect wizard at root
     (async () => {
@@ -213,12 +217,28 @@
       });
       window.addEventListener('unhandledrejection', (e: PromiseRejectionEvent) => {
         const reason: unknown = (e && 'reason' in e) ? (e as any).reason : undefined;
-        const message = reason instanceof Error ? reason.message : String(reason || 'Unhandled promise rejection');
+        const friendly = getFriendlyAIErrorMessage(reason);
+        const message = friendly.message || (reason instanceof Error ? reason.message : String(reason || 'Unhandled promise rejection'));
         showSnackbar({
           message,
           actions: {
             Copy: async () => {
-              const ok = await copyGmailDiagnosticsToClipboard({ reason: 'unhandled_rejection', message, stack: reason instanceof Error ? reason.stack : undefined });
+              const base = { reason: 'unhandled_rejection', message, stack: reason instanceof Error ? reason.stack : undefined } as Record<string, unknown>;
+              try {
+                if (reason && typeof reason === 'object') {
+                  const r: any = reason;
+                  if (r.name === 'AIProviderError') {
+                    base.ai = {
+                      status: r.status,
+                      requestId: r.requestId,
+                      retryAfterSeconds: r.retryAfterSeconds,
+                      headers: r.headers,
+                      body: r.body
+                    };
+                  }
+                }
+              } catch (_) {}
+              const ok = await copyGmailDiagnosticsToClipboard(base);
               showSnackbar({ message: ok ? 'Diagnostics copied' : 'Failed to copy diagnostics', closable: true });
             }
           },
@@ -232,7 +252,7 @@
   // Cleanup global listeners when layout unmounts
   $effect(() => {
     return () => {
-      try { window.removeEventListener('keydown', (onKeyDown as any)); } catch {}
+      try { if (onKeyDownRef) window.removeEventListener('keydown', onKeyDownRef as any); } catch {}
     };
   });
 

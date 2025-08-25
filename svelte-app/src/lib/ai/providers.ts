@@ -4,6 +4,54 @@ import { redactPII, htmlToText } from './redact';
 
 export type AIResult = { text: string };
 
+export class AIProviderError extends Error {
+  provider: 'openai' | 'anthropic' | 'gemini' | 'unknown';
+  status: number;
+  headers?: Record<string, string | null>;
+  body?: unknown;
+  requestId?: string | null;
+  retryAfterSeconds?: number | null;
+  constructor(opts: {
+    provider: 'openai' | 'anthropic' | 'gemini' | 'unknown';
+    message: string;
+    status: number;
+    headers?: Record<string, string | null>;
+    body?: unknown;
+  }) {
+    super(opts.message);
+    this.name = 'AIProviderError';
+    this.provider = opts.provider;
+    this.status = opts.status;
+    this.headers = opts.headers;
+    this.body = opts.body;
+    this.requestId = (opts.headers && (opts.headers['x-request-id'] || null)) || null;
+    const ra = opts.headers && opts.headers['retry-after'];
+    const n = typeof ra === 'string' ? Number(ra) : null;
+    this.retryAfterSeconds = Number.isFinite(n as number) ? (n as number) : null;
+  }
+}
+
+export function getFriendlyAIErrorMessage(e: unknown, actionLabel?: string): { message: string; retryAfterSeconds?: number | null } {
+  const action = actionLabel ? `${actionLabel}: ` : '';
+  try {
+    if (e instanceof AIProviderError) {
+      if (e.status === 429) {
+        const wait = e.retryAfterSeconds;
+        const waitMsg = Number.isFinite(wait as number) && (wait as number)! > 0 ? ` Wait ~${wait}s and try again.` : '';
+        return { message: `${action}AI is rate limited. Please try again shortly.${waitMsg}`, retryAfterSeconds: wait };
+      }
+      if (e.status >= 500 && e.status <= 599) {
+        return { message: `${action}The AI service is temporarily unavailable. Please try again.` };
+      }
+      return { message: `${action}${e.message || 'AI request failed.'}` };
+    }
+    if (e instanceof Error) return { message: `${action}${e.message}` };
+    return { message: `${action}${String(e)}` };
+  } catch (_) {
+    return { message: `${action}Something went wrong with the AI request.` };
+  }
+}
+
 async function safeParseJson(res: Response): Promise<any> {
   try {
     const text = await res.text();
@@ -42,18 +90,9 @@ async function callOpenAI(prompt: string): Promise<AIResult> {
   if (!res.ok) {
     const headers = getOpenAIRateLimitHeaders(res);
     let body: any = undefined;
-    try {
-      body = await res.clone().json();
-    } catch (_) {
-      try {
-        body = await res.clone().text();
-      } catch (_) {
-        body = undefined;
-      }
-    }
-    const info = { status: res.status, statusText: res.statusText, headers, body };
-    // Surface details for troubleshooting which quota was tripped
-    throw new Error(`OpenAI error ${res.status}: ${JSON.stringify(info)}`);
+    try { body = await res.clone().json(); } catch (_) { try { body = await res.clone().text(); } catch (_) { body = undefined; } }
+    const baseMsg = res.status === 429 ? 'OpenAI rate limit exceeded' : `OpenAI error ${res.status}`;
+    throw new AIProviderError({ provider: 'openai', message: baseMsg, status: res.status, headers, body });
   }
   const data = await safeParseJson(res);
   const text = data?.choices?.[0]?.message?.content?.trim?.() || '';
@@ -70,7 +109,12 @@ async function callAnthropic(prompt: string): Promise<AIResult> {
     headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
     body: JSON.stringify({ model, max_tokens: 400, messages: [{ role: 'user', content: prompt }] })
   });
-  if (!res.ok) throw new Error(`Anthropic error ${res.status}`);
+  if (!res.ok) {
+    let body: any = undefined;
+    try { body = await res.clone().json(); } catch (_) { try { body = await res.clone().text(); } catch (_) { body = undefined; } }
+    const message = res.status === 429 ? 'Anthropic rate limit exceeded' : `Anthropic error ${res.status}`;
+    throw new AIProviderError({ provider: 'anthropic', message, status: res.status, headers: {}, body });
+  }
   const data = await safeParseJson(res);
   const text = data?.content?.[0]?.text?.trim?.() || '';
   return { text };
@@ -86,7 +130,12 @@ async function callGemini(prompt: string): Promise<AIResult> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
   });
-  if (!res.ok) throw new Error(`Gemini error ${res.status}`);
+  if (!res.ok) {
+    let body: any = undefined;
+    try { body = await res.clone().json(); } catch (_) { try { body = await res.clone().text(); } catch (_) { body = undefined; } }
+    const message = res.status === 429 ? 'Gemini rate limit exceeded' : `Gemini error ${res.status}`;
+    throw new AIProviderError({ provider: 'gemini', message, status: res.status, headers: {}, body });
+  }
   const data = await safeParseJson(res);
   const text = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim?.() || '';
   return { text };
@@ -96,7 +145,7 @@ export async function aiSummarizeEmail(subject: string, bodyText?: string, bodyH
   const s = get(settings);
   const text = bodyText || htmlToText(bodyHtml) || '';
   const redacted = redactPII(`${subject}\n\n${text}`);
-  const prompt = `You are a concise assistant. Provide a short bullet list of the most important points in this email, most important first. Keep it under 6 bullets.\n\nEmail:\n${redacted}`;
+  const prompt = `You are a concise assistant. Provide a short bullet list of the most important points in this email, most important first. Keep it under 6 bullets. Return ONLY the list as plain text with '-' bullets, no preamble or closing sentences, no code blocks, and no additional commentary.\n\nEmail:\n${redacted}`;
   const provider = s.aiProvider || 'openai';
   const out = provider === 'anthropic' ? await callAnthropic(prompt) : provider === 'gemini' ? await callGemini(prompt) : await callOpenAI(prompt);
   return out.text;
@@ -106,7 +155,7 @@ export async function aiDraftReply(subject: string, bodyText?: string, bodyHtml?
   const s = get(settings);
   const text = bodyText || htmlToText(bodyHtml) || '';
   const redacted = redactPII(`${subject}\n\n${text}`);
-  const prompt = `Write a brief, polite email reply. Keep it under 120 words.\nSubject: ${subject}\nEmail:\n${redacted}`;
+  const prompt = `Write a brief, polite email reply in plain text. Include a short greeting and a concise closing. Keep it under 120 words. Do not include the original message, disclaimers, markdown, or code blocks. Return ONLY the reply body.\nSubject: ${subject}\nEmail:\n${redacted}`;
   const provider = s.aiProvider || 'openai';
   const out = provider === 'anthropic' ? await callAnthropic(prompt) : provider === 'gemini' ? await callGemini(prompt) : await callOpenAI(prompt);
   return out.text;
