@@ -50,7 +50,7 @@ function hash(input: string): string {
 async function callGeminiGenerate(text: string, apiKey: string, model: string, useCache: boolean, mode: 'summary' | 'subject' = 'summary'): Promise<string> {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
   const style = mode === 'summary'
-    ? `You are a concise assistant. Provide a short bullet list of the most important points in this email, most important first. Keep it under 6 bullets. Return ONLY the list as plain text with '-' bullets, no preamble or closing sentences, no code blocks, and no additional commentary.`
+    ? `You are a concise assistant. Provide a short bullet list of the most important points in this email, most important first. If attachments are included in the text, include 1-2 bullets for each attachment summarizing its key content. If an attachment's content is not provided, mention the attachment name/type without inventing details. Keep it under 8 bullets total. Return ONLY the list as plain text with '-' bullets, no preamble or closing sentences, no code blocks, and no additional commentary.`
     : `You improve email subjects using the actual email content. Write a single-line subject that better summarizes the most important point(s). Use 15 words or fewer. Avoid prefixes like "Re:" or "Fwd:", avoid quotes, emojis, sender names, or dates. Return ONLY the subject text as plain text on one line.`;
   const cacheKey = mode === 'summary' ? 'jmail:summary-style' : 'jmail:subject-style';
   const cachedName = useCache ? await ensureCachedContent(cacheKey, style, apiKey, model, 14 * 24 * 60 * 60) : null;

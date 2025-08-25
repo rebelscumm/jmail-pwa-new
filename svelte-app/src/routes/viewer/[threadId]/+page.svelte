@@ -14,7 +14,7 @@
   import { getThreadSummary } from "$lib/gmail/api";
   import { getDB } from "$lib/db/indexeddb";
   import { acquireTokenForScopes, SCOPES, fetchTokenInfo, signOut, acquireTokenInteractive } from "$lib/gmail/auth";
-  import { aiSummarizeEmail, aiSummarizeSubject, aiDraftReply, findUnsubscribeTarget, aiExtractUnsubscribeUrl, getFriendlyAIErrorMessage, AIProviderError } from "$lib/ai/providers";
+  import { aiSummarizeEmail, aiSummarizeSubject, aiDraftReply, findUnsubscribeTarget, aiExtractUnsubscribeUrl, getFriendlyAIErrorMessage, AIProviderError, aiSummarizeAttachment } from "$lib/ai/providers";
   import { filters, deleteSavedFilter, type ThreadFilter } from "$lib/stores/filters";
   import { applyFilterToThreads } from "$lib/stores/filters";
   import FilterBar from "$lib/utils/FilterBar.svelte";
@@ -25,9 +25,40 @@
   import iconForward from "@ktibow/iconset-material-symbols/chevron-right";
   import iconArrowDown from "@ktibow/iconset-material-symbols/arrow-downward";
   import iconArrowUp from "@ktibow/iconset-material-symbols/arrow-upward";
+  import iconSparkles from "@ktibow/iconset-material-symbols/auto-awesome";
+  import Dialog from "$lib/containers/Dialog.svelte";
   import { searchQuery } from "$lib/stores/search";
-  const threadId = $page.params.threadId;
-  const currentThread = $derived($threads.find((t) => t.threadId === threadId));
+  // Derive threadId defensively in case params are briefly undefined during navigation
+  const threadId = $derived((() => {
+    try { const id = $page?.params?.threadId; if (id) return id; } catch {}
+    try {
+      if (typeof location !== 'undefined') {
+        const m = location.pathname.match(/\/viewer\/([^\/?#]+)/);
+        return m ? decodeURIComponent(m[1]) : '';
+      }
+    } catch {}
+    return '';
+  })());
+  // Guard against any undefined/non-thread entries that may transiently appear in the store
+  const allThreads = $derived(($threads || []).filter((t) => !!t && typeof (t as any).threadId === 'string'));
+  const currentThread = $derived(allThreads.find((t) => t.threadId === threadId));
+  // Decode basic HTML entities (e.g., &#39; → ') for plain-text/snippet render paths
+  function decodeEntities(input?: string): string {
+    try {
+      if (!input) return '';
+      const map: Record<string, string> = {
+        '&amp;': '&',
+        '&lt;': '<',
+        '&gt;': '>',
+        '&quot;': '"',
+        '&#34;': '"',
+        '&#39;': "'",
+        '&apos;': "'",
+        '&nbsp;': ' '
+      };
+      return input.replace(/&(amp|lt|gt|quot|apos|nbsp);|&#(34|39);/g, (m) => map[m] ?? m);
+    } catch { return input || ''; }
+  }
   function copyText(text: string) { navigator.clipboard.writeText(text); }
   let loadingMap: Record<string, boolean> = $state({});
   let errorMap: Record<string, string> = $state({});
@@ -38,8 +69,13 @@
   let extractingUnsub: boolean = $state(false);
   let aiSubjectSummary: string | null = $state(null);
   let aiBodySummary: string | null = $state(null);
+  // Attachment summary dialog state
+  let attDialogOpen: boolean = $state(false);
+  let attDialogTitle: string | null = $state(null);
+  let attDialogText: string | null = $state(null);
+  let attBusy: Record<string, boolean> = $state({});
   // Derive adjacent thread navigation using Inbox context + global search/filter/sort
-  const inboxThreads = $derived(($threads || []).filter((t) => (t.labelIds || []).includes('INBOX')));
+  const inboxThreads = $derived((allThreads || []).filter((t) => (t.labelIds || []).includes('INBOX')));
   const visibleCandidates = $derived((() => {
     const q = ($searchQuery || '').trim().toLowerCase();
     if (!q) return inboxThreads;
@@ -109,11 +145,22 @@
     }
     return arr;
   })());
-  const currentIndex = $derived(sortedCandidates.findIndex((t) => t.threadId === threadId));
+  const currentIndex = $derived(sortedCandidates.findIndex((t) => (t as any)?.threadId === threadId));
   const prevThreadId = $derived(currentIndex > 0 ? (sortedCandidates[currentIndex - 1]?.threadId || null) : null);
   const nextThreadId = $derived(currentIndex >= 0 && currentIndex < sortedCandidates.length - 1 ? (sortedCandidates[currentIndex + 1]?.threadId || null) : null);
-  function gotoPrev() { if (prevThreadId) goto(`/viewer/${prevThreadId}`); }
-  function gotoNext() { if (nextThreadId) goto(`/viewer/${nextThreadId}`); }
+  async function safeGoto(href: string) {
+    try { await goto(href); }
+    catch (_) { try { location.href = href; } catch {} }
+  }
+  function gotoPrev() { if (prevThreadId) safeGoto(`/viewer/${prevThreadId}`); }
+  function gotoNext() { if (nextThreadId) safeGoto(`/viewer/${nextThreadId}`); }
+  async function navigateToInbox() {
+    try {
+      await goto('/inbox');
+    } catch (_) {
+      try { location.href = '/inbox'; } catch {}
+    }
+  }
   let threadLoading: boolean = $state(false);
   let threadError: string | null = $state(null);
   // Reset AI summaries when navigating between threads
@@ -313,9 +360,9 @@
       })();
     }
   });
-  async function summarize(mid: string) {
+  async function summarize(mid: string, force = false) {
     if (summarizing) return;
-    const m = $messages[mid];
+    let m = $messages[mid];
     if (!m) return;
     // Use cached AI results if available to avoid redundant calls
     try {
@@ -324,22 +371,43 @@
         const hasSubject = !!(ct as any).aiSubject && ((ct as any).aiSubjectStatus === 'ready');
         const hasSummary = !!ct.summary && ct.summaryStatus === 'ready';
         if (hasSubject || hasSummary) {
-          if (hasSubject) aiSubjectSummary = (ct as any).aiSubject;
-          if (hasSummary) aiBodySummary = ct.summary || null;
-          showSnackbar({ message: 'AI summary ready (cached)', closable: true });
-          return;
+          if (!force) {
+            if (hasSubject) aiSubjectSummary = (ct as any).aiSubject;
+            if (hasSummary) aiBodySummary = ct.summary || null;
+            showSnackbar({
+              message: 'AI summary ready (cached)',
+              actions: {
+                Regenerate: () => { void summarize(mid, true); }
+              },
+              closable: true
+            });
+            return;
+          }
         }
       }
     } catch (_) {}
+    if (force) { aiSubjectSummary = null; aiBodySummary = null; }
     summarizing = true;
     try { showSnackbar({ message: 'Summarizing…' }); } catch {}
     try {
       const subject = m.headers?.Subject || currentThread?.lastMsgMeta?.subject || '';
+      // Ensure we have full message (body + attachments) before summarizing
+      try {
+        const hasBody = !!(m.bodyText || m.bodyHtml);
+        const hasAtt = Array.isArray(m.attachments);
+        let hasScopes = false;
+        try { const info = await fetchTokenInfo(); hasScopes = !!info?.scope && (info.scope.includes('gmail.readonly') || info.scope.includes('gmail.modify')); } catch (_) {}
+        if ((!hasBody || !hasAtt) && hasScopes) {
+          const full = await getMessageFull(mid);
+          messages.set({ ...$messages, [mid]: full });
+          m = full;
+        }
+      } catch (_) {}
       const bodyText = m.bodyText || m.snippet;
       const bodyHtml = m.bodyHtml;
       const [subjectText, bodyTextOut] = await Promise.all([
         aiSummarizeSubject(subject, bodyText, bodyHtml),
-        aiSummarizeEmail(subject, bodyText, bodyHtml)
+        aiSummarizeEmail(subject, bodyText, bodyHtml, m.attachments)
       ]);
       aiSubjectSummary = subjectText;
       aiBodySummary = bodyTextOut;
@@ -352,7 +420,8 @@
           function simpleHash(input: string): string {
             try { let hash = 2166136261; for (let i = 0; i < input.length; i++) { hash ^= input.charCodeAt(i); hash = (hash * 16777619) >>> 0; } return hash.toString(16).padStart(8, '0'); } catch { return `${input.length}`; }
           }
-          const combined = `${subject}\n\n${bodyText || ''}${!bodyText && bodyHtml ? bodyHtml : ''}`.trim();
+          const attText = (m.attachments || []).map((a) => `${a.filename || a.mimeType || 'attachment'}\n${(a.textContent || '').slice(0, 500)}`).join('\n\n');
+          const combined = `${subject}\n\n${bodyText || ''}${!bodyText && bodyHtml ? bodyHtml : ''}${attText ? `\n\n${attText}` : ''}`.trim();
           const bodyHash = simpleHash(combined || subject || ct.threadId);
           const nowMs = Date.now();
           const nowVersion = Number($settings.aiSummaryVersion || 1);
@@ -394,6 +463,39 @@
       });
     } finally {
       summarizing = false;
+    }
+  }
+
+  async function summarizeAttachment(mid: string, attIndex: number) {
+    const key = `${mid}:${attIndex}`;
+    if (attBusy[key]) return;
+    let m = $messages[mid];
+    if (!m) return;
+    try {
+      // Ensure attachments are available
+      const hasAtt = Array.isArray(m.attachments);
+      let hasScopes = false;
+      try { const info = await fetchTokenInfo(); hasScopes = !!info?.scope && (info.scope.includes('gmail.readonly') || info.scope.includes('gmail.modify')); } catch (_) {}
+      if (!hasAtt && hasScopes) {
+        const full = await getMessageFull(mid);
+        messages.set({ ...$messages, [mid]: full });
+        m = full;
+      }
+    } catch (_) {}
+    const att = (m.attachments || [])[attIndex];
+    if (!att) return;
+    attDialogTitle = att.filename || att.mimeType || 'Attachment';
+    attDialogText = null;
+    attDialogOpen = true;
+    attBusy[key] = true;
+    try {
+      const text = await aiSummarizeAttachment(m.headers?.Subject, att);
+      attDialogText = text || '(No summary)';
+    } catch (e) {
+      const { message } = getFriendlyAIErrorMessage(e, 'Attachment summary');
+      attDialogText = message;
+    } finally {
+      attBusy[key] = false;
     }
   }
   async function replyDraft(mid: string) {
@@ -565,20 +667,20 @@ function scrollToBottom() {
 
     <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
       <Button variant="text" onclick={() => relogin(currentThread.messageIds?.[0])}>Re-login</Button>
-      <Button variant="text" onclick={() => archiveThread(currentThread.threadId).then(()=> { showSnackbar({ message: 'Archived', actions: { Undo: () => undoLast(1) } }); goto('/inbox'); })}>Archive</Button>
-      <Button variant="text" color="error" onclick={() => trashThread(currentThread.threadId).then(()=> { showSnackbar({ message: 'Deleted', actions: { Undo: () => undoLast(1) } }); goto('/inbox'); })}>Delete</Button>
+      <Button variant="text" onclick={() => archiveThread(currentThread.threadId).then(async ()=> { showSnackbar({ message: 'Archived', actions: { Undo: () => undoLast(1) } }); await navigateToInbox(); })}>Archive</Button>
+      <Button variant="text" color="error" onclick={() => trashThread(currentThread.threadId).then(async ()=> { showSnackbar({ message: 'Deleted', actions: { Undo: () => undoLast(1) } }); await navigateToInbox(); })}>Delete</Button>
       <Button variant="text" onclick={() => spamThread(currentThread.threadId).then(()=> showSnackbar({ message: 'Marked as spam', actions: { Undo: () => undoLast(1) } }))}>Spam</Button>
       {#if isSnoozedThread(currentThread)}
         <Button variant="text" onclick={() => manualUnsnoozeThread(currentThread.threadId).then(()=> showSnackbar({ message: 'Unsnoozed', actions: { Undo: () => undoLast(1) } }))}>Unsnooze</Button>
       {/if}
       {#if Object.keys($settings.labelMapping || {}).some((k)=>k==='10m' && $settings.labelMapping[k])}
-        <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '10m').then(()=> showSnackbar({ message: 'Snoozed 10m', actions: { Undo: () => undoLast(1) } }))}>10m</Button>
+        <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '10m').then(()=> { showSnackbar({ message: 'Snoozed 10m', actions: { Undo: () => undoLast(1) } }); goto('/inbox'); })}>10m</Button>
       {/if}
       {#if Object.keys($settings.labelMapping || {}).some((k)=>k==='3h' && $settings.labelMapping[k])}
-        <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '3h').then(()=> showSnackbar({ message: 'Snoozed 3h', actions: { Undo: () => undoLast(1) } }))}>3h</Button>
+        <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '3h').then(()=> { showSnackbar({ message: 'Snoozed 3h', actions: { Undo: () => undoLast(1) } }); goto('/inbox'); })}>3h</Button>
       {/if}
       {#if Object.keys($settings.labelMapping || {}).some((k)=>k==='1d' && $settings.labelMapping[k])}
-        <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '1d').then(()=> showSnackbar({ message: 'Snoozed 1d', actions: { Undo: () => undoLast(1) } }))}>1d</Button>
+        <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '1d').then(()=> { showSnackbar({ message: 'Snoozed 1d', actions: { Undo: () => undoLast(1) } }); goto('/inbox'); })}>1d</Button>
       {/if}
       <Button variant="text" onclick={() => copyText(currentThread.lastMsgMeta.subject || '')}>Copy Subject</Button>
       {#if currentThread.messageIds?.length}
@@ -630,14 +732,50 @@ function scrollToBottom() {
                 <p class="m3-font-body-small" style="margin:0.25rem 0; color:rgb(var(--m3-scheme-on-surface-variant))">{formatDateTime(m.internalDate)}</p>
               {/if}
               <div class="html-body" style="white-space:normal; overflow-wrap:anywhere;">{@html m.bodyHtml}</div>
+              {#if Array.isArray(m?.attachments) && m.attachments.length}
+                <div class="attachments">
+                  {#each m.attachments as a, i}
+                    <div class="attachment-item">
+                      <span class="attachment-name">{a.filename || a.mimeType || 'attachment'}</span>
+                      <Button variant="text" iconType="full" aria-label="AI summary" onclick={() => summarizeAttachment(mid, i)}>
+                        {#snippet children()}
+                          {#if attBusy[`${mid}:${i}`]}
+                            <LoadingIndicator size={18} />
+                          {:else}
+                            <Icon icon={iconSparkles} />
+                          {/if}
+                        {/snippet}
+                      </Button>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
             {:else if m?.bodyText}
               {#if m?.internalDate}
                 <p class="m3-font-body-small" style="margin:0.25rem 0; color:rgb(var(--m3-scheme-on-surface-variant))">{formatDateTime(m.internalDate)}</p>
               {/if}
-              <pre style="white-space:pre-wrap">{m.bodyText}</pre>
+              <pre style="white-space:pre-wrap">{decodeEntities(m.bodyText)}</pre>
+              {#if Array.isArray(m?.attachments) && m.attachments.length}
+                <div class="attachments">
+                  {#each m.attachments as a, i}
+                    <div class="attachment-item">
+                      <span class="attachment-name">{a.filename || a.mimeType || 'attachment'}</span>
+                      <Button variant="text" iconType="full" aria-label="AI summary" onclick={() => summarizeAttachment(mid, i)}>
+                        {#snippet children()}
+                          {#if attBusy[`${mid}:${i}`]}
+                            <LoadingIndicator size={18} />
+                          {:else}
+                            <Icon icon={iconSparkles} />
+                          {/if}
+                        {/snippet}
+                      </Button>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
             {:else}
               {#if m?.snippet}
-                <p class="m3-font-body-medium" style="margin:0; color:rgb(var(--m3-scheme-on-surface-variant))">{m.snippet}</p>
+                <p class="m3-font-body-medium" style="margin:0; color:rgb(var(--m3-scheme-on-surface-variant))">{decodeEntities(m.snippet)}</p>
               {/if}
               <div style="display:flex; justify-content:flex-end; align-items:center; gap:0.5rem; margin-top:0.5rem;">
                 <Button variant="text" onclick={() => copyDiagnostics('viewer_manual_copy', mid)}>Copy diagnostics</Button>
@@ -654,11 +792,29 @@ function scrollToBottom() {
               {#if m?.bodyHtml}
                 <div class="html-body" style="white-space:normal; overflow-wrap:anywhere;">{@html m.bodyHtml}</div>
               {:else}
-                <pre style="white-space:pre-wrap">{m.bodyText}</pre>
+                <pre style="white-space:pre-wrap">{decodeEntities(m.bodyText)}</pre>
+              {/if}
+              {#if Array.isArray(m?.attachments) && m.attachments.length}
+                <div class="attachments">
+                  {#each m.attachments as a, i}
+                    <div class="attachment-item">
+                      <span class="attachment-name">{a.filename || a.mimeType || 'attachment'}</span>
+                      <Button variant="text" iconType="full" aria-label="AI summary" onclick={() => summarizeAttachment(mid, i)}>
+                        {#snippet children()}
+                          {#if attBusy[`${mid}:${i}`]}
+                            <LoadingIndicator size={18} />
+                          {:else}
+                            <Icon icon={iconSparkles} />
+                          {/if}
+                        {/snippet}
+                      </Button>
+                    </div>
+                  {/each}
+                </div>
               {/if}
             {:else}
               {#if m?.snippet}
-                <p class="m3-font-body-medium" style="margin:0; color:rgb(var(--m3-scheme-on-surface-variant))">{m.snippet}</p>
+                <p class="m3-font-body-medium" style="margin:0; color:rgb(var(--m3-scheme-on-surface-variant))">{decodeEntities(m.snippet)}</p>
               {/if}
               <div style="display:flex; justify-content:flex-end; align-items:center; gap:0.5rem; margin-top:0.5rem;">
                 {#if loadingMap[mid]}
@@ -680,20 +836,20 @@ function scrollToBottom() {
 
     <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
       <Button variant="text" onclick={() => relogin(currentThread.messageIds?.[0])}>Re-login</Button>
-      <Button variant="text" onclick={() => archiveThread(currentThread.threadId).then(()=> { showSnackbar({ message: 'Archived', actions: { Undo: () => undoLast(1) } }); goto('/inbox'); })}>Archive</Button>
-      <Button variant="text" color="error" onclick={() => trashThread(currentThread.threadId).then(()=> { showSnackbar({ message: 'Deleted', actions: { Undo: () => undoLast(1) } }); goto('/inbox'); })}>Delete</Button>
+      <Button variant="text" onclick={() => archiveThread(currentThread.threadId).then(async ()=> { showSnackbar({ message: 'Archived', actions: { Undo: () => undoLast(1) } }); await navigateToInbox(); })}>Archive</Button>
+      <Button variant="text" color="error" onclick={() => trashThread(currentThread.threadId).then(async ()=> { showSnackbar({ message: 'Deleted', actions: { Undo: () => undoLast(1) } }); await navigateToInbox(); })}>Delete</Button>
       <Button variant="text" onclick={() => spamThread(currentThread.threadId).then(()=> showSnackbar({ message: 'Marked as spam', actions: { Undo: () => undoLast(1) } }))}>Spam</Button>
       {#if isSnoozedThread(currentThread)}
         <Button variant="text" onclick={() => manualUnsnoozeThread(currentThread.threadId).then(()=> showSnackbar({ message: 'Unsnoozed', actions: { Undo: () => undoLast(1) } }))}>Unsnooze</Button>
       {/if}
       {#if Object.keys($settings.labelMapping || {}).some((k)=>k==='10m' && $settings.labelMapping[k])}
-        <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '10m').then(()=> showSnackbar({ message: 'Snoozed 10m', actions: { Undo: () => undoLast(1) } }))}>10m</Button>
+        <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '10m').then(()=> { showSnackbar({ message: 'Snoozed 10m', actions: { Undo: () => undoLast(1) } }); goto('/inbox'); })}>10m</Button>
       {/if}
       {#if Object.keys($settings.labelMapping || {}).some((k)=>k==='3h' && $settings.labelMapping[k])}
-        <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '3h').then(()=> showSnackbar({ message: 'Snoozed 3h', actions: { Undo: () => undoLast(1) } }))}>3h</Button>
+        <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '3h').then(()=> { showSnackbar({ message: 'Snoozed 3h', actions: { Undo: () => undoLast(1) } }); goto('/inbox'); })}>3h</Button>
       {/if}
       {#if Object.keys($settings.labelMapping || {}).some((k)=>k==='1d' && $settings.labelMapping[k])}
-        <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '1d').then(()=> showSnackbar({ message: 'Snoozed 1d', actions: { Undo: () => undoLast(1) } }))}>1d</Button>
+        <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '1d').then(()=> { showSnackbar({ message: 'Snoozed 1d', actions: { Undo: () => undoLast(1) } }); goto('/inbox'); })}>1d</Button>
       {/if}
       <Button variant="text" onclick={() => copyText(currentThread.lastMsgMeta.subject || '')}>Copy Subject</Button>
       {#if currentThread.messageIds?.length}
@@ -721,7 +877,7 @@ function scrollToBottom() {
 
     <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.5rem;">
       <div>
-        <Button variant="text" iconType="left" onclick={() => goto('/inbox')} aria-label="Back to inbox">
+        <Button variant="text" iconType="left" onclick={navigateToInbox} aria-label="Back to inbox">
           {#snippet children()}
             <Icon icon={iconBack} />
             <span class="label">Back to inbox</span>
@@ -751,6 +907,22 @@ function scrollToBottom() {
       </div>
     </div>
   </div>
+
+  <Dialog headline={attDialogTitle || 'Attachment summary'} bind:open={attDialogOpen} closeOnClick={true}>
+    {#snippet children()}
+      {#if attDialogText == null}
+        <div style="display:flex; justify-content:center; padding:0.5rem;">
+          <LoadingIndicator size={20} />
+        </div>
+      {:else}
+        <pre class="m3-font-body-medium" style="white-space:pre-wrap; margin:0;">{attDialogText}</pre>
+      {/if}
+    {/snippet}
+    {#snippet buttons()}
+      <Button variant="text" onclick={() => { try { if (attDialogText) navigator.clipboard.writeText(attDialogText); showSnackbar({ message: 'Copied', closable: true }); } catch {} }}>Copy</Button>
+      <Button variant="text" onclick={() => { attDialogOpen = false; }}>Close</Button>
+    {/snippet}
+  </Dialog>
 {:else}
   {#if threadLoading}
     <div style="display:flex; justify-content:center; padding:1rem;"><LoadingIndicator size={24} /></div>
@@ -812,6 +984,23 @@ function scrollToBottom() {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
   }
+  /* Attachments list */
+  .attachments {
+    margin-top: 0.5rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+  .attachment-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: var(--m3-util-rounding-extra-small);
+    background: rgb(var(--m3-scheme-surface-container-lowest));
+    color: rgb(var(--m3-scheme-on-surface));
+  }
+  .attachment-name { max-width: 18rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* Avoid viewport expansion from wide children on mobile browsers */
   :global(.html-body > *) {
     max-width: 100% !important;

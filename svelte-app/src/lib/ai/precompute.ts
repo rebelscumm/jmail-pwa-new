@@ -58,8 +58,8 @@ function isUnfilteredInbox(thread: GmailThread): boolean {
   }
 }
 
-async function summarizeDirect(subject: string, bodyText?: string, bodyHtml?: string): Promise<string> {
-  return aiSummarizeEmail(subject || '', bodyText, bodyHtml);
+async function summarizeDirect(subject: string, bodyText?: string, bodyHtml?: string, attachments?: import('$lib/types').GmailAttachment[]): Promise<string> {
+  return aiSummarizeEmail(subject || '', bodyText, bodyHtml, attachments);
 }
 
 async function summarizeBatchRemote(items: Array<{ id: string; text: string }>, apiKey?: string, model?: string, useCache?: boolean): Promise<Record<string, string>> {
@@ -141,14 +141,16 @@ export async function tickPrecompute(limit = 10): Promise<void> {
       const lastId = getLastMessageId(t);
       let bodyText: string | undefined;
       let bodyHtml: string | undefined;
+      let attachments: import('$lib/types').GmailAttachment[] | undefined;
       if (lastId) {
         const full = await tryGetLastMessageFull(lastId);
-        if (full) { bodyText = full.bodyText; bodyHtml = full.bodyHtml; }
+        if (full) { bodyText = full.bodyText; bodyHtml = full.bodyHtml; attachments = full.attachments; }
       }
       const subject = t.lastMsgMeta?.subject || '';
-      const text = `${subject}\n\n${bodyText || ''}${!bodyText && bodyHtml ? bodyHtml : ''}`.trim();
+      const attText = (attachments || []).map((a) => `${a.filename || a.mimeType || 'attachment'}\n${(a.textContent || '').slice(0, 500)}`).join('\n\n');
+      const text = `${subject}\n\n${bodyText || ''}${!bodyText && bodyHtml ? bodyHtml : ''}${attText ? `\n\n${attText}` : ''}`.trim();
       const bodyHash = simpleHash(text || subject || t.threadId);
-      return { thread: t, subject, bodyText, bodyHtml, text, bodyHash };
+      return { thread: t, subject, bodyText, bodyHtml, attachments, text, bodyHash } as any;
     });
 
     // Update status to pending (only for fields that need work)
@@ -193,8 +195,8 @@ export async function tickPrecompute(limit = 10): Promise<void> {
         if (map && Object.keys(map).length) summaryResults = map;
       }
       if (!Object.keys(summaryResults).length) {
-        const out = await mapWithConcurrency(wantsSummary, 2, async (p) => {
-          const text = await summarizeDirect(p.subject, p.bodyText, p.bodyHtml);
+        const out = await mapWithConcurrency(wantsSummary, 2, async (p: any) => {
+          const text = await summarizeDirect(p.subject, p.bodyText, p.bodyHtml, p.attachments);
           return { id: p.thread.threadId, text };
         });
         summaryResults = Object.fromEntries(out.map((o) => [o.id, o.text]));

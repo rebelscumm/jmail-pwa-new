@@ -1,6 +1,6 @@
 import { ensureValidToken, fetchTokenInfo, acquireTokenForScopes, SCOPES, refreshTokenSilent, acquireTokenInteractive } from '$lib/gmail/auth';
 import { pushGmailDiag, getAndClearGmailDiagnostics } from '$lib/gmail/diag';
-import type { GmailLabel, GmailMessage } from '$lib/types';
+import type { GmailLabel, GmailMessage, GmailAttachment } from '$lib/types';
 
 const GMAIL_BASE = 'https://gmail.googleapis.com/gmail/v1/users/me';
 
@@ -243,19 +243,36 @@ export async function getMessageFull(id: string): Promise<GmailMessage> {
     if (!b64) return undefined;
     try { return decodeURIComponent(escape(atob(b64.replace(/-/g, '+').replace(/_/g, '/')))); } catch { return undefined; }
   }
+  function toStandardBase64(b64url?: string): string | undefined {
+    if (!b64url) return undefined;
+    try {
+      let b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
+      const pad = b64.length % 4;
+      if (pad) b64 = b64 + '='.repeat(4 - pad);
+      return b64;
+    } catch { return undefined; }
+  }
+  function approximateBase64Bytes(stdB64: string): number {
+    try {
+      const len = stdB64.length;
+      const pad = stdB64.endsWith('==') ? 2 : (stdB64.endsWith('=') ? 1 : 0);
+      return Math.max(0, Math.floor(len * 3 / 4) - pad);
+    } catch (_) { return 0; }
+  }
   async function getAttachmentData(messageId: string, attachmentId: string): Promise<string | undefined> {
     type AttachmentResponse = { data?: string; size?: number };
     try {
       const res = await api<AttachmentResponse>(`/messages/${messageId}/attachments/${attachmentId}`);
       return res?.data;
     } catch (e) {
-      pushDiag({ type: 'attachment_fetch_error', fn: 'getMessageFull', id: messageId, attachmentId, error: e instanceof Error ? e.message : String(e) });
+      pushGmailDiag({ type: 'attachment_fetch_error', fn: 'getMessageFull', id: messageId, attachmentId, error: e instanceof Error ? e.message : String(e) });
       return undefined;
     }
   }
-  async function extractText(payload: any): Promise<{ text?: string; html?: string; diag: any }> {
+  async function extractText(payload: any): Promise<{ text?: string; html?: string; attachments: GmailAttachment[]; diag: any }> {
     if (!payload) return { diag: { reason: 'no_payload' } } as any;
     const out: { text?: string; html?: string } = {};
+    const attachments: GmailAttachment[] = [];
     const diagnostics = { rootMimeType: payload?.mimeType, visited: 0, textParts: 0, htmlParts: 0, attachmentFetches: 0, structure: [] as Array<{ mimeType?: string; hasData?: boolean; hasAttachmentId?: boolean; parts?: number; size?: number }> };
     const stack = [payload];
     while (stack.length) {
@@ -263,6 +280,11 @@ export async function getMessageFull(id: string): Promise<GmailMessage> {
       if (!p) continue;
       diagnostics.visited++;
       diagnostics.structure.push({ mimeType: p.mimeType, hasData: !!p?.body?.data, hasAttachmentId: !!p?.body?.attachmentId, parts: Array.isArray(p.parts) ? p.parts.length : undefined, size: p?.body?.size });
+      const filename = (p.filename || '').trim();
+      const mimeType: string | undefined = p.mimeType;
+      const size = typeof p?.body?.size === 'number' ? p.body.size : undefined;
+      const attachmentId: string | undefined = p?.body?.attachmentId;
+      const isAttachment = !!filename;
       // Inline data
       if (p.mimeType === 'text/plain') {
         if (p.body?.data) {
@@ -288,9 +310,53 @@ export async function getMessageFull(id: string): Promise<GmailMessage> {
           }
         }
       }
+      // Collect attachment metadata and best-effort text content for text-like attachments
+      if (isAttachment) {
+        let textContent: string | undefined = undefined;
+        let dataBase64: string | undefined = undefined;
+        const isTextLike = !!mimeType && (/^text\//i.test(mimeType) || /(json|xml|csv|html)/i.test(mimeType));
+        const isDocLike = !!mimeType && /(application\/pdf|application\/msword|application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document)/i.test(mimeType);
+        const MAX_INLINE_BYTES = 10 * 1024 * 1024; // 10 MB cap for inline AI processing
+        if (isTextLike) {
+          try {
+            if (p.body?.data) {
+              textContent = decode(p.body.data) || undefined;
+            } else if (attachmentId) {
+              const adata = await getAttachmentData(id, attachmentId);
+              if (adata) {
+                textContent = decode(adata) || undefined;
+                diagnostics.attachmentFetches++;
+              }
+            }
+          } catch (_) {}
+        }
+        // For select document types (pdf/doc/docx), capture a limited base64 for AI inline ingestion
+        try {
+          const knownTooLarge = typeof size === 'number' ? size > MAX_INLINE_BYTES : false;
+          if (isDocLike && !knownTooLarge) {
+            let raw: string | undefined = undefined;
+            if (p.body?.data) {
+              raw = p.body.data;
+            } else if (attachmentId) {
+              raw = await getAttachmentData(id, attachmentId);
+              if (raw) diagnostics.attachmentFetches++;
+            }
+            if (raw) {
+              const std = toStandardBase64(raw);
+              if (std) {
+                const approx = approximateBase64Bytes(std);
+                if (approx <= MAX_INLINE_BYTES) {
+                  dataBase64 = std;
+                }
+              }
+            }
+          }
+        } catch (_) {}
+        attachments.push({ id: attachmentId, filename, mimeType, size, textContent, dataBase64 });
+      }
       if (Array.isArray(p.parts)) for (const c of p.parts) stack.push(c);
     }
-    return { ...out, diag: diagnostics };
+    return { ...out, attachments, diag: diagnostics };
   }
   const body = await extractText(data.payload);
   pushGmailDiag({
@@ -304,7 +370,8 @@ export async function getMessageFull(id: string): Promise<GmailMessage> {
     htmlLen: body.html?.length,
     attachmentFetches: (body as any)?.diag?.attachmentFetches,
     visitedParts: (body as any)?.diag?.visited,
-    structure: (body as any)?.diag?.structure
+    structure: (body as any)?.diag?.structure,
+    attachmentsLen: Array.isArray((body as any)?.attachments) ? (body as any).attachments.length : 0
   });
   const message: GmailMessage = {
     id: data.id,
@@ -314,7 +381,8 @@ export async function getMessageFull(id: string): Promise<GmailMessage> {
     labelIds: data.labelIds || [],
     internalDate: data.internalDate ? Number(data.internalDate) : undefined,
     bodyText: body.text,
-    bodyHtml: body.html
+    bodyHtml: body.html,
+    attachments: body.attachments
   };
   return message;
 }

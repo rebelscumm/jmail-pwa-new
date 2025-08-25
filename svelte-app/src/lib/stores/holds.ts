@@ -12,8 +12,9 @@ export function holdThread(threadId: string, ms: number): void {
       trailingHolds.update((m) => {
         const expiry = m[threadId];
         if (expiry && expiry <= Date.now()) {
-          const { [threadId]: _removed, ...rest } = m;
-          return rest;
+          // Once ANY queued-to-clear item expires, clear ALL holds immediately
+          // so all pending items disappear together regardless of their remaining timers.
+          return {};
         }
         return m;
       });

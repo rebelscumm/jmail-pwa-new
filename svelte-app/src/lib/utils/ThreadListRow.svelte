@@ -22,6 +22,7 @@
   import iconX from '@ktibow/iconset-material-symbols/close';
   import { labels as labelsStore } from '$lib/stores/labels';
   import { queueThreadModify, recordIntent } from '$lib/queue/intents';
+  import iconSparkles from '@ktibow/iconset-material-symbols/auto-awesome';
 
   // Lazy import to avoid circular or route coupling; fallback no-op if route not mounted
   async function scheduleReload() {
@@ -58,9 +59,16 @@
     try {
       const status = (thread as any).aiSubjectStatus as ('none'|'pending'|'ready'|'error') | undefined;
       const ai = (thread as any).aiSubject as string | undefined;
-      if (status === 'ready' && ai) return `AI: ${ai}`;
+      if (status === 'ready' && ai) return ai;
     } catch {}
     return thread.lastMsgMeta?.subject || '(no subject)';
+  })());
+  const aiSubjectReady = $derived((() => {
+    try {
+      const status = (thread as any).aiSubjectStatus as ('none'|'pending'|'ready'|'error') | undefined;
+      const ai = (thread as any).aiSubject as string | undefined;
+      return !!(status === 'ready' && ai && ai.trim());
+    } catch { return false; }
   })());
 
   // Work around snippet type mismatches by passing as any
@@ -512,7 +520,14 @@
 
 {#snippet threadHeadline()}
   <span class="row-headline">
-    <span class="title">{threadDisplaySubject}</span>
+    <span class="title">
+      {#if aiSubjectReady}
+        <span class="ai-flag" aria-label="AI generated" title="AI generated">
+          <Icon icon={iconSparkles} />
+        </span>
+      {/if}
+      {threadDisplaySubject}
+    </span>
   </span>
 {/snippet}
 

@@ -1,6 +1,7 @@
 import { get } from 'svelte/store';
 import { settings } from '$lib/stores/settings';
 import { redactPII, htmlToText } from './redact';
+import type { GmailAttachment } from '$lib/types';
 
 export type AIResult = { text: string };
 
@@ -98,7 +99,10 @@ async function callOpenAI(prompt: string, modelOverride?: string): Promise<AIRes
     }
 
     const errorCode = typeof body?.error?.code === 'string' ? body.error.code : undefined;
-    const errorMessageFromBody = typeof body?.error?.message === 'string' ? body.error.message : undefined;
+    const errorMessageFromBody =
+      typeof body?.error === 'string'
+        ? body.error
+        : (typeof body?.error?.message === 'string' ? body.error.message : undefined);
 
     let baseMsg = `OpenAI error ${res.status}`;
     if (res.status === 429 && errorCode === 'insufficient_quota') {
@@ -108,7 +112,12 @@ async function callOpenAI(prompt: string, modelOverride?: string): Promise<AIRes
     } else if (res.status === 429) {
       baseMsg = 'OpenAI rate limit exceeded';
     } else if (errorMessageFromBody) {
-      baseMsg = `OpenAI error ${res.status}: ${errorMessageFromBody}`;
+      // Normalize common server error strings
+      if (/api key not set/i.test(errorMessageFromBody)) {
+        baseMsg = 'OpenAI API key not set';
+      } else {
+        baseMsg = `OpenAI error ${res.status}: ${errorMessageFromBody}`;
+      }
     }
 
     throw new AIProviderError({ provider: 'openai', message: baseMsg, status: res.status, headers, body: body ?? textFallback });
@@ -160,17 +169,85 @@ async function callGemini(prompt: string, modelOverride?: string): Promise<AIRes
   return { text };
 }
 
-export async function aiSummarizeEmail(subject: string, bodyText?: string, bodyHtml?: string): Promise<string> {
+async function callGeminiWithParts(parts: any[], modelOverride?: string): Promise<AIResult> {
+  const s = get(settings);
+  const key = s.aiApiKey || '';
+  const model = modelOverride || s.aiModel || 'gemini-1.5-flash';
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ contents: [{ role: 'user', parts }] })
+  });
+  if (!res.ok) {
+    let body: any = undefined;
+    try { body = await res.clone().json(); } catch (_) { try { body = await res.clone().text(); } catch (_) { body = undefined; } }
+    const message = res.status === 429 ? 'Gemini rate limit exceeded' : `Gemini error ${res.status}`;
+    throw new AIProviderError({ provider: 'gemini', message, status: res.status, headers: {}, body });
+  }
+  const data = await safeParseJson(res);
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim?.() || '';
+  return { text };
+}
+
+export async function aiSummarizeEmail(subject: string, bodyText?: string, bodyHtml?: string, attachments?: GmailAttachment[]): Promise<string> {
   const s = get(settings);
   const hasBody = !!(bodyText || bodyHtml);
   const text = bodyText || htmlToText(bodyHtml) || '';
+  const attLines: string[] = [];
+  const attInline: Array<{ name: string; mimeType?: string; dataBase64?: string; text?: string }> = [];
+  if (Array.isArray(attachments) && attachments.length) {
+    for (const a of attachments) {
+      const name = (a.filename || a.mimeType || 'attachment').slice(0, 200);
+      const preface = name ? `Attachment: ${name}` : 'Attachment';
+      const content = (a.textContent || '').trim();
+      // Limit per-attachment content to avoid blowing prompt size
+      const clipped = content ? (content.length > 2000 ? content.slice(0, 2000) : content) : '';
+      if (clipped) attLines.push(`${preface}\n${clipped}`); else attLines.push(`${preface}`);
+      if (a.dataBase64) attInline.push({ name, mimeType: a.mimeType, dataBase64: a.dataBase64 });
+      else if (clipped) attInline.push({ name, text: clipped, mimeType: a.mimeType });
+    }
+  }
   const redacted = redactPII(text ? `${subject}\n\n${text}` : `${subject}`);
+  const attBlock = attLines.length ? `\n\nAttachments (summarize each):\n${attLines.join('\n\n')}` : '';
   const prompt = hasBody
-    ? `You are a concise assistant. Provide a short bullet list of the most important points in this email, most important first. Keep it under 6 bullets. Return ONLY the list as plain text with '-' bullets, no preamble or closing sentences, no code blocks, and no additional commentary.\n\nEmail:\n${redacted}`
-    : `You are a concise assistant. Write a single-line subject summary of this email thread using 15 words or fewer. Return ONLY the summary as plain text on one line, with no bullets, no quotes, no preamble, and no code blocks.\n\nSubject:\n${redacted}`;
+    ? `You are a concise assistant. Provide a short bullet list of the most important points in this email, most important first. If there are attachments, include 1-2 bullets for each attachment summarizing its key content. Keep it under 8 bullets total. Return ONLY the list as plain text with '-' bullets, no preamble or closing sentences, no code blocks, and no additional commentary.`
+    : `You are a concise assistant. Write a single-line subject summary of this email thread using 15 words or fewer. Return ONLY the summary as plain text on one line, with no bullets, no quotes, no preamble, and no code blocks.`;
   const provider = s.aiProvider || 'gemini';
-  const model = s.aiSummaryModel || s.aiModel || (provider === 'gemini' ? 'gemini-2.5-flash-lite' : provider === 'anthropic' ? 'claude-3-haiku-20240307' : 'gpt-4o-mini');
-  const out = provider === 'anthropic' ? await callAnthropic(prompt, model) : provider === 'gemini' ? await callGemini(prompt, model) : await callOpenAI(prompt, model);
+  // Prefer a multimodal Gemini for attachments; otherwise fallback
+  const defaultGemini = attInline.length ? 'gemini-1.5-flash' : 'gemini-2.5-flash-lite';
+  let model = s.aiSummaryModel || s.aiModel || (provider === 'gemini' ? defaultGemini : provider === 'anthropic' ? 'claude-3-haiku-20240307' : 'gpt-4o-mini');
+  if (provider === 'gemini' && attInline.length && !/^gemini-1\.5/i.test(model)) {
+    model = 'gemini-1.5-flash';
+  }
+  let out: AIResult;
+  if (provider === 'gemini' && attInline.length) {
+    // Build multimodal parts so Gemini can read PDFs/DOCX via inlineData
+    const parts: any[] = [];
+    parts.push({ text: prompt });
+    const segments = (redacted || '').split(/\r?\n\r?\n/);
+    const subjectLine = (segments[0] || '').trim();
+    const bodySegment = segments.slice(1).join('\n\n').trim();
+    if (hasBody) {
+      if (subjectLine) parts.push({ text: `\n\nSubject: ${subjectLine}` });
+      parts.push({ text: `\n\nEmail:\n${hasBody ? (bodySegment || redacted) : redacted}` });
+    } else {
+      parts.push({ text: `\n\nSubject:\n${redacted}` });
+    }
+    for (const a of attInline) {
+      const label = a.name ? `Attachment: ${a.name}` : 'Attachment';
+      parts.push({ text: `\n\n${label}` });
+      if (a.dataBase64 && a.mimeType) parts.push({ inlineData: { mimeType: a.mimeType, data: a.dataBase64 } });
+      else if (a.text) parts.push({ text: `\n${a.text}` });
+      else parts.push({ text: `\n(No attachment content available; summarize by filename/type only.)` });
+    }
+    out = await callGeminiWithParts(parts, model);
+  } else {
+    const fullPrompt = hasBody
+      ? `${prompt}\n\nEmail:\n${redacted}${attBlock}`
+      : `${prompt}\n\nSubject:\n${redacted}${attBlock}`;
+    out = provider === 'anthropic' ? await callAnthropic(fullPrompt, model) : provider === 'gemini' ? await callGemini(fullPrompt, model) : await callOpenAI(fullPrompt, model);
+  }
   let result = out.text || '';
   if (!hasBody) {
     // Normalize and hard-cap at 15 words as a safety net
@@ -206,6 +283,47 @@ export async function aiDraftReply(subject: string, bodyText?: string, bodyHtml?
   const model = s.aiDraftModel || s.aiModel || (provider === 'gemini' ? 'gemini-2.5-pro' : provider === 'anthropic' ? 'claude-3-haiku-20240307' : 'gpt-4o-mini');
   const out = provider === 'anthropic' ? await callAnthropic(prompt, model) : provider === 'gemini' ? await callGemini(prompt, model) : await callOpenAI(prompt, model);
   return out.text;
+}
+
+export async function aiSummarizeAttachment(subject: string | undefined, attachment: GmailAttachment): Promise<string> {
+  const s = get(settings);
+  const provider = s.aiProvider || 'gemini';
+  // Prefer multimodal for attachments that include bytes
+  let model = s.aiSummaryModel || s.aiModel || (provider === 'gemini' ? 'gemini-1.5-flash' : provider === 'anthropic' ? 'claude-3-haiku-20240307' : 'gpt-4o-mini');
+  if (provider === 'gemini') {
+    // Ensure a 1.5 model for inline files when possible
+    if (!/^gemini-1\.5/i.test(model)) model = 'gemini-1.5-flash';
+  }
+
+  const name = (attachment.filename || attachment.mimeType || 'attachment').slice(0, 200);
+  const preface = name ? `Attachment: ${name}` : 'Attachment';
+  const prompt = `You are a concise assistant. Summarize this attachment with 3-6 short bullets (most important first). If the file content is not provided, summarize based on filename/type without inventing specifics. Return ONLY '-' bullets, no preamble, no code blocks.`;
+
+  // Gemini multimodal path when we have bytes
+  if (provider === 'gemini' && attachment.dataBase64 && attachment.mimeType) {
+    const parts: any[] = [];
+    parts.push({ text: prompt });
+    if (subject && subject.trim()) parts.push({ text: `\n\nSubject: ${subject.trim()}` });
+    parts.push({ text: `\n\n${preface}` });
+    parts.push({ inlineData: { mimeType: attachment.mimeType, data: attachment.dataBase64 } });
+    const out = await callGeminiWithParts(parts, model);
+    return out.text || '';
+  }
+
+  // Text-only path when we have extracted text content
+  const content = (attachment.textContent || '').trim();
+  if (content) {
+    const clipped = content.length > 4000 ? content.slice(0, 4000) : content;
+    const redacted = redactPII(clipped);
+    const textPrompt = `${prompt}\n\n${preface}\n\n${redacted}`;
+    const out = provider === 'anthropic' ? await callAnthropic(textPrompt, model) : provider === 'gemini' ? await callGemini(textPrompt, model) : await callOpenAI(textPrompt, model);
+    return out.text || '';
+  }
+
+  // Fallback: no content available; ask model to summarize based on name/type only
+  const fallbackPrompt = `${prompt}\n\n${preface}`;
+  const out = provider === 'anthropic' ? await callAnthropic(fallbackPrompt, model) : provider === 'gemini' ? await callGemini(fallbackPrompt, model) : await callOpenAI(fallbackPrompt, model);
+  return out.text || '';
 }
 
 export function findUnsubscribeTarget(headers?: Record<string,string>, html?: string): string | null {

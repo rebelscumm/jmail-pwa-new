@@ -25,6 +25,7 @@
   import { searchQuery } from '$lib/stores/search';
   import FilterBar from '$lib/utils/FilterBar.svelte';
   import { filters as filtersStore, applyFilterToThreads, loadFilters } from '$lib/stores/filters';
+  import { aiSummarizeSubject } from '$lib/ai/providers';
 
   type InboxSort = NonNullable<import('$lib/stores/settings').AppSettings['inboxSort']>;
   const sortOptions: { key: InboxSort; label: string }[] = [
@@ -95,8 +96,11 @@
     }
   }
   const inboxThreads = $derived(($threadsStore || []).filter((t) => {
-    const inInbox = (t.labelIds || []).includes('INBOX');
-    const held = (($trailingHolds || {})[t.threadId] || 0) > now;
+    // Guard against undefined/partial entries
+    if (!t || typeof (t as any).threadId !== 'string') return false;
+    const labels = Array.isArray((t as any).labelIds) ? ((t as any).labelIds as string[]) : [];
+    const inInbox = labels.includes('INBOX');
+    const held = (($trailingHolds || {})[(t as any).threadId] || 0) > now;
     return inInbox || held;
   }));
   const visibleThreads = $derived(
@@ -167,7 +171,14 @@
         arr.sort((a, b) => getDate(b) - getDate(a));
         break;
     }
-    return arr;
+    // Keep threads with pending AI subject at the bottom until ready
+    try {
+      const ready = arr.filter((t) => ((t as any).aiSubjectStatus || 'none') !== 'pending');
+      const pending = arr.filter((t) => ((t as any).aiSubjectStatus || 'none') === 'pending');
+      return [...ready, ...pending];
+    } catch (_) {
+      return arr;
+    }
   })());
   const currentSortLabel = $derived((sortOptions.find(o => o.key === currentSort)?.label) || 'Date (newest first)');
   function setSort(next: InboxSort) { updateAppSettings({ inboxSort: next }); }
@@ -461,12 +472,18 @@
     // Build thread list preserving any cached AI/computed fields
     const dbThreads = await (await getDB());
     const threadList = [] as Array<import('$lib/types').GmailThread>;
+    const newlyArrived: Array<import('$lib/types').GmailThread> = [];
     for (const [threadId, v] of Object.entries(threadMap)) {
       const base = { threadId, messageIds: v.messageIds, lastMsgMeta: v.last, labelIds: Object.keys(v.labelIds) } as import('$lib/types').GmailThread;
       try {
         const prev = await dbThreads.get('threads', threadId) as import('$lib/types').GmailThread | undefined;
         if (prev) {
-          threadList.push({
+          const lastPrevId = (prev.messageIds || [])[Math.max(0, (prev.messageIds || []).length - 1)];
+          const lastNewId = base.messageIds[Math.max(0, base.messageIds.length - 1)];
+          const prevUpdatedAt = (prev as any).aiSubjectUpdatedAt || 0;
+          const newDate = base.lastMsgMeta?.date || 0;
+          const changed = (!!lastPrevId && !!lastNewId && lastPrevId !== lastNewId) || (newDate > prevUpdatedAt);
+          const carry: import('$lib/types').GmailThread = {
             ...base,
             summary: prev.summary,
             summaryStatus: prev.summaryStatus,
@@ -477,12 +494,22 @@
             aiSubjectStatus: (prev as any).aiSubjectStatus,
             subjectVersion: (prev as any).subjectVersion,
             aiSubjectUpdatedAt: (prev as any).aiSubjectUpdatedAt
-          });
+          } as any;
+          if (changed) {
+            (carry as any).aiSubjectStatus = 'pending';
+            newlyArrived.push(carry);
+          }
+          threadList.push(carry);
         } else {
-          threadList.push(base);
+          // Mark brand-new threads as pending AI subject so they render at the bottom
+          const pending: import('$lib/types').GmailThread = { ...base, aiSubjectStatus: 'pending' } as any;
+          threadList.push(pending);
+          newlyArrived.push(pending);
         }
       } catch {
-        threadList.push(base);
+        const pending: import('$lib/types').GmailThread = { ...base, aiSubjectStatus: 'pending' } as any;
+        threadList.push(pending);
+        newlyArrived.push(pending);
       }
     }
     // Persist
@@ -517,6 +544,13 @@
             }
           }
         }
+      }
+    } catch (_) {}
+
+    // Fire-and-forget: attempt AI subject summaries for newly arrived threads immediately
+    try {
+      if (newlyArrived.length) {
+        void summarizeSubjectsForThreads(newlyArrived);
       }
     } catch (_) {}
   }
@@ -637,6 +671,106 @@
     });
     await Promise.all(workers);
     return results;
+  }
+
+  // Helper: best-effort fetch of the latest message body if scopes allow
+  async function tryGetLastMessageFull(messageId: string): Promise<import('$lib/types').GmailMessage | null> {
+    try {
+      const { fetchTokenInfo } = await import('$lib/gmail/auth');
+      const info = await fetchTokenInfo();
+      const hasBodyScopes = !!info?.scope && (info.scope.includes('gmail.readonly') || info.scope.includes('gmail.modify'));
+      if (!hasBodyScopes) return null;
+    } catch (_) {
+      return null;
+    }
+    try {
+      const { getMessageFull } = await import('$lib/gmail/api');
+      const full = await getMessageFull(messageId);
+      return full;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function getLastMessageId(thread: import('$lib/types').GmailThread): string | null {
+    try {
+      const ids = thread.messageIds || [];
+      if (!ids.length) return null;
+      return ids[ids.length - 1];
+    } catch {
+      return null;
+    }
+  }
+
+  async function summarizeSubjectsForThreads(targets: Array<import('$lib/types').GmailThread>): Promise<void> {
+    if (!targets || !targets.length) return;
+    try {
+      const db = await getDB();
+      // Mark pending in DB to persist state across reloads
+      try {
+        const tx = db.transaction('threads', 'readwrite');
+        for (const t of targets) {
+          const current = await tx.store.get(t.threadId) as import('$lib/types').GmailThread | undefined;
+          const next = { ...(current || t), aiSubjectStatus: 'pending' as const, aiSubjectUpdatedAt: Date.now() } as any;
+          await tx.store.put(next);
+        }
+        await tx.done;
+      } catch (_) {}
+
+      const prepared = await mapWithConcurrency(targets, 3, async (t) => {
+        const lastId = getLastMessageId(t);
+        let bodyText: string | undefined;
+        let bodyHtml: string | undefined;
+        if (lastId) {
+          const full = await tryGetLastMessageFull(lastId);
+          if (full) { bodyText = full.bodyText; bodyHtml = full.bodyHtml; }
+        }
+        const subject = t.lastMsgMeta?.subject || '';
+        return { t, subject, bodyText, bodyHtml };
+      });
+
+      // Summarize with modest concurrency
+      const results = await mapWithConcurrency(prepared, 2, async (p) => {
+        try {
+          const text = await aiSummarizeSubject(p.subject, p.bodyText, p.bodyHtml);
+          return { id: p.t.threadId, ok: true, text } as const;
+        } catch (e) {
+          return { id: p.t.threadId, ok: false, error: e } as const;
+        }
+      });
+
+      // Persist and update store
+      const tx = db.transaction('threads', 'readwrite');
+      const nowMs = Date.now();
+      const nowVersion = Number($settings.aiSummaryVersion || 1);
+      for (const r of results) {
+        try {
+          const current = (await tx.store.get(r.id)) as import('$lib/types').GmailThread | undefined;
+          if (!current) continue;
+          const next: import('$lib/types').GmailThread = { ...current } as any;
+          if (r.ok && r.text && r.text.trim()) {
+            (next as any).aiSubject = r.text.trim();
+            (next as any).aiSubjectStatus = 'ready';
+          } else {
+            (next as any).aiSubjectStatus = (current as any).aiSubjectStatus || 'error';
+          }
+          (next as any).subjectVersion = nowVersion;
+          (next as any).aiSubjectUpdatedAt = nowMs;
+          await tx.store.put(next);
+          // Update live store
+          threadsStore.update((arr) => {
+            const idx = arr.findIndex((x) => x.threadId === r.id);
+            if (idx >= 0) {
+              const copy = arr.slice();
+              (copy as any)[idx] = next as any;
+              return copy as any;
+            }
+            return arr;
+          });
+        } catch (_) {}
+      }
+      await tx.done;
+    } catch (_) {}
   }
 
   const can10m = $derived(Object.keys($settings.labelMapping || {}).some((k)=>k==='10m' && $settings.labelMapping[k]));

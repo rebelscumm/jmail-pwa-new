@@ -1,5 +1,5 @@
 // Minimal service worker for offline support
-const CACHE_NAME = 'Jmail-v1.1.0';
+const CACHE_NAME = 'Jmail-v1.1.1';
 
 self.addEventListener('install', () => {
   self.skipWaiting();

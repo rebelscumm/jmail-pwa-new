@@ -22,7 +22,6 @@
   import iconRedo from '@ktibow/iconset-material-symbols/redo';
   import iconSync from '@ktibow/iconset-material-symbols/sync';
   import iconSettings from '@ktibow/iconset-material-symbols/settings';
-  import iconBackup from '@ktibow/iconset-material-symbols/backup';
   import iconRefresh from '@ktibow/iconset-material-symbols/refresh';
   import iconLogout from '@ktibow/iconset-material-symbols/logout';
   import iconBack from '@ktibow/iconset-material-symbols/chevron-left';
@@ -30,6 +29,7 @@
   import iconInbox from '@ktibow/iconset-material-symbols/inbox';
   import iconMarkEmailUnread from '@ktibow/iconset-material-symbols/mark-email-unread';
   import { onMount } from 'svelte';
+  import { trailingHolds } from '$lib/stores/holds';
   let { onSyncNow, backHref, backLabel }: { onSyncNow?: () => void; backHref?: string; backLabel?: string } = $props();
   let overflowDetails: HTMLDetailsElement;
   let aboutOpen = $state(false);
@@ -273,8 +273,19 @@
     }
   });
 
-  // Inbox counters (local view based on cached threads)
-  const inboxThreads = $derived(($threadsStore || []).filter((t) => (t.labelIds || []).includes('INBOX')));
+  // Ticking clock to evaluate hold expirations for real-time counters
+  let now = $state(Date.now());
+  onMount(() => { const id = setInterval(() => { now = Date.now(); }, 250); return () => clearInterval(id); });
+
+  // Inbox counters (local view based on cached threads + trailing holds)
+  const inboxThreads = $derived(($threadsStore || []).filter((t) => {
+    // Guard against undefined/partial entries
+    if (!t || typeof (t as any).threadId !== 'string') return false;
+    const labels = Array.isArray((t as any).labelIds) ? ((t as any).labelIds as string[]) : [];
+    const inInbox = labels.includes('INBOX');
+    const held = (($trailingHolds || {})[(t as any).threadId] || 0) > now;
+    return inInbox || held;
+  }));
   const inboxCount = $derived(inboxThreads.length);
   const unreadCount = $derived(inboxThreads.filter((t) => (t.labelIds || []).includes('UNREAD')).length);
 </script>
@@ -362,8 +373,7 @@
       </summary>
       <Menu>
         <MenuItem icon={iconSettings} onclick={() => (location.href = '/settings')}>Settings</MenuItem>
-        <MenuItem icon={iconBackup} onclick={async()=>{ const m = await import('$lib/db/backups'); await m.createBackup(); await m.pruneOldBackups(4); }}>Create backup</MenuItem>
-        <MenuItem icon={iconRefresh} onclick={() => { const u = new URL(window.location.href); u.searchParams.set('refresh', '1'); location.href = u.toString(); }}>Force update</MenuItem>
+        <MenuItem icon={iconRefresh} onclick={() => { const u = new URL(window.location.href); u.searchParams.set('refresh', '1'); location.href = u.toString(); }}>Check for App Update</MenuItem>
         <MenuItem icon={iconCopy} onclick={doCopyDiagnostics}>Copy diagnostics</MenuItem>
         <MenuItem icon={iconLogout} onclick={doRelogin}>Re-login</MenuItem>
         <MenuItem icon={iconInfo} onclick={() => { aboutOpen = true; }}>About</MenuItem>
@@ -414,4 +424,13 @@
   .about .v { color: rgb(var(--m3-scheme-on-surface)); font-variant-numeric: tabular-nums; }
   /* Make Undo/Redo dropdowns wider to accommodate longer text */
   .history-menu :global(.m3-container) { max-width: 28rem; }
+  /* Center Undo/Redo dropdown menus in the viewport */
+  .history-menu {
+    position: fixed !important;
+    top: 50% !important;
+    left: 50% !important;
+    transform: translate(-50%, -50%);
+    right: auto !important;
+    bottom: auto !important;
+  }
 </style>

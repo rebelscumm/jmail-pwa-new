@@ -17,6 +17,7 @@ export type GmailMessage = {
   internalDate?: number; // ms epoch
   bodyText?: string;
   bodyHtml?: string;
+  attachments?: GmailAttachment[];
 };
 
 export type GmailThread = {
@@ -42,6 +43,17 @@ export type GmailThread = {
   subjectVersion?: number;
   /** Last update timestamp for the AI subject (ms epoch) */
   aiSubjectUpdatedAt?: number;
+};
+
+export type GmailAttachment = {
+  id?: string; // Gmail attachmentId when available
+  filename?: string;
+  mimeType?: string;
+  size?: number;
+  /** Best-effort extracted plain text content for summarization */
+  textContent?: string;
+  /** Optional standard Base64 (not URL-safe) bytes for AI providers that support inline files */
+  dataBase64?: string;
 };
 
 export type SnoozeRule = {

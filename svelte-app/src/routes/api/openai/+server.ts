@@ -8,7 +8,10 @@ export const POST: RequestHandler = async ({ request }) => {
   const bodyKey = (body?.apiKey as string | undefined) || undefined;
   const apiKey = env.OPENAI_API_KEY || (bodyKey ? String(bodyKey) : '');
   if (!apiKey) {
-    return new Response(JSON.stringify({ error: 'OPENAI_API_KEY not set' }), { status: 500 });
+    return new Response(
+      JSON.stringify({ error: { code: 'invalid_api_key', message: 'OPENAI_API_KEY not set' } }),
+      { status: 401, headers: { 'Content-Type': 'application/json' } }
+    );
   }
   const messages = body?.messages ?? [{ role: 'user', content: 'Hello' }];
   const model = body?.model ?? 'gpt-4o-mini';

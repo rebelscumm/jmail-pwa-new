@@ -330,6 +330,7 @@
 
   const isViewer = $derived(/\/viewer\//.test(page.url.pathname));
   const backHref = $derived(isViewer ? (base || '') + '/inbox' : undefined);
+  const isSettings = $derived(normalizePath(page.url.pathname).startsWith(normalizePath((base || '') + '/settings')));
 </script>
 
 <svelte:head>
@@ -363,7 +364,7 @@
       <div id="offline-banner" class="offline" class:visible={isOffline}>You are offline. Actions will be queued.</div>
     {/if}
     {@render children()}
-    {#if normalizePath(base || "/") !== normalizePath(page.url.pathname)}
+    {#if normalizePath(base || "/") !== normalizePath(page.url.pathname) && !isSettings}
       <div class="fab-holder">
         <FAB color="primary" icon={iconCompose} onclick={() => (showCompose = true)} />
       </div>
