@@ -32,12 +32,11 @@ function getOpenAIRateLimitHeaders(res: Response): Record<string, string | null>
 
 async function callOpenAI(prompt: string): Promise<AIResult> {
   const s = get(settings);
-  const key = s.aiApiKey || '';
   const model = s.aiModel || 'gpt-4o-mini';
-  const url = 'https://api.openai.com/v1/chat/completions';
+  const url = '/api/openai';
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], temperature: 0.2 })
   });
   if (!res.ok) {
