@@ -10,16 +10,14 @@
   import Button from '$lib/buttons/Button.svelte';
   import Card from '$lib/containers/Card.svelte';
   import LoadingIndicator from '$lib/forms/LoadingIndicator.svelte';
-  import Chip from '$lib/forms/Chip.svelte';
+  
   import Checkbox from '$lib/forms/Checkbox.svelte';
-  import { snoozeByThread } from '$lib/stores/snooze';
+  
   import { archiveThread, trashThread, undoLast } from '$lib/queue/intents';
   import { snoozeThreadByRule } from '$lib/snooze/actions';
   import { settings, updateAppSettings } from '$lib/stores/settings';
   import { show as showSnackbar } from '$lib/containers/snackbar';
-  import iconInbox from '@ktibow/iconset-material-symbols/inbox';
-  import iconMarkEmailUnread from '@ktibow/iconset-material-symbols/mark-email-unread';
-  import iconSnooze from '@ktibow/iconset-material-symbols/snooze';
+  
   import { getLabel } from '$lib/gmail/api';
   import { trailingHolds } from '$lib/stores/holds';
   import Menu from '$lib/containers/Menu.svelte';
@@ -241,24 +239,7 @@
   }
   const totalThreadsCount = $derived($threadsStore?.length || 0);
   let inboxLabelStats = $state<{ messagesTotal?: number; messagesUnread?: number; threadsTotal?: number; threadsUnread?: number } | null>(null);
-  const inboxCount = $derived(inboxLabelStats?.threadsTotal ?? inboxThreads.length);
   const visibleThreadsCount = $derived(filteredThreads?.length || 0);
-  const unreadCount = $derived(inboxLabelStats?.threadsUnread ?? inboxThreads.filter((t) => (t.labelIds || []).includes('UNREAD')).length);
-  const soonSnoozedCount = $derived(
-    (() => {
-      try {
-        const cutoff = Date.now() + 24 * 60 * 60 * 1000;
-        const map = $snoozeByThread || {};
-        let count = 0;
-        for (const info of Object.values(map)) {
-          if (info && typeof info.dueAtUtc === 'number' && info.dueAtUtc <= cutoff) count++;
-        }
-        return count;
-      } catch {
-        return 0;
-      }
-    })()
-  );
   $effect(() => {
     // Log UI-level diagnostics in dev builds only
     try {
@@ -678,9 +659,7 @@
   <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.5rem; gap:0.5rem;">
     <h3 class="m3-font-title-medium" style="margin:0">Inbox</h3>
     <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
-      <Chip variant="general" icon={iconInbox} disabled title="Inbox threads" onclick={() => {}}>{inboxCount}</Chip>
-      <Chip variant="general" icon={iconMarkEmailUnread} disabled title="Unread threads" onclick={() => {}}>{unreadCount}</Chip>
-      <Chip variant="general" icon={iconSnooze} disabled title="Snoozed due in 24h" onclick={() => {}}>{soonSnoozedCount}</Chip>
+      
       <details class="sort">
         <summary class="summary-btn">
           <Button variant="text">
