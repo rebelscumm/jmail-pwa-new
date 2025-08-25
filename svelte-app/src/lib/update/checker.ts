@@ -82,11 +82,9 @@ export function startUpdateChecker(
 		if (stopped) return;
 		const remote = await fetchRemote();
 		if (!remote) return;
-		if (
-			remote.buildId &&
-			remote.buildId !== current.buildId &&
-			(remote.appVersion !== current.appVersion || remote.buildId !== current.buildId)
-		) {
+		// Only consider a new version when the declared app version changes.
+		// This avoids false positives from differing build IDs across identical versions.
+		if (remote.appVersion && remote.appVersion !== current.appVersion) {
 			onNewVersion(remote, current);
 			notifyAllTabs(remote);
 			stop();
@@ -140,10 +138,8 @@ export async function checkForUpdateOnce(): Promise<CheckOnceResult> {
 	} catch {}
 	const remote = await fetchRemoteVersionInfo();
 	if (!remote) return { status: 'error', current };
-	if (
-		remote.buildId &&
-		(remote.appVersion !== current.appVersion || remote.buildId !== current.buildId)
-	) {
+	// Treat update as available only when the app version changes
+	if (remote.appVersion && remote.appVersion !== current.appVersion) {
 		return { status: 'new', remote, current };
 	}
 	return { status: 'same', current, remote };
