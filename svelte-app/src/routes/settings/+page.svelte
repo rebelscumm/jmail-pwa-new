@@ -456,6 +456,11 @@
         <TextFieldOutlined label="API Key" type={_aiKeyVisible ? 'text' : 'password'} bind:value={_aiApiKey} placeholder="OpenAI / Anthropic / Google API key" />
         <Button variant="outlined" onclick={() => (_aiKeyVisible = !_aiKeyVisible)}>{_aiKeyVisible ? 'Hide' : 'View'}</Button>
       </div>
+      {#if !_aiApiKey}
+        <div style="grid-column: 1 / -1; margin-left: 2rem; color: rgb(var(--m3-scheme-error)); font-size: 0.875rem;">
+          ⚠️ AI API key is required for precompute functionality and AI features.
+        </div>
+      {/if}
       <TextFieldOutlined label="Default model (fallback)" bind:value={_aiModel} placeholder="gpt-4o-mini / claude-3-haiku / gemini-1.5-flash" />
       <TextFieldOutlined label="Summary model" bind:value={_aiSummaryModel} placeholder="gemini-2.5-flash-lite (default)" />
       <TextFieldOutlined label="Draft model" bind:value={_aiDraftModel} placeholder="gemini-2.5-pro (default)" />
@@ -470,6 +475,10 @@
         <Switch bind:checked={_precomputeSummaries} />
         <span class="m3-font-body-medium">Precompute summaries (background)</span>
       </label>
+      <div style="grid-column: 1 / -1; margin-left: 2rem; color: rgb(var(--m3-scheme-on-surface-variant)); font-size: 0.875rem;">
+        When enabled, AI summaries and subjects will be generated automatically in the background for inbox threads.
+        This requires an AI API key to be configured above.
+      </div>
       <label style="display:flex; align-items:center; gap:0.5rem;">
         <Checkbox>
           <input type="checkbox" bind:checked={_precomputeUseBatch} />
@@ -492,6 +501,18 @@
         <span class="m3-font-body-small">{_precomputeInfo}</span>
       {/if}
     </div>
+    {#if !_precomputeSummaries}
+      <div style="grid-column: 1 / -1; margin-top: 0.5rem; padding: 0.75rem; background: rgb(var(--m3-scheme-surface-container-lowest)); border-radius: 0.5rem; border: 1px solid rgb(var(--m3-scheme-outline-variant));">
+        <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
+          <span style="color: rgb(var(--m3-scheme-error));">⚠️</span>
+          <span class="m3-font-title-small" style="color: rgb(var(--m3-scheme-error));">Precompute is disabled</span>
+        </div>
+        <div style="color: rgb(var(--m3-scheme-on-surface-variant)); font-size: 0.875rem;">
+          Enable the "Precompute summaries" switch above to start generating AI summaries and subjects automatically.
+          You can also use the "Run Precompute" button in the top app bar overflow menu for manual processing.
+        </div>
+      </div>
+    {/if}
   </Card>
 {/if}
 

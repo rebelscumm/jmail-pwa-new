@@ -16,7 +16,7 @@ yarn-error.log*
 pnpm-debug.log*
 
 # IDE / Editor
-.vscode/
+
 .idea/
 
 # Node (top-level safety)

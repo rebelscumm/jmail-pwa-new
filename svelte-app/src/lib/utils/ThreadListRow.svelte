@@ -678,7 +678,7 @@
   /* Separate snooze and toggle button styles */
   .snooze-buttons { display:inline-flex; align-items:center; position: relative; gap: 0.5rem; flex-wrap: nowrap; }
   .menu-toggle { position: relative; }
-  .menu-toggle > :global(:not(summary)) { position: absolute !important; z-index: 10; right: 0; top: 100%; pointer-events: auto; }
+  .menu-toggle > :global(:not(summary)) { position: fixed !important; z-index: 10; left: 50%; top: 0; pointer-events: auto; transform: translateX(-50%); margin-top: 1rem; }
   /* Reset native marker on summary for MD3 button inside */
   .menu-toggle > summary { list-style: none; }
   /* Slightly larger tap target for expand */

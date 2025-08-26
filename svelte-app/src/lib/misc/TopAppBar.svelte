@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { syncState } from '$lib/stores/queue';
+  import { get } from 'svelte/store';
+import { syncState } from '$lib/stores/queue';
+import { settings } from '$lib/stores/settings';
+import { precomputeStatus } from '$lib/stores/precompute';
   import { undoLast, redoLast, getUndoHistory, getRedoHistory } from '$lib/queue/intents';
   import Button from '$lib/buttons/Button.svelte';
   import SplitButton from '$lib/buttons/SplitButton.svelte';
@@ -84,10 +87,107 @@
 
   async function doPrecompute() {
     try {
+      // Check if precompute is enabled
+      const { settings } = await import('$lib/stores/settings');
+      const s = get(settings);
+      if (!s?.precomputeSummaries) {
+        showSnackbar({ 
+          message: 'Precompute is disabled. Enable it in Settings > App > Precompute summaries', 
+          timeout: 6000,
+          actions: {
+            'Go to Settings': () => { location.href = '/settings'; }
+          }
+        });
+        return;
+      }
+      
+      if (!s?.aiApiKey) {
+        showSnackbar({ 
+          message: 'AI API key is missing. Set it in Settings > API', 
+          timeout: 6000,
+          actions: {
+            'Go to Settings': () => { location.href = '/settings'; }
+          }
+        });
+        return;
+      }
+      
+      // Check if there are any threads to process
+      try {
+        const { getDB } = await import('$lib/db/indexeddb');
+        const db = await getDB();
+        const threadCount = await db.count('threads');
+        if (threadCount === 0) {
+          showSnackbar({ 
+            message: 'No email threads found. Sync your inbox first.', 
+            timeout: 4000,
+            actions: {
+              'Sync Now': () => { doSync(); }
+            }
+          });
+          return;
+        }
+      } catch (e) {
+        console.error('Error checking thread count:', e);
+      }
+      
       showSnackbar({ message: 'Starting precompute...' });
       const { precomputeNow } = await import('$lib/ai/precompute');
-      await precomputeNow(25);
-      showSnackbar({ message: 'Precompute complete', timeout: 2500 });
+      const result = await precomputeNow(25);
+      
+      if (result && result.processed > 0) {
+        showSnackbar({ message: `Precompute complete: ${result.processed} items processed`, timeout: 4000 });
+      } else if (result && result.processed === 0) {
+        if (result.total > 0) {
+          // Check if this is because there are no inbox threads
+          try {
+            const { getDB } = await import('$lib/db/indexeddb');
+            const db = await getDB();
+            const allThreads = await db.getAll('threads');
+            const inboxThreads = allThreads.filter(t => t.labelIds?.includes('INBOX'));
+            const nonSpamTrashThreads = inboxThreads.filter(t => !t.labelIds?.includes('SPAM') && !t.labelIds?.includes('TRASH'));
+            
+            if (inboxThreads.length === 0) {
+              showSnackbar({ 
+                message: 'No inbox threads found. Sync your inbox first.', 
+                timeout: 4000,
+                actions: {
+                  'Sync Now': () => { doSync(); }
+                }
+              });
+            } else if (nonSpamTrashThreads.length === 0) {
+              showSnackbar({ 
+                message: 'All inbox threads are in SPAM/TRASH. Check your email filters.', 
+                timeout: 4000,
+                actions: {
+                  'Check Settings': () => { location.href = '/settings'; }
+                }
+              });
+            } else {
+              showSnackbar({ 
+                message: 'Precompute completed but no items were processed. Check console for AI API errors.', 
+                timeout: 6000,
+                actions: {
+                  'Check Settings': () => { location.href = '/settings'; }
+                }
+              });
+            }
+          } catch (e) {
+            console.error('Error checking thread details:', e);
+            showSnackbar({ 
+              message: 'Precompute completed but no items were processed. Check console for AI API errors.', 
+              timeout: 6000,
+              actions: {
+                'Check Settings': () => { location.href = '/settings'; }
+              }
+            });
+          }
+        } else {
+          showSnackbar({ message: 'No email threads found to process', timeout: 3000 });
+        }
+      } else {
+        showSnackbar({ message: 'Precompute complete', timeout: 2500 });
+      }
     } catch (e) {
       const errorMsg = e instanceof Error ? e.message : String(e);
       showSnackbar({ message: `Precompute failed: ${errorMsg}`, timeout: 5000 });
@@ -386,15 +486,12 @@
         </Button>
       </summary>
       <Menu>
+                 <MenuItem icon={iconSparkles} onclick={doPrecompute}>
+           Run Precompute
+         </MenuItem>
         <MenuItem icon={iconSettings} onclick={() => (location.href = '/settings')}>Settings</MenuItem>
         <MenuItem icon={iconRefresh} onclick={() => { const u = new URL(window.location.href); u.searchParams.set('refresh', '1'); location.href = u.toString(); }}>Check for App Update</MenuItem>
         <MenuItem icon={iconCopy} onclick={doCopyDiagnostics}>Copy diagnostics</MenuItem>
-        <MenuItem icon={iconSmartToy} onclick={doPrecompute}>
-          <div style="display: flex; align-items: center; gap: 0.25rem;">
-            <span>Run Precompute</span>
-            <Icon icon={iconSparkles} width="1rem" height="1rem" />
-          </div>
-        </MenuItem>
         <MenuItem icon={iconLogout} onclick={doRelogin}>Re-login</MenuItem>
         <MenuItem icon={iconInfo} onclick={() => { aboutOpen = true; }}>About</MenuItem>
       </Menu>

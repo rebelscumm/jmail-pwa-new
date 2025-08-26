@@ -34,6 +34,7 @@
   import KeyboardShortcutsDialog from "$lib/misc/KeyboardShortcutsDialog.svelte";
   import { settings as appSettings } from "$lib/stores/settings";
   import { getFriendlyAIErrorMessage } from "$lib/ai/providers";
+  import PrecomputeProgress from "$lib/components/PrecomputeProgress.svelte";
   
   let onKeyDownRef: ((e: KeyboardEvent) => void) | null = null;
   
@@ -369,6 +370,11 @@
     <Snackbar bind:this={snackbar} />
     <KeyboardShortcutsDialog bind:this={kbdDialog} />
   </div>
+  
+  <!-- Global precompute progress indicator -->
+  <PrecomputeProgress onClose={() => {
+    import('$lib/stores/precompute').then(m => m.precomputeStatus.reset());
+  }} />
 </div>
 
 <style>
