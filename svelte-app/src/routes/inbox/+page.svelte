@@ -737,7 +737,7 @@
             ? readySummary
             : await aiSummarizeEmail(p.subject, p.bodyText, p.bodyHtml);
           const text = await aiSummarizeSubject(p.subject, undefined, undefined, messageSummary);
-          return { id: p.t.threadId, ok: true, text } as const;
+          return { id: p.t.threadId, ok: true, text, messageSummary } as const;
         } catch (e) {
           return { id: p.t.threadId, ok: false, error: e } as const;
         }
@@ -757,6 +757,13 @@
             (next as any).aiSubjectStatus = 'ready';
           } else {
             (next as any).aiSubjectStatus = (current as any).aiSubjectStatus || 'error';
+          }
+          // Also persist the AI message summary if we computed it here
+          if ((r as any).messageSummary && String((r as any).messageSummary).trim()) {
+            (next as any).summary = String((r as any).messageSummary).trim();
+            (next as any).summaryStatus = 'ready';
+            (next as any).summaryVersion = nowVersion;
+            (next as any).summaryUpdatedAt = nowMs;
           }
           (next as any).subjectVersion = nowVersion;
           (next as any).aiSubjectUpdatedAt = nowMs;
