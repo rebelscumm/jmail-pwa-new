@@ -28,6 +28,8 @@
   import iconCopy from '@ktibow/iconset-material-symbols/content-copy-outline';
   import iconInbox from '@ktibow/iconset-material-symbols/inbox';
   import iconMarkEmailUnread from '@ktibow/iconset-material-symbols/mark-email-unread';
+  import iconSmartToy from '@ktibow/iconset-material-symbols/smart-toy';
+  import iconSparkles from '@ktibow/iconset-material-symbols/auto-awesome';
   import { onMount } from 'svelte';
   import { trailingHolds } from '$lib/stores/holds';
   let { onSyncNow, backHref, backLabel }: { onSyncNow?: () => void; backHref?: string; backLabel?: string } = $props();
@@ -78,6 +80,18 @@
       if (canGoBack) { history.back(); return; }
     } catch {}
     if (backHref) { location.href = backHref; }
+  }
+
+  async function doPrecompute() {
+    try {
+      showSnackbar({ message: 'Starting precompute...' });
+      const { precomputeNow } = await import('$lib/ai/precompute');
+      await precomputeNow(25);
+      showSnackbar({ message: 'Precompute complete', timeout: 2500 });
+    } catch (e) {
+      const errorMsg = e instanceof Error ? e.message : String(e);
+      showSnackbar({ message: `Precompute failed: ${errorMsg}`, timeout: 5000 });
+    }
   }
 
   let search = $state('');
@@ -375,6 +389,12 @@
         <MenuItem icon={iconSettings} onclick={() => (location.href = '/settings')}>Settings</MenuItem>
         <MenuItem icon={iconRefresh} onclick={() => { const u = new URL(window.location.href); u.searchParams.set('refresh', '1'); location.href = u.toString(); }}>Check for App Update</MenuItem>
         <MenuItem icon={iconCopy} onclick={doCopyDiagnostics}>Copy diagnostics</MenuItem>
+        <MenuItem icon={iconSmartToy} onclick={doPrecompute}>
+          <div style="display: flex; align-items: center; gap: 0.25rem;">
+            <span>Run Precompute</span>
+            <Icon icon={iconSparkles} width="1rem" height="1rem" />
+          </div>
+        </MenuItem>
         <MenuItem icon={iconLogout} onclick={doRelogin}>Re-login</MenuItem>
         <MenuItem icon={iconInfo} onclick={() => { aboutOpen = true; }}>About</MenuItem>
       </Menu>
