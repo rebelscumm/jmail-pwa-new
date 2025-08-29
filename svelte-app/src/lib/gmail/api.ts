@@ -85,13 +85,15 @@ export async function copyGmailDiagnosticsToClipboard(extra?: Record<string, unk
       }
     }
     
-    // Fallback 2: Show in alert for manual copy (last resort)
+    // Fallback 2: Surface via snackbar/log for manual copy (last resort)
     try {
-      alert('Diagnostics (copy manually):\n\n' + text);
-      return false; // Not technically copied to clipboard
-    } catch (alertError) {
-      console.warn('[GmailAPI] Alert fallback failed:', alertError);
+      const { show } = await import('$lib/containers/snackbar');
+      show({ message: 'Clipboard access blocked. Open console to copy diagnostics.', timeout: 6000, closable: true });
+    } catch (_) {
+      // If snackbar import fails (non-UI context), proceed silently
     }
+    try { console.log('[GmailAPI] Diagnostics (manual copy)', text); } catch (_) {}
+    return false; // Not technically copied to clipboard
     
   } catch (error) {
     console.error('[GmailAPI] copyGmailDiagnosticsToClipboard failed:', error);

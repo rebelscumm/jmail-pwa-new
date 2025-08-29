@@ -6,6 +6,7 @@
   import { initAuth, acquireTokenInteractive, authState, getAuthDiagnostics, resolveGoogleClientId } from '$lib/gmail/auth';
   import { getDB } from '$lib/db/indexeddb';
   import { copyGmailDiagnosticsToClipboard } from '$lib/gmail/api';
+  import { show as showSnackbar } from '$lib/containers/snackbar';
   
 
   let CLIENT_ID = $state(import.meta.env.VITE_GOOGLE_CLIENT_ID as string);
@@ -133,34 +134,9 @@
       
       // Provide user feedback
       if (copiedDiagOk) {
-        // Show success message
-        if (typeof window !== 'undefined' && 'showSnackbar' in window) {
-          try {
-            const { show } = await import('$lib/containers/snackbar');
-            show({ message: 'Diagnostics copied to clipboard', timeout: 3000 });
-          } catch (_) {
-            // Fallback if snackbar not available
-            alert('Diagnostics copied to clipboard successfully!');
-          }
-        } else {
-          alert('Diagnostics copied to clipboard successfully!');
-        }
+        showSnackbar({ message: 'Diagnostics copied to clipboard', timeout: 3000 });
       } else {
-        // Show fallback message
-        if (typeof window !== 'undefined' && 'showSnackbar' in window) {
-          try {
-            const { show } = await import('$lib/containers/snackbar');
-            show({ 
-              message: 'Clipboard access denied. Check console for diagnostics.', 
-              timeout: 5000 
-            });
-          } catch (_) {
-            alert('Clipboard access denied. Check browser console for diagnostics.');
-          }
-        } else {
-          alert('Clipboard access denied. Check browser console for diagnostics.');
-        }
-        
+        showSnackbar({ message: 'Clipboard access denied. Check console for diagnostics.', timeout: 5000, closable: true });
         // Also log to console as fallback
         console.log('Diagnostics (console fallback):', payload);
       }
@@ -169,19 +145,7 @@
       copiedDiagOk = false;
       
       // Show error message
-      if (typeof window !== 'undefined' && 'showSnackbar' in window) {
-        try {
-          const { show } = await import('$lib/containers/snackbar');
-          show({ 
-            message: 'Failed to copy diagnostics. Check console for error.', 
-            timeout: 5000 
-          });
-        } catch (_) {
-          alert('Failed to copy diagnostics. Check browser console for error.');
-        }
-      } else {
-        alert('Failed to copy diagnostics. Check browser console for error.');
-      }
+      showSnackbar({ message: 'Failed to copy diagnostics. Check console for error.', timeout: 5000, closable: true });
     } finally {
       copyingDiagnostics = false;
     }
@@ -243,7 +207,7 @@
         } catch (_) { ok = false; }
       }
       if (!ok) {
-        try { alert('Runtime checks:\n\n' + text); } catch (_) {}
+        showSnackbar({ message: 'Clipboard unavailable. Runtime checks printed to console.', timeout: 6000, closable: true });
       }
       copiedRuntimeOk = ok;
       // Also log to console for easy inspection

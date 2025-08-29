@@ -628,19 +628,19 @@
       try {
         const readBack = await navigator.clipboard.readText();
         if (readBack === line) {
-          alert('Task line copied to clipboard.');
+          showSnackbar({ message: 'Task line copied to clipboard.', closable: true });
         } else {
-          alert(line);
+          showSnackbar({ message: line, closable: true });
         }
       } catch (_) {
         // If we cannot read the clipboard (permission), show the line for manual copy
-        alert(line);
+        showSnackbar({ message: line, closable: true });
       }
-    } catch { alert(line); }
+    } catch { showSnackbar({ message: line, closable: true }); }
   }
   async function loadForEdit(filter: ThreadFilter) {
-    // This function is not yet implemented in FilterBar, so we'll just alert for now
-    alert(`Load filter "${filter.name}" for editing.`);
+    // This function is not yet implemented in FilterBar, so surface via snackbar for now
+    showSnackbar({ message: `Load filter "${filter.name}" for editing.`, closable: true });
     // In a real app, you'd set the filter's state in FilterBar
   }
   async function onDeleteSavedFilter(id: string) {
