@@ -233,8 +233,8 @@ function isUnfilteredInbox(thread: GmailThread): boolean {
   }
 }
 
-async function summarizeDirect(subject: string, bodyText?: string, bodyHtml?: string, attachments?: import('$lib/types').GmailAttachment[]): Promise<string> {
-  return aiSummarizeEmail(subject || '', bodyText, bodyHtml, attachments);
+async function summarizeDirect(subject: string, bodyText?: string, bodyHtml?: string, attachments?: import('$lib/types').GmailAttachment[], threadId?: string): Promise<string> {
+  return aiSummarizeEmail(subject || '', bodyText, bodyHtml, attachments, threadId);
 }
 
 async function summarizeBatchRemote(items: Array<{ id: string; text: string }>, apiKey?: string, model?: string, useCache?: boolean, combined = false): Promise<Record<string, string>> {
@@ -365,7 +365,15 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
                 continue;
               }
             }
-            await txThreads.store.put(t as any);
+
+            // Merge minimal incoming metadata with any existing thread record to preserve
+            // cached AI summary fields (summary, summaryStatus, summaryUpdatedAt, bodyHash, etc.)
+            const merged: GmailThread = existing ? { ...existing, ...t } : (t as any);
+            // Ensure labelIds and lastMsgMeta are taken from incoming minimal t
+            merged.labelIds = (t as any).labelIds || merged.labelIds || [];
+            merged.lastMsgMeta = (t as any).lastMsgMeta || merged.lastMsgMeta || { date: 0 };
+
+            await txThreads.store.put(merged as any);
           } catch (e) { pushLog('warn', '[Precompute] Failed to evaluate/put thread', t.threadId, e); }
         }
         await txThreads.done;
@@ -375,6 +383,20 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
     }
 
     const allThreads = await db.getAll('threads');
+    // Sanitize any stale pending markers: if a cached summary exists, ensure
+    // we don't leave the thread in a 'pending' state from older runs.
+    try {
+      const txSan = db.transaction('threads', 'readwrite');
+      for (const t of allThreads) {
+        try {
+          if (t && t.summary && String(t.summary).trim() && (t.summaryStatus === 'pending')) {
+            const next = { ...t, summaryStatus: 'ready', summaryPendingAt: undefined } as any;
+            await txSan.store.put(next);
+          }
+        } catch (_) {}
+      }
+      await txSan.done;
+    } catch (e) { pushLog('warn', '[Precompute] Failed to sanitize pending markers', e); }
     pushLog('debug', '[Precompute] Total threads in DB:', allThreads.length);
     
     const candidates = allThreads.filter((t) => isUnfilteredInbox(t));
@@ -410,9 +432,9 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
       // Without versions, only recompute when missing or in an error/none state
       // or when content appears changed since last summary (bodyHash/summaryUpdatedAt).
       const bodyHashExists = !!t.bodyHash;
-      const contentLikelyUnchanged = bodyHashExists && t.summaryStatus === 'ready' && t.summaryUpdatedAt && (t.summaryUpdatedAt >= (t.lastMsgMeta?.date || 0));
-      const userRequested = !!(t as any).summaryUserRequestedAt;
-      const needsSummary = !t.summary || t.summaryStatus === 'none' || t.summaryStatus === 'error' || (!contentLikelyUnchanged && !!t.summary);
+      // Do NOT trigger recompute if a cached summary exists. Respect any existing
+      // cached summary and only mark missing/error summaries as needing work.
+      const needsSummary = !t.summary || t.summaryStatus === 'none' || t.summaryStatus === 'error';
       const needsSubject = !t.aiSubject || t.aiSubjectStatus === 'none' || t.aiSubjectStatus === 'error';
       if (needsSummary || needsSubject) pending.push(t);
     }
@@ -492,22 +514,35 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
       const tx = db.transaction('threads', 'readwrite');
       for (const p of toMark) {
         const t = p.thread;
-        const summaryVersionMismatch = (t.summaryVersion || 0) !== nowVersion;
-        // Determine if content appears unchanged by comparing stored bodyHash to freshly computed one
-        const contentUnchanged = !!p.bodyHash && !!t.bodyHash && p.bodyHash === t.bodyHash && t.summaryStatus === 'ready' && t.summaryUpdatedAt && t.summaryUpdatedAt >= (t.lastMsgMeta?.date || 0);
-        const userRequested = !!(t as any).summaryUserRequestedAt;
-        const versionRequiresRecompute = summaryVersionMismatch && (!contentUnchanged || userRequested);
-        const needsSummary = !t.summary || t.summaryStatus === 'none' || t.summaryStatus === 'error' || versionRequiresRecompute;
+        // Respect any existing cached summary: only mark as needing work when
+        // there is no cached summary or the status is explicitly none/error.
+        const needsSummary = !t.summary || t.summaryStatus === 'none' || t.summaryStatus === 'error';
         const subjectVersionMismatch = (t.subjectVersion || 0) !== nowVersion;
         const needsSubject = !t.aiSubject || t.aiSubjectStatus === 'none' || t.aiSubjectStatus === 'error' || subjectVersionMismatch;
-        const next: GmailThread = {
+
+        // Avoid overwriting summaryUpdatedAt when merely marking pending for items
+        // that don't currently have a cached summary. Introduce `summaryPendingAt`
+        // to track when precompute marked the thread for processing without implying
+        // an existing cached summary was updated.
+        const now = Date.now();
+        const nextAny: any = {
           ...t,
-          summaryStatus: needsSummary ? 'pending' : t.summaryStatus,
-          summaryUpdatedAt: needsSummary ? Date.now() : t.summaryUpdatedAt,
+          // Never set 'pending' summaryStatus for threads that already have
+          // a cached summary; respect the cached summary instead.
+          summaryStatus: (needsSummary && !(t.summary && String(t.summary).trim())) ? 'pending' : t.summaryStatus,
+          // Preserve summaryUpdatedAt as-is unless we will be writing an actual summary later
+          summaryUpdatedAt: t.summaryUpdatedAt,
+          // Record when precompute marked this thread pending. If the thread already
+          // had a cached summary, prefer to show that timestamp as the base; otherwise use now.
+          summaryPendingAt: needsSummary ? (t.summary ? (t.summaryUpdatedAt || now) : now) : undefined,
           aiSubjectStatus: needsSubject ? 'pending' : t.aiSubjectStatus,
-          aiSubjectUpdatedAt: needsSubject ? Date.now() : t.aiSubjectUpdatedAt
-        };
-        await tx.store.put(next);
+          aiSubjectUpdatedAt: needsSubject ? (t.aiSubject ? (t.aiSubjectUpdatedAt || now) : now) : t.aiSubjectUpdatedAt
+        } as GmailThread;
+        await tx.store.put(nextAny as any);
+        // Mirror the DB-updated timestamps into the in-memory prepared item so
+        // the later persist step does not incorrectly treat the DB row as newer
+        // and skip updating computed AI fields.
+        try { p.thread = nextAny; } catch (_) {}
       }
       await tx.done;
       // Overwrite prepared to only include items we actually marked and will process
@@ -518,8 +553,9 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
     // Decide which items need which computations
     const wantsSummary = prepared.filter((p) => {
       const t = p.thread;
-      const mismatch = (t.summaryVersion || 0) !== nowVersion;
-      return !t.summary || t.summaryStatus === 'none' || t.summaryStatus === 'error' || mismatch;
+      // Never request a summary if a cached summary exists. Only include
+      // threads that lack a summary or are in an explicit none/error state.
+      return !t.summary || t.summaryStatus === 'none' || t.summaryStatus === 'error';
     });
     const wantsSubject = prepared.filter((p) => {
       const t = p.thread;
@@ -693,48 +729,60 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
           subjectText: subjText ? `${subjText.slice(0, 50)}...` : 'none'
         });
         
-        // Guard: avoid overwriting local threads that are newer or which have been removed from INBOX locally
+        // Be aggressive about persisting AI fields: do not block writes based
+        // on timestamps or bodyHash. Only skip when the local copy explicitly
+        // removed INBOX or the thread is in TRASH. Preserve any existing
+        // non-empty AI fields (do not overwrite them) to avoid clobbering a
+        // user-updated subject/summary.
+        let existing: GmailThread | undefined;
+        let existingHasAiSubject = false;
+        let existingHasSummary = false;
         try {
-          const existing = await tx.store.get(t.threadId as any) as GmailThread | undefined;
+          existing = await tx.store.get(t.threadId as any) as GmailThread | undefined;
           if (existing) {
-            const existingLast = Math.max(Number(existing.lastMsgMeta?.date) || 0, Number((existing as any).aiSubjectUpdatedAt) || 0, Number(existing.summaryUpdatedAt) || 0);
-            const incomingLast = Number((t as any).lastMsgMeta?.date) || 0;
             const existingHasInbox = Array.isArray(existing.labelIds) && existing.labelIds.includes('INBOX');
             const incomingHasInbox = Array.isArray((t as any).labelIds) && (t as any).labelIds.includes('INBOX');
-            // If the local copy removed INBOX (archived/snoozed/deleted locally), prefer local and skip overwrite
             if (!existingHasInbox && incomingHasInbox) {
               pushLog('debug', '[Precompute] Skipping persist for', t.threadId, 'local removed INBOX');
               continue;
             }
-            // Explicitly guard against threads moved to TRASH (deleted) - do not re-add or overwrite
             if (Array.isArray(existing.labelIds) && existing.labelIds.includes('TRASH')) {
               pushLog('debug', '[Precompute] Skipping persist for', t.threadId, 'thread is in TRASH');
               continue;
             }
-            if (existingLast > incomingLast) {
-              pushLog('debug', '[Precompute] Skipping persist for', t.threadId, 'local is newer');
-              continue;
-            }
+            existingHasAiSubject = !!(existing.aiSubject && String(existing.aiSubject).trim());
+            existingHasSummary = !!(existing.summary && String(existing.summary).trim());
           }
-        } catch (e) { pushLog('warn', '[Precompute] Failed to check existing thread for persist guard', t.threadId, e); }
+        } catch (e) {
+          pushLog('warn', '[Precompute] Failed to check existing thread for persist guard', t.threadId, e);
+        }
 
+        // Merge: start from existing to preserve local fields, then overlay
+        // incoming metadata, but only set AI fields when existing ones are
+        // empty.
+        const base = existing ? { ...existing } : { ...t };
         const next: GmailThread = {
+          ...base,
           ...t,
-          summary: setSummaryFields && sumOk ? sumText.trim() : t.summary,
-          summaryStatus: setSummaryFields ? (sumOk ? 'ready' : (t.summaryStatus || 'error')) : t.summaryStatus,
-          // Preserve bodyHash + updatedAt; remove version field handling
-          summaryUpdatedAt: setSummaryFields ? nowMs : t.summaryUpdatedAt,
+          summary: (existing && existingHasSummary) ? existing.summary : (setSummaryFields && sumOk ? sumText.trim() : t.summary),
+          summaryStatus: (existing && existingHasSummary) ? (existing.summaryStatus || 'ready') : (setSummaryFields ? (sumOk ? 'ready' : (t.summaryStatus || 'error')) : t.summaryStatus),
+          summaryUpdatedAt: (existing && existingHasSummary) ? (existing.summaryUpdatedAt || nowMs) : (setSummaryFields ? nowMs : t.summaryUpdatedAt),
           bodyHash: p.bodyHash
         } as any;
         if (needsSubj) {
           if (subjOk) {
-            (next as any).aiSubject = subjText.trim();
-            (next as any).aiSubjectStatus = 'ready';
+            if (existing && existingHasAiSubject) {
+              (next as any).aiSubject = (existing as any).aiSubject;
+              (next as any).aiSubjectStatus = (existing as any).aiSubjectStatus || 'ready';
+              (next as any).aiSubjectUpdatedAt = (existing as any).aiSubjectUpdatedAt || nowMs;
+            } else {
+              (next as any).aiSubject = subjText.trim();
+              (next as any).aiSubjectStatus = 'ready';
+              (next as any).aiSubjectUpdatedAt = nowMs;
+            }
           } else {
             (next as any).aiSubjectStatus = (t as any).aiSubjectStatus || 'error';
           }
-          // remove subjectVersion handling
-          (next as any).aiSubjectUpdatedAt = nowMs;
         }
         await tx.store.put(next);
         updatedCount++;
@@ -795,4 +843,52 @@ export async function precomputeNow(limit = 25): Promise<{ processed: number; to
   return result;
 }
 
+
+// On module load, sanitize any lingering 'pending' summary markers for threads
+// that already have a cached summary. Run this in a background task to avoid
+// blocking module initialization (IndexedDB reads/writes can be slow on some
+// environments and should not stall app startup).
+try {
+  if (typeof setTimeout === 'function') {
+    setTimeout(async () => {
+      try {
+        const db = await getDB();
+        const all = await db.getAll('threads');
+        const tx = db.transaction('threads', 'readwrite');
+        let updated = 0;
+        for (const t of all) {
+          try {
+            if (t && t.summary && String(t.summary).trim() && t.summaryStatus === 'pending') {
+              const next = { ...t, summaryStatus: 'ready', summaryPendingAt: undefined } as any;
+              await tx.store.put(next);
+              updated++;
+            }
+          } catch (_) {}
+        }
+        await tx.done;
+        if (updated) pushLog('debug', '[Precompute] Sanitized pending markers on background task, updated:', updated);
+      } catch (e) { pushLog('warn', '[Precompute] Background sanitization failed', e); }
+    }, 0);
+  } else {
+    (async () => {
+      try {
+        const db = await getDB();
+        const all = await db.getAll('threads');
+        const tx = db.transaction('threads', 'readwrite');
+        let updated = 0;
+        for (const t of all as any[]) {
+          try {
+            if (t && t.summary && String(t.summary).trim() && t.summaryStatus === 'pending') {
+              const next = { ...t, summaryStatus: 'ready', summaryPendingAt: undefined } as any;
+              await tx.store.put(next);
+              updated++;
+            }
+          } catch (_) {}
+        }
+        await tx.done;
+        if (updated) pushLog('debug', '[Precompute] Sanitized pending markers on module load, updated:', updated);
+      } catch (e) { pushLog('warn', '[Precompute] Module-load sanitization failed', e); }
+    })();
+  }
+} catch (_) {}
 

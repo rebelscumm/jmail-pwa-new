@@ -76,6 +76,9 @@
   // Consider a summary "ready" for UI purposes if we have any cached summary text.
   // This ensures the UI will prefer showing a previously computed summary while
   // a newer summary (different version) is being recomputed in the background.
+  // Consider a summary "ready" for UI purposes if we have any cached summary text.
+  // We will never treat a cached summary as missing; prefer cached summaries to
+  // avoid rerunning AI in the background.
   const aiSummaryReady = $derived((() => {
     try {
       const s = thread.summary as string | undefined;
@@ -450,10 +453,23 @@
 
       // Quick short-circuit cases first
       if (status === 'pending') {
-        // Include timestamps where available and avoid showing legacy version fields
+        // If a cached summary exists, prefer to present that information and
+        // avoid implying the app will overwrite it. This prevents confusing
+        // tooltips when lingering `pending` markers remain in the DB.
+        if (thread.summary && String(thread.summary).trim()) {
+          let txt = 'Cached AI summary is available and will be used.';
+          if (summaryUpdatedAt) txt += `\nCached summary last updated: ${formatDateTime(summaryUpdatedAt)}`;
+          // Include when the pending marker was set for transparency, but do not
+          // suggest the cached summary will be replaced automatically.
+          const pendingSince = (thread as any).summaryPendingAt || ((thread as any).summaryUpdatedAt === summaryUpdatedAt && (thread as any).summaryStatus === 'pending' ? (thread as any).summaryUpdatedAt : (thread as any).aiSubjectUpdatedAt) || 0;
+          if (pendingSince) txt += `\nBackground recompute started: ${formatDateTime(pendingSince)}`;
+          showTooltip(txt, 8000, e.currentTarget as HTMLElement);
+          return;
+        }
+        // Fallback message when there's no cached summary
         let txt = 'AI summary is being recomputed in the background.';
         if (summaryUpdatedAt) txt += `\nCached summary last updated: ${formatDateTime(summaryUpdatedAt)}`;
-        const pendingSince = (thread as any).summaryUpdatedAt === summaryUpdatedAt && (thread as any).summaryStatus === 'pending' ? (thread as any).summaryUpdatedAt : (thread as any).aiSubjectUpdatedAt || 0;
+        const pendingSince = (thread as any).summaryPendingAt || ((thread as any).summaryUpdatedAt === summaryUpdatedAt && (thread as any).summaryStatus === 'pending' ? (thread as any).summaryUpdatedAt : (thread as any).aiSubjectUpdatedAt) || 0;
         if (pendingSince) txt += `\nRecompute started: ${formatDateTime(pendingSince)}`;
         txt += `\nCached summary present: ${!!thread.summary}`;
         if (thread.summary && String(thread.summary).trim()) txt += `\nContent has changed since cached summary: ${!contentUnchanged ? 'yes' : 'no'}`;
@@ -793,8 +809,8 @@
   <span class="row-headline">
     <span class="title">
       <span class="meta">
-        {#if aiSummaryReady}
-          <span class={`ai-flag ${aiSummaryStale ? 'stale' : ''}`} aria-label={aiSummaryStale ? 'AI summary stale' : 'AI summary available'} title={aiSummaryStale ? 'AI summary stale' : 'AI summary available'}>
+        {#if aiSubjectReady}
+          <span class={`ai-flag ${aiSummaryStale ? 'stale' : ''}`} aria-label={aiSummaryStale ? 'AI subject stale' : 'AI subject available'} title={aiSummaryStale ? 'AI subject stale' : 'AI subject available'}>
             <Icon icon={iconSparkles} />
           </span>
         {:else}

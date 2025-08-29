@@ -46,6 +46,7 @@
   let apiErrorStatus: number | undefined = $state();
   let nextPageToken: string | undefined = $state();
   let syncing = $state(false);
+  let authoritativeSyncProgress = $state({ running: false, pagesCompleted: 0, pagesTotal: 0 });
   let copiedDiagOk = $state(false);
   let debouncedQuery = $state('');
   $effect(() => { const id = setTimeout(() => debouncedQuery = $searchQuery, 300); return () => clearTimeout(id); });
@@ -499,21 +500,44 @@
   // Explicit full INBOX reconciliation: pages through all INBOX message ids,
   // records threadIds seen, updates local DB to remove `INBOX` from threads
   // that are no longer present on the server, and refreshes the in-memory store.
-  async function performAuthoritativeInboxSync() {
+  async function performAuthoritativeInboxSync(opts?: { perPageTimeoutMs?: number; maxRetries?: number }) {
+    const perPageTimeoutMs = opts?.perPageTimeoutMs ?? 20_000; // 20s per page
+    const maxRetries = opts?.maxRetries ?? 2;
     const db = await getDB();
     try {
       const pageSize = 500; // reasonably large page for manual full sync
       let pageToken: string | undefined = undefined;
       const seenThreadIds = new Set<string>();
+      authoritativeSyncProgress = { running: true, pagesCompleted: 0, pagesTotal: 0 };
 
       // Stream thread ids (preferred) rather than messages to avoid missing
       // threads due to message-level pagination nuances.
       while (true) {
-        const page = await listThreadIdsByLabelId('INBOX', pageSize, pageToken);
-        pageToken = page.nextPageToken;
-        if (!page.ids || !page.ids.length) {
+        // Attempt to fetch a page with a per-page timeout and retry policy
+        let page: { ids: string[]; nextPageToken?: string } | null = null;
+        let attempt = 0;
+        while (attempt <= maxRetries && !page) {
+          attempt += 1;
+          try {
+            page = await Promise.race([
+              listThreadIdsByLabelId('INBOX', pageSize, pageToken),
+              new Promise((_, rej) => setTimeout(() => rej(new Error('page_timeout')), perPageTimeoutMs))
+            ]) as any;
+          } catch (e) {
+            if (attempt > maxRetries) throw e; // escalate after retries
+            // small backoff
+            await new Promise((res) => setTimeout(res, 500 * attempt));
+          }
+        }
+        if (!page) break; // defensive
+        // Update progress info
+        authoritativeSyncProgress = { ...authoritativeSyncProgress, pagesCompleted: authoritativeSyncProgress.pagesCompleted + 1 };
+        const pageResolved = page as { ids: string[]; nextPageToken?: string };
+        pageToken = pageResolved.nextPageToken;
+        if (!pageResolved.ids || !pageResolved.ids.length) {
           if (!pageToken) break; else continue;
         }
+        const ids = pageResolved.ids;
         // For threads on this page, fetch summaries only for those missing or
         // needing update in local DB to keep network usage reasonable.
         const toFetch: string[] = [];
@@ -557,6 +581,7 @@
         } catch (_) {}
       }
       await txThreads.done;
+      authoritativeSyncProgress = { ...authoritativeSyncProgress, running: false };
 
       // Refresh in-memory store from authoritative DB state
       try {
@@ -1016,7 +1041,7 @@
           const readySummary = (p.t.summary && p.t.summaryStatus === 'ready') ? p.t.summary : '';
           const messageSummary = readySummary && readySummary.trim()
             ? readySummary
-            : await aiSummarizeEmail(p.subject, p.bodyText, p.bodyHtml);
+            : await aiSummarizeEmail(p.subject, p.bodyText, p.bodyHtml, undefined, p.t.threadId);
           const text = await aiSummarizeSubject(p.subject, undefined, undefined, messageSummary);
           return { id: p.t.threadId, ok: true, text, messageSummary } as const;
         } catch (e) {
@@ -1138,6 +1163,11 @@
           Load more
         {/if}
       </Button>
+      {#if authoritativeSyncProgress.running}
+        <Card variant="outlined" style="display:flex; align-items:center; gap:0.5rem; padding:0.25rem 0.5rem;">
+          <span class="m3-font-body-small">Syncing inbox: {authoritativeSyncProgress.pagesCompleted} pages</span>
+        </Card>
+      {/if}
     </div>
   </div>
 

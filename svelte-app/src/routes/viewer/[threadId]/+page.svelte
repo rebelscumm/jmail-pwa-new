@@ -441,7 +441,7 @@
         } catch (_) {}
       }
       // Compute full message summary first (token heavy), then derive subject from it (token light)
-      const bodyTextOut = await aiSummarizeEmail(subject, bodyText, bodyHtml, m.attachments);
+      const bodyTextOut = await aiSummarizeEmail(subject, bodyText, bodyHtml, m.attachments, currentThread?.threadId);
       const subjectText = await aiSummarizeSubject(subject, undefined, undefined, bodyTextOut);
       aiSubjectSummary = subjectText;
       aiBodySummary = bodyTextOut;

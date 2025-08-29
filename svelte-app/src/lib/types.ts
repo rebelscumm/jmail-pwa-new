@@ -33,6 +33,8 @@ export type GmailThread = {
   summaryVersion?: never;
   /** Last update timestamp for the summary (ms epoch) */
   summaryUpdatedAt?: number;
+  /** When precompute marked the thread as pending for summary generation (ms epoch) */
+  summaryPendingAt?: number;
   /** Timestamp user explicitly requested a regeneration (ms epoch) */
   summaryUserRequestedAt?: number;
   /** Hash of the content used for the current summary (subject+body) */

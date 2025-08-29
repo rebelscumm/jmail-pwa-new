@@ -87,6 +87,12 @@ export function getDB(): Promise<IDBPDatabase<AppDB>> {
           const journal = db.createObjectStore('journal', { keyPath: 'id' });
           journal.createIndex('by_createdAt', 'createdAt');
         }
+        // v3: future migration placeholder for sanitization. Actual sanitization
+        // is performed at runtime in the precompute module to avoid complex
+        // upgrade-time DB reads across environments.
+        if (oldVersion < 3) {
+          // no-op placeholder
+        }
       }
     });
   }

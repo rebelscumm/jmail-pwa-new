@@ -263,8 +263,23 @@ async function callGeminiWithParts(parts: any[], modelOverride?: string): Promis
 
 import { enqueueGemini, getPendingCount } from '$lib/ai/geminiClient';
 
-export async function aiSummarizeEmail(subject: string, bodyText?: string, bodyHtml?: string, attachments?: GmailAttachment[]): Promise<string> {
+export async function aiSummarizeEmail(subject: string, bodyText?: string, bodyHtml?: string, attachments?: GmailAttachment[], threadId?: string): Promise<string> {
   const s = get(settings);
+  // Defensive short-circuit: if caller provides a threadId and a cached summary
+  // exists for that thread, return it immediately to avoid any AI calls.
+  try {
+    if (threadId) {
+      const db = await getDB();
+      try {
+        const t = await db.get('threads', threadId);
+        if (t && t.summary && t.summaryStatus === 'ready') {
+          return String(t.summary || '') || '';
+        }
+      } catch (_) {
+        // ignore DB errors and fall through to normal summarization
+      }
+    }
+  } catch (_) {}
   const hasBody = !!(bodyText || bodyHtml);
   const text = bodyText || htmlToText(bodyHtml) || '';
   const attLines: string[] = [];

@@ -440,6 +440,7 @@ import { precomputeStatus } from '$lib/stores/precompute';
   onMount(() => { const id = setInterval(() => { now = Date.now(); }, 250); return () => clearInterval(id); });
 
   // Optional inbox label totals fetched from Gmail (preferred authoritative counts)
+  // Note: use thread-level counts (threadsTotal/threadsUnread) to match local thread-based counters
   let inboxMessagesTotal = $state<number | undefined>(undefined);
   let inboxMessagesUnread = $state<number | undefined>(undefined);
 
@@ -447,13 +448,13 @@ import { precomputeStatus } from '$lib/stores/precompute';
     try {
       const { getLabel } = await import('$lib/gmail/api');
       const inboxLabel = await getLabel('INBOX');
-      const mt = typeof inboxLabel?.messagesTotal === 'number' ? inboxLabel.messagesTotal : undefined;
-      const mu = typeof inboxLabel?.messagesUnread === 'number' ? inboxLabel.messagesUnread : undefined;
-      inboxMessagesTotal = mt;
-      inboxMessagesUnread = mu;
+      const tt = typeof inboxLabel?.threadsTotal === 'number' ? inboxLabel.threadsTotal : undefined;
+      const tu = typeof inboxLabel?.threadsUnread === 'number' ? inboxLabel.threadsUnread : undefined;
+      inboxMessagesTotal = tt;
+      inboxMessagesUnread = tu;
       // Immediately update the rendered counters with authoritative values when available
-      if (typeof mt === 'number') renderedInboxCount = mt;
-      if (typeof mu === 'number') renderedUnreadCount = mu;
+      if (typeof tt === 'number') renderedInboxCount = tt;
+      if (typeof tu === 'number') renderedUnreadCount = tu;
     } catch (e) {
       inboxMessagesTotal = undefined;
       inboxMessagesUnread = undefined;
