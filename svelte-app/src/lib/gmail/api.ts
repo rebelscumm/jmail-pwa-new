@@ -220,6 +220,16 @@ export async function listMessageIdsByLabelId(labelId: string, maxResults = 25, 
   return { ids: (data.messages || []).map((m) => m.id), nextPageToken: data.nextPageToken };
 }
 
+export async function listThreadIdsByLabelId(labelId: string, maxResults = 25, pageToken?: string): Promise<{ ids: string[]; nextPageToken?: string }> {
+  const q = new URLSearchParams({ maxResults: String(maxResults) });
+  q.append('labelIds', labelId);
+  if (pageToken) q.set('pageToken', pageToken);
+  const data = await api<{ threads?: { id: string }[]; nextPageToken?: string }>(
+    `/threads?${q.toString()}`
+  );
+  return { ids: (data.threads || []).map((t) => t.id), nextPageToken: data.nextPageToken };
+}
+
 export async function getMessageMetadata(id: string): Promise<GmailMessage> {
   type GmailMessageApiResponse = {
     id: string;

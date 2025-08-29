@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { get } from 'svelte/store';
   import { initAuth, acquireTokenInteractive, authState, getAuthDiagnostics, resolveGoogleClientId } from '$lib/gmail/auth';
-  import { listLabels, listInboxMessageIds, getMessageMetadata, GmailApiError, getProfile, copyGmailDiagnosticsToClipboard, getAndClearGmailDiagnostics, listHistory, getThreadSummary } from '$lib/gmail/api';
+  import { listLabels, listInboxMessageIds, listThreadIdsByLabelId, getMessageMetadata, GmailApiError, getProfile, copyGmailDiagnosticsToClipboard, getAndClearGmailDiagnostics, listHistory, getThreadSummary } from '$lib/gmail/api';
   import { labels as labelsStore } from '$lib/stores/labels';
   import { threads as threadsStore, messages as messagesStore } from '$lib/stores/threads';
   import { getDB } from '$lib/db/indexeddb';
@@ -248,11 +248,14 @@
         arr.sort((a, b) => getDate(b) - getDate(a));
         break;
     }
-    // Keep threads with pending AI subject at the bottom until ready
+    // Prioritize threads that already have an AI summary, then others,
+    // and keep threads with pending AI subject at the bottom until ready
     try {
-      const ready = arr.filter((t) => ((t as any).aiSubjectStatus || 'none') !== 'pending');
       const pending = arr.filter((t) => ((t as any).aiSubjectStatus || 'none') === 'pending');
-      return [...ready, ...pending];
+      const notPending = arr.filter((t) => ((t as any).aiSubjectStatus || 'none') !== 'pending');
+      const withSummary = notPending.filter((t) => (t.summaryStatus === 'ready' && (t.summary || '').trim() !== ''));
+      const withoutSummary = notPending.filter((t) => !(t.summaryStatus === 'ready' && (t.summary || '').trim() !== ''));
+      return [...withSummary, ...withoutSummary, ...pending];
     } catch (_) {
       return arr;
     }
@@ -460,8 +463,9 @@
       try {
         showSnackbar({ message: 'Refreshing inbox…' });
         syncing = true;
-        // Perform an incremental hydrate without clearing local cache to avoid UI flash
-        await hydrate();
+        // Perform a full authoritative INBOX sync (pages through all messages)
+        // to reconcile removals performed on other devices.
+        await performAuthoritativeInboxSync();
         showSnackbar({ message: 'Inbox up to date', timeout: 3000 });
       } catch (e) {
         setApiError(e);
@@ -490,6 +494,80 @@
     }
     // Best-effort automatic diagnostics copy only in dev (may be blocked without user gesture)
     if (import.meta.env.DEV) void copyDiagnostics();
+  }
+
+  // Explicit full INBOX reconciliation: pages through all INBOX message ids,
+  // records threadIds seen, updates local DB to remove `INBOX` from threads
+  // that are no longer present on the server, and refreshes the in-memory store.
+  async function performAuthoritativeInboxSync() {
+    const db = await getDB();
+    try {
+      const pageSize = 500; // reasonably large page for manual full sync
+      let pageToken: string | undefined = undefined;
+      const seenThreadIds = new Set<string>();
+
+      // Stream thread ids (preferred) rather than messages to avoid missing
+      // threads due to message-level pagination nuances.
+      while (true) {
+        const page = await listThreadIdsByLabelId('INBOX', pageSize, pageToken);
+        pageToken = page.nextPageToken;
+        if (!page.ids || !page.ids.length) {
+          if (!pageToken) break; else continue;
+        }
+        // For threads on this page, fetch summaries only for those missing or
+        // needing update in local DB to keep network usage reasonable.
+        const toFetch: string[] = [];
+        for (const tid of page.ids) {
+          try {
+            const existing = await db.get('threads', tid) as any | undefined;
+            if (!existing) toFetch.push(tid);
+            seenThreadIds.add(tid);
+          } catch (_) { seenThreadIds.add(tid); toFetch.push(tid); }
+        }
+        // Fetch thread summaries with modest concurrency
+        const fetched = await mapWithConcurrency(toFetch, 4, async (tid) => {
+          try { return await getThreadSummary(tid); } catch (e) { return null; }
+        });
+        const txMsgs = db.transaction('messages', 'readwrite');
+        const txThreads = db.transaction('threads', 'readwrite');
+        for (const f of fetched) {
+          if (!f) continue;
+          try {
+            for (const m of f.messages) {
+              try { await txMsgs.store.put(m); } catch (_) {}
+            }
+            try { await txThreads.store.put(f.thread); } catch (_) {}
+          } catch (_) {}
+        }
+        await txMsgs.done;
+        await txThreads.done;
+        if (!pageToken) break;
+      }
+
+      // Reconcile threads in DB: remove INBOX label from threads not seen
+      const txThreads = db.transaction('threads', 'readwrite');
+      const allThreads = await txThreads.store.getAll();
+      for (const t of (allThreads || [])) {
+        try {
+          const labels = Array.isArray(t.labelIds) ? t.labelIds.slice() : [];
+          if (labels.includes('INBOX') && !seenThreadIds.has(t.threadId)) {
+            const next = { ...t, labelIds: labels.filter((l) => l !== 'INBOX') } as any;
+            await txThreads.store.put(next);
+          }
+        } catch (_) {}
+      }
+      await txThreads.done;
+
+      // Refresh in-memory store from authoritative DB state
+      try {
+        const refreshed = await db.getAll('threads');
+        threadsStore.set(refreshed as any);
+      } catch (_) {}
+    } catch (e) {
+      // Surface a subtle telemetry snackbar so user can retry if needed
+      try { showSnackbar({ message: 'Full sync failed', timeout: 5000, actions: { 'Retry': () => { void performAuthoritativeInboxSync(); } } }); } catch (_) {}
+      throw e;
+    }
   }
 
   async function signIn() {
