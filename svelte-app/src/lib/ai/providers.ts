@@ -2,6 +2,7 @@ import { get } from 'svelte/store';
 import { settings } from '$lib/stores/settings';
 import { redactPII, htmlToText } from './redact';
 import type { GmailAttachment } from '$lib/types';
+import { getDB } from '$lib/db';
 
 export type AIResult = { text: string };
 
@@ -79,116 +80,188 @@ function getOpenAIRateLimitHeaders(res: Response): Record<string, string | null>
   };
 }
 
-async function callOpenAI(prompt: string, modelOverride?: string): Promise<AIResult> {
-  const s = get(settings);
-  const model = modelOverride || s.aiModel || 'gpt-4o-mini';
-  const url = '/api/openai';
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], temperature: 0.2, apiKey: s.aiApiKey || undefined })
-  });
-  if (!res.ok) {
-    const headers = getOpenAIRateLimitHeaders(res);
-    let body: any = undefined;
-    let textFallback: string | undefined = undefined;
-    try {
-      body = await res.clone().json();
-    } catch (_) {
-      try { textFallback = await res.clone().text(); } catch (_) { /* ignore */ }
-    }
-
-    const errorCode = typeof body?.error?.code === 'string' ? body.error.code : undefined;
-    const errorMessageFromBody =
-      typeof body?.error === 'string'
-        ? body.error
-        : (typeof body?.error?.message === 'string' ? body.error.message : undefined);
-
-    let baseMsg = `OpenAI error ${res.status}`;
-    if (res.status === 429 && errorCode === 'insufficient_quota') {
-      baseMsg = 'OpenAI insufficient quota';
-    } else if (res.status === 401 || errorCode === 'invalid_api_key') {
-      baseMsg = 'OpenAI invalid API key';
-    } else if (res.status === 429) {
-      baseMsg = 'OpenAI rate limit exceeded';
-    } else if (errorMessageFromBody) {
-      // Normalize common server error strings
-      if (/api key not set/i.test(errorMessageFromBody)) {
-        baseMsg = 'OpenAI API key not set';
-      } else {
-        baseMsg = `OpenAI error ${res.status}: ${errorMessageFromBody}`;
+// Persist providerState across reloads using indexeddb 'settings' store under key 'aiQuotaState'
+async function loadProviderState(): Promise<void> {
+  try {
+    const db = await getDB();
+    const saved = await db.get('settings', 'aiQuotaState');
+    if (saved && typeof saved === 'object') {
+      for (const k of Object.keys(saved as any)) {
+        try { providerState[k] = (saved as any)[k]; } catch {}
       }
     }
+  } catch (e) { /* ignore */ }
+}
 
-    throw new AIProviderError({ provider: 'openai', message: baseMsg, status: res.status, headers, body: body ?? textFallback });
+async function saveProviderState(): Promise<void> {
+  try {
+    const db = await getDB();
+    // only persist shallow serializable state
+    await db.put('settings', { ...(await (async () => { try { const copy: any = {}; for (const k of Object.keys(providerState)) copy[k] = providerState[k]; return copy; } catch { return {}; } })()) }, 'aiQuotaState');
+  } catch (e) { /* ignore */ }
+}
+
+// Hydrate provider state at module load (non-blocking)
+(async () => { try { await loadProviderState(); } catch (_) {} })();
+
+// Simple in-memory quota tracking/backoff per provider
+const providerState: Record<string, { last429At?: number; backoffMs?: number; failCount?: number }> = {};
+
+async function withQuotaGuard<T>(provider: string, fn: () => Promise<T>): Promise<T> {
+  try {
+    const state = providerState[provider] || (providerState[provider] = { last429At: undefined, backoffMs: 0, failCount: 0 });
+    // If we previously saw rate limits, enforce a backoff delay
+    if (state.backoffMs && state.last429At) {
+      const since = Date.now() - state.last429At;
+      if (since < state.backoffMs) {
+        // Wait remaining time
+        const wait = state.backoffMs - since;
+        await new Promise((res) => setTimeout(res, wait));
+      }
+    }
+    const res = await fn();
+    // success -> reset state
+    state.failCount = 0;
+    state.backoffMs = 0;
+    state.last429At = undefined;
+    return res;
+  } catch (e: any) {
+    // If it's a rate-limit error, increase backoff
+    if (e instanceof AIProviderError && e.status === 429) {
+      const state = providerState[provider] || (providerState[provider] = { last429At: undefined, backoffMs: 0, failCount: 0 });
+      state.failCount = (state.failCount || 0) + 1;
+      state.last429At = Date.now();
+      // exponential backoff with cap (e.g., 1s, 2s, 4s, 8s, ... up to 60s)
+      const next = Math.min(60000, Math.pow(2, Math.min(10, state.failCount)) * 1000);
+      state.backoffMs = next;
+      // Persist updated state (fire-and-forget)
+      try { saveProviderState(); } catch (_) {}
+      throw e;
+    }
+    throw e;
   }
-  const data = await safeParseJson(res);
-  const text = data?.choices?.[0]?.message?.content?.trim?.() || '';
-  return { text };
+}
+
+async function callOpenAI(prompt: string, modelOverride?: string): Promise<AIResult> {
+  return await withQuotaGuard('openai', async () => {
+    const s = get(settings);
+    const model = modelOverride || s.aiModel || 'gpt-4o-mini';
+    const url = '/api/openai';
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], temperature: 0.2, apiKey: s.aiApiKey || undefined })
+    });
+    if (!res.ok) {
+      const headers = getOpenAIRateLimitHeaders(res);
+      let body: any = undefined;
+      let textFallback: string | undefined = undefined;
+      try {
+        body = await res.clone().json();
+      } catch (_) {
+        try { textFallback = await res.clone().text(); } catch (_) { /* ignore */ }
+      }
+
+      const errorCode = typeof body?.error?.code === 'string' ? body.error.code : undefined;
+      const errorMessageFromBody =
+        typeof body?.error === 'string'
+          ? body.error
+          : (typeof body?.error?.message === 'string' ? body.error.message : undefined);
+
+      let baseMsg = `OpenAI error ${res.status}`;
+      if (res.status === 429 && errorCode === 'insufficient_quota') {
+        baseMsg = 'OpenAI insufficient quota';
+      } else if (res.status === 401 || errorCode === 'invalid_api_key') {
+        baseMsg = 'OpenAI invalid API key';
+      } else if (res.status === 429) {
+        baseMsg = 'OpenAI rate limit exceeded';
+      } else if (errorMessageFromBody) {
+        // Normalize common server error strings
+        if (/api key not set/i.test(errorMessageFromBody)) {
+          baseMsg = 'OpenAI API key not set';
+        } else {
+          baseMsg = `OpenAI error ${res.status}: ${errorMessageFromBody}`;
+        }
+      }
+
+      throw new AIProviderError({ provider: 'openai', message: baseMsg, status: res.status, headers, body: body ?? textFallback });
+    }
+    const data = await safeParseJson(res);
+    const text = data?.choices?.[0]?.message?.content?.trim?.() || '';
+    return { text };
+  });
 }
 
 async function callAnthropic(prompt: string, modelOverride?: string): Promise<AIResult> {
-  const s = get(settings);
-  const key = s.aiApiKey || '';
-  const model = modelOverride || s.aiModel || 'claude-3-haiku-20240307';
-  const url = 'https://api.anthropic.com/v1/messages';
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model, max_tokens: 400, messages: [{ role: 'user', content: prompt }] })
+  return await withQuotaGuard('anthropic', async () => {
+    const s = get(settings);
+    const key = s.aiApiKey || '';
+    const model = modelOverride || s.aiModel || 'claude-3-haiku-20240307';
+    const url = 'https://api.anthropic.com/v1/messages';
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({ model, max_tokens: 400, messages: [{ role: 'user', content: prompt }] })
+    });
+    if (!res.ok) {
+      let body: any = undefined;
+      try { body = await res.clone().json(); } catch (_) { try { body = await res.clone().text(); } catch (_) { body = undefined; } }
+      const message = res.status === 429 ? 'Anthropic rate limit exceeded' : `Anthropic error ${res.status}`;
+      throw new AIProviderError({ provider: 'anthropic', message, status: res.status, headers: {}, body });
+    }
+    const data = await safeParseJson(res);
+    const text = data?.content?.[0]?.text?.trim?.() || '';
+    return { text };
   });
-  if (!res.ok) {
-    let body: any = undefined;
-    try { body = await res.clone().json(); } catch (_) { try { body = await res.clone().text(); } catch (_) { body = undefined; } }
-    const message = res.status === 429 ? 'Anthropic rate limit exceeded' : `Anthropic error ${res.status}`;
-    throw new AIProviderError({ provider: 'anthropic', message, status: res.status, headers: {}, body });
-  }
-  const data = await safeParseJson(res);
-  const text = data?.content?.[0]?.text?.trim?.() || '';
-  return { text };
 }
 
 async function callGemini(prompt: string, modelOverride?: string): Promise<AIResult> {
-  const s = get(settings);
-  const key = s.aiApiKey || '';
-  const model = modelOverride || s.aiModel || 'gemini-1.5-flash';
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+  return await withQuotaGuard('gemini', async () => {
+    const s = get(settings);
+    const key = s.aiApiKey || '';
+    const model = modelOverride || s.aiModel || 'gemini-1.5-flash';
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+    });
+    if (!res.ok) {
+      let body: any = undefined;
+      try { body = await res.clone().json(); } catch (_) { try { body = await res.clone().text(); } catch (_) { body = undefined; } }
+      const message = res.status === 429 ? 'Gemini rate limit exceeded' : `Gemini error ${res.status}`;
+      throw new AIProviderError({ provider: 'gemini', message, status: res.status, headers: {}, body });
+    }
+    const data = await safeParseJson(res);
+    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim?.() || '';
+    return { text };
   });
-  if (!res.ok) {
-    let body: any = undefined;
-    try { body = await res.clone().json(); } catch (_) { try { body = await res.clone().text(); } catch (_) { body = undefined; } }
-    const message = res.status === 429 ? 'Gemini rate limit exceeded' : `Gemini error ${res.status}`;
-    throw new AIProviderError({ provider: 'gemini', message, status: res.status, headers: {}, body });
-  }
-  const data = await safeParseJson(res);
-  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim?.() || '';
-  return { text };
 }
 
 async function callGeminiWithParts(parts: any[], modelOverride?: string): Promise<AIResult> {
-  const s = get(settings);
-  const key = s.aiApiKey || '';
-  const model = modelOverride || s.aiModel || 'gemini-1.5-flash';
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ contents: [{ role: 'user', parts }] })
+  return await withQuotaGuard('gemini', async () => {
+    const s = get(settings);
+    const key = s.aiApiKey || '';
+    const model = modelOverride || s.aiModel || 'gemini-1.5-flash';
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contents: [{ role: 'user', parts }] })
+    });
+    if (!res.ok) {
+      let body: any = undefined;
+      try { body = await res.clone().json(); } catch (_) { try { body = await res.clone().text(); } catch (_) { body = undefined; } }
+      const message = res.status === 429 ? 'Gemini rate limit exceeded' : `Gemini error ${res.status}`;
+      throw new AIProviderError({ provider: 'gemini', message, status: res.status, headers: {}, body });
+    }
+    const data = await safeParseJson(res);
+    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim?.() || '';
+    return { text };
   });
-  if (!res.ok) {
-    let body: any = undefined;
-    try { body = await res.clone().json(); } catch (_) { try { body = await res.clone().text(); } catch (_) { body = undefined; } }
-    const message = res.status === 429 ? 'Gemini rate limit exceeded' : `Gemini error ${res.status}`;
-    throw new AIProviderError({ provider: 'gemini', message, status: res.status, headers: {}, body });
-  }
-  const data = await safeParseJson(res);
-  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim?.() || '';
-  return { text };
 }
+
+import { enqueueGemini, getPendingCount } from '$lib/ai/geminiClient';
 
 export async function aiSummarizeEmail(subject: string, bodyText?: string, bodyHtml?: string, attachments?: GmailAttachment[]): Promise<string> {
   const s = get(settings);
@@ -241,12 +314,29 @@ export async function aiSummarizeEmail(subject: string, bodyText?: string, bodyH
       else if (a.text) parts.push({ text: `\n${a.text}` });
       else parts.push({ text: `\n(No attachment content available; summarize by filename/type only.)` });
     }
-    out = await callGeminiWithParts(parts, model);
+    // Use gemini client batching for non-streaming multimodal requests
+    try {
+      const resp = await enqueueGemini({ id: `summ:${Math.random().toString(36).slice(2,9)}`, model, parts, streaming: false, priority: 'interactive' });
+      out = { text: resp.text || '' } as any;
+    } catch (e) {
+      // fallback to direct call
+      out = await callGeminiWithParts(parts, model);
+    }
   } else {
     const fullPrompt = hasBody
       ? `${prompt}\n\nEmail:\n${redacted}${attBlock}`
       : `${prompt}\n\nSubject:\n${redacted}${attBlock}`;
-    out = provider === 'anthropic' ? await callAnthropic(fullPrompt, model) : provider === 'gemini' ? await callGemini(fullPrompt, model) : await callOpenAI(fullPrompt, model);
+    if (provider === 'gemini') {
+      // For interactive summarization prefer enqueueGemini but allow fallback
+      try {
+        const resp = await enqueueGemini({ id: `summ:${Math.random().toString(36).slice(2,9)}`, model, prompt: fullPrompt, streaming: false, priority: 'interactive' });
+        out = { text: resp.text || '' } as any;
+      } catch (e) {
+        out = await callGemini(fullPrompt, model);
+      }
+    } else {
+      out = provider === 'anthropic' ? await callAnthropic(fullPrompt, model) : await callOpenAI(fullPrompt, model);
+    }
   }
   let result = out.text || '';
   if (!hasBody) {

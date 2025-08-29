@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { get } from 'svelte/store';
   import { initAuth, acquireTokenInteractive, authState, getAuthDiagnostics, resolveGoogleClientId } from '$lib/gmail/auth';
   import { listLabels, listInboxMessageIds, getMessageMetadata, GmailApiError, getProfile, copyGmailDiagnosticsToClipboard, getAndClearGmailDiagnostics } from '$lib/gmail/api';
   import { labels as labelsStore } from '$lib/stores/labels';
@@ -37,7 +38,7 @@
     { key: 'subject_az', label: 'Subject (A–Z)' },
     { key: 'subject_za', label: 'Subject (Z–A)' }
   ];
-  let CLIENT_ID: string = import.meta.env.VITE_GOOGLE_CLIENT_ID as string;
+  let CLIENT_ID: string = $state(import.meta.env.VITE_GOOGLE_CLIENT_ID as string);
 
   let loading = $state(true);
   let ready = $state(false);
@@ -283,17 +284,51 @@
     const cachedThreads = await db.getAll('threads');
     if (cachedThreads?.length) {
       const current = $threadsStore || [];
-      const merged = [...current, ...cachedThreads].reduce((acc, t) => {
-        const idx = acc.findIndex((x) => x.threadId === t.threadId);
-        if (idx >= 0) acc[idx] = t; else acc.push(t);
-        return acc;
-      }, [] as typeof current);
+      function threadLastActivity(th: any) {
+        try { return Math.max(Number(th?.lastMsgMeta?.date) || 0, Number((th as any).aiSubjectUpdatedAt) || 0, Number((th as any).summaryUpdatedAt) || 0); } catch { return 0; }
+      }
+      const merged = current.slice();
+      for (const t of cachedThreads) {
+        const idx = merged.findIndex((x: any) => x.threadId === t.threadId);
+        if (idx >= 0) {
+          try {
+            const existing = merged[idx];
+            const existingLast = threadLastActivity(existing);
+            const cachedLast = threadLastActivity(t);
+            // Prefer in-memory/local thread when it appears newer, or when it has been removed from INBOX locally
+            if (existingLast >= cachedLast) continue;
+            if (Array.isArray(existing.labelIds) && !existing.labelIds.includes('INBOX')) continue;
+            // Otherwise merge cached data into the existing slot
+            merged[idx] = { ...existing, ...t };
+          } catch {
+            merged[idx] = t;
+          }
+        } else {
+          merged.push(t);
+        }
+      }
       threadsStore.set(merged);
     }
     const cachedMessages = await db.getAll('messages');
     if (cachedMessages?.length) {
       const dict: Record<string, import('$lib/types').GmailMessage> = { ...$messagesStore };
-      for (const m of cachedMessages) dict[m.id] = m;
+      for (const m of cachedMessages) {
+        try {
+          const existing = dict[m.id];
+          // Prefer existing in-memory message if it looks newer (by internalDate) or already contains body
+          if (existing) {
+            const existingDate = Number(existing.internalDate) || 0;
+            const incomingDate = Number(m.internalDate) || 0;
+            const existingHasBody = !!(existing.bodyText || existing.bodyHtml);
+            const incomingHasBody = !!(m.bodyText || m.bodyHtml);
+            if (existingHasBody && !incomingHasBody) continue;
+            if (existingDate >= incomingDate) continue;
+          }
+          dict[m.id] = m;
+        } catch {
+          dict[m.id] = m;
+        }
+      }
       messagesStore.set(dict);
     }
   }
@@ -347,8 +382,7 @@
       try {
         showSnackbar({ message: 'Refreshing inbox…' });
         syncing = true;
-        // Clear stale local cache before fetching fresh data
-        try { await resetInboxCache(); } catch {}
+        // Perform an incremental hydrate without clearing local cache to avoid UI flash
         await hydrate();
         showSnackbar({ message: 'Inbox up to date', timeout: 3000 });
       } catch (e) {
@@ -413,7 +447,7 @@
         threadsStore.set(cachedThreads);
       } else {
         const merged = [...current, ...cachedThreads].reduce((acc, t) => {
-          const idx = acc.findIndex((x) => x.threadId === t.threadId);
+          const idx = acc.findIndex((candidate: any) => candidate.threadId === t.threadId);
           if (idx >= 0) acc[idx] = t; else acc.push(t);
           return acc;
         }, [] as typeof current);
@@ -440,7 +474,7 @@
     await tx.done;
     labelsStore.set(remoteLabels);
 
-    // Messages + Threads (first 25) and label stats for accurate counts
+    // Messages + Threads (first N) and label stats for accurate counts
     // Optional profile ping only in dev for diagnostics
     if (import.meta.env.DEV) { try { await getProfile(); } catch (_) {} }
     // Fetch INBOX label metadata for totals
@@ -455,7 +489,8 @@
     } catch (_) {
       inboxLabelStats = null;
     }
-    const page = await listInboxMessageIds(25);
+    const pageSize = Number($settings.inboxPageSize || 25);
+    const page = await listInboxMessageIds(pageSize);
     nextPageToken = page.nextPageToken;
     const msgs = await mapWithConcurrency(page.ids, 4, (id) => getMessageMetadata(id));
     const threadMap: Record<string, { messageIds: string[]; labelIds: Record<string, true>; last: { from?: string; subject?: string; date?: number } }> = {};
@@ -487,12 +522,12 @@
             ...base,
             summary: prev.summary,
             summaryStatus: prev.summaryStatus,
-            summaryVersion: prev.summaryVersion,
+            // drop legacy summaryVersion preservation
             summaryUpdatedAt: prev.summaryUpdatedAt,
             bodyHash: prev.bodyHash,
             aiSubject: (prev as any).aiSubject,
             aiSubjectStatus: (prev as any).aiSubjectStatus,
-            subjectVersion: (prev as any).subjectVersion,
+            // drop legacy subjectVersion preservation
             aiSubjectUpdatedAt: (prev as any).aiSubjectUpdatedAt
           } as any;
           if (changed) {
@@ -521,7 +556,7 @@
     await txThreads.done;
     const current = $threadsStore || [];
     const merged = [...current, ...threadList].reduce((acc, t) => {
-      const idx = acc.findIndex((x) => x.threadId === t.threadId);
+      const idx = acc.findIndex((candidate: any) => candidate.threadId === t.threadId);
       if (idx >= 0) acc[idx] = { ...acc[idx], ...t } as any; else acc.push(t);
       return acc;
     }, [] as typeof current);
@@ -553,13 +588,77 @@
         void summarizeSubjectsForThreads(newlyArrived);
       }
     } catch (_) {}
+
+    // Additionally: if any inbox threads are missing AI summaries/subjects (not just newly arrived),
+    // kick off a full precompute in the background and surface a snackbar + progress indicator.
+    try {
+      // Dynamic imports so this stays lazy and only runs in-browser
+      const precomputeModule = await import('$lib/ai/precompute');
+      const precomputeStoreModule = await import('$lib/stores/precompute');
+      // Check if a precompute is already running
+      let isRunning = false;
+      try {
+        const unsub = precomputeStoreModule.precomputeStatus.subscribe((s) => { isRunning = !!s.isRunning; });
+        try { unsub(); } catch (_) {}
+      } catch (_) { isRunning = false; }
+    
+      if (!isRunning) {
+        // Determine if any inbox thread needs processing
+        try {
+          const allThreads = await db.getAll('threads');
+          const needAny = (allThreads || []).some((t: any) => {
+            try {
+              const labels = t.labelIds || [];
+              if (!labels.includes('INBOX')) return false;
+              // Respect cached summaries by default: only recompute when missing
+              // or in an error/none state. Subject recompute is similar.
+              const hasCachedSummary = !!t.summary;
+              const needsSummary = !hasCachedSummary || t.summaryStatus === 'none' || t.summaryStatus === 'error';
+              const needsSubject = !(t.aiSubject) || (t.aiSubjectStatus || 'none') === 'none' || (t.aiSubjectStatus || 'none') === 'error';
+              return needsSummary || needsSubject;
+            } catch (_) { return false; }
+          });
+          if (needAny) {
+            // Respect user setting: if precomputeSummaries is disabled, inform the user instead of starting
+            try {
+              const { settings: settingsStore } = await import('$lib/stores/settings');
+              const s = get(settingsStore);
+              if (!s?.precomputeSummaries) {
+                try {
+                  const rootCauses = 'Possible root causes: missing summary field, precompute disabled, missing Gmail body scopes, filtered threads, previous precompute failure.';
+                  showSnackbar({ message: `AI precompute is disabled in Settings. Enable Precompute summaries to allow background AI processing.\n${rootCauses}`, timeout: 9000, actions: { 'Open Settings': () => { location.href = '/settings'; } } });
+                } catch (_) {}
+              } else {
+                try { showSnackbar({ message: 'Starting AI precompute…' }); } catch (_) {}
+                // Call precompute and handle skip reasons so the user sees the real outcome
+                if (s?.precomputeAutoRun !== false) {
+                  try {
+                    const result: any = await precomputeModule.precomputeNow(25);
+                    if (result && result.__reason) {
+                      showSnackbar({ message: `Precompute skipped: ${result.__reason}`, timeout: 6000, actions: { 'Force run': async () => { await precomputeModule.precomputeNow(25); } } });
+                    }
+                  } catch (e) {
+                    // ignore
+                  }
+                }
+              }
+            } catch (_) {
+              // If settings couldn't be loaded for some reason, fall back to starting precompute
+              try { showSnackbar({ message: 'Starting AI precompute…' }); } catch (_) {}
+              void precomputeModule.precomputeNow(25);
+            }
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
   }
 
   async function loadMore() {
     if (!nextPageToken) return;
     syncing = true;
     try {
-      const page = await listInboxMessageIds(25, nextPageToken);
+      const pageSize = Number($settings.inboxPageSize || 25);
+      const page = await listInboxMessageIds(pageSize, nextPageToken);
       nextPageToken = page.nextPageToken;
       const msgs = await mapWithConcurrency(page.ids, 4, (id) => getMessageMetadata(id));
       const db = await getDB();
@@ -746,7 +845,7 @@
       // Persist and update store
       const tx = db.transaction('threads', 'readwrite');
       const nowMs = Date.now();
-      const nowVersion = Number($settings.aiSummaryVersion || 1);
+      const nowVersion = undefined as any;
       for (const r of results) {
         try {
           const current = (await tx.store.get(r.id)) as import('$lib/types').GmailThread | undefined;

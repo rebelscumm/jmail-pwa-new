@@ -4,6 +4,7 @@
   import { settings } from '$lib/stores/settings';
   import { resolveRule, normalizeRuleKey } from '$lib/snooze/rules';
   import Chip from '$lib/forms/Chip.svelte';
+  import MenuItem from '$lib/containers/MenuItem.svelte';
   import DatePickerDocked from '$lib/forms/DatePickerDocked.svelte';
 
   const { onSelect } = $props<{ onSelect: (ruleKey: string) => void }>();

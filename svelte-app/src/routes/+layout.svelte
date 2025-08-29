@@ -1,17 +1,9 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
-  import iconHome from "@ktibow/iconset-material-symbols/home-outline";
-  import iconHomeS from "@ktibow/iconset-material-symbols/home";
-  import iconPalette from "@ktibow/iconset-material-symbols/palette-outline";
-  import iconPaletteS from "@ktibow/iconset-material-symbols/palette";
-  import iconOutbox from "@ktibow/iconset-material-symbols/outbox-outline";
-  import iconOutboxS from "@ktibow/iconset-material-symbols/outbox";
-  import iconBook from "@ktibow/iconset-material-symbols/book-2-outline";
-  import iconBookS from "@ktibow/iconset-material-symbols/book-2";
-  import iconAnimation from "@ktibow/iconset-material-symbols/animation";
-  import iconAnimationS from "@ktibow/iconset-material-symbols/animation";
+  // Sidebar icons removed because sidebar tabs are hidden
   import { base } from "$app/paths";
   import { page } from "$app/state";
+  import { get } from 'svelte/store';
   import NavCMLX from "$lib/nav/NavCMLX.svelte";
   import NavCMLXItem from "$lib/nav/NavCMLXItem.svelte";
   import { styling } from "./themeStore";
@@ -125,6 +117,25 @@
     import('$lib/db/backups').then((m) => m.maybeCreateWeeklySnapshot());
     // Kick a small precompute tick shortly after startup
     try { setTimeout(() => { import('$lib/ai/precompute').then((m) => m.tickPrecompute(6)); }, 4000); } catch {}
+    // Schedule nightly/initial backfill at user-configured anchorHour if enabled
+    (async () => {
+      try {
+        const s: any = get(appSettings);
+        if (s?.precomputeSummaries && s?.precomputeAutoRun) {
+          const anchorHour = Number(s.anchorHour || 5);
+          const now = new Date();
+          const next = new Date(now);
+          next.setHours(anchorHour, 0, 0, 0);
+          if (next.getTime() <= now.getTime()) next.setDate(next.getDate() + 1);
+          const delay = Math.max(0, next.getTime() - now.getTime());
+          // One-off timeout to fire at the next anchor hour, then repeat every 24h
+          setTimeout(() => {
+            try { import('$lib/ai/precompute').then((m) => m.precomputeNow(200)).catch(() => {}); } catch (_) {}
+            try { setInterval(() => { import('$lib/ai/precompute').then((m) => m.precomputeNow(200)).catch(() => {}); }, 1000 * 60 * 60 * 24); } catch (_) {}
+          }, delay);
+        }
+      } catch (_) {}
+    })();
     // Keep optional: legacy local snooze viewer; safe if empty
     import('$lib/stores/snooze').then((m)=>m.loadSnoozes());
 
@@ -264,13 +275,8 @@
 
   let { children }: { children: Snippet } = $props();
 
-  const paths = [
-    { path: base + "/inbox", icon: iconHome, iconS: iconHomeS, label: "Inbox" },
-    { path: base + "/snoozed", icon: iconBook, iconS: iconBookS, label: "Snoozed" },
-    { path: base + "/settings", icon: iconPalette, iconS: iconPaletteS, label: "Settings" },
-    { path: base + "/theme", icon: iconPalette, iconS: iconPaletteS, label: "Theme" },
-    { path: base + "/outbox", icon: iconOutbox, iconS: iconOutboxS, label: "Outbox" }
-  ];
+  // Hide sidebar navigation items by default
+  const paths: any[] = [];
   const normalizePath = (path: string) => {
     const u = new URL(path, page.url.href);
     path = u.pathname;

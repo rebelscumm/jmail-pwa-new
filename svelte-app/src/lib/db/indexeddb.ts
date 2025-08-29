@@ -108,3 +108,46 @@ export async function clearAllStores() {
   ]);
 }
 
+/**
+ * Migration helper: preserve existing cached AI summaries for inbox threads
+ * while removing the versioning concept. For any thread in INBOX where a
+ * ready summary already exists and the content appears unchanged since the
+ * summary was generated, this will ensure the cached summary remains usable
+ * and remove legacy `summaryVersion`/`subjectVersion` fields so the app will
+ * treat the cache as authoritative until the user requests a regenerate.
+ *
+ * Returns counts for reporting.
+ */
+export async function backfillSummaryVersions(): Promise<{ scanned: number; updated: number }> {
+  const db = await getDB();
+  const tx = db.transaction('threads', 'readwrite');
+  try {
+    const all = await tx.store.getAll();
+    let updated = 0;
+    for (const t of all as any[]) {
+      try {
+        if (!t) continue;
+        // Only preserve cached summaries for threads currently in INBOX
+        const labels = t.labelIds || [];
+        if (!labels.includes('INBOX')) continue;
+        if (t.summaryStatus !== 'ready') continue;
+        if (!t.summary || String(t.summary).trim() === '') continue;
+        // Prefer cached summary when bodyHash exists and appears unchanged
+        if (!(t.bodyHash && t.summaryUpdatedAt && t.lastMsgMeta && t.summaryUpdatedAt >= (t.lastMsgMeta.date || 0))) continue;
+        // Create a copy without legacy version fields so app treats the cached
+        // summary as the single source of truth (exists / does not exist).
+        const next = { ...t } as any;
+        if ('summaryVersion' in next) delete next.summaryVersion;
+        if ('subjectVersion' in next) delete next.subjectVersion;
+        await tx.store.put(next);
+        updated++;
+      } catch (_) {}
+    }
+    await tx.done;
+    return { scanned: all.length, updated };
+  } catch (e) {
+    try { await tx.done; } catch (_) {}
+    throw e;
+  }
+}
+

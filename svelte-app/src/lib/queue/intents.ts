@@ -247,20 +247,56 @@ export async function applyRemoteLabels(
   const db = await getDB();
   const thread = await db.get('threads', threadId);
   if (!thread) return;
+  // Detect whether this thread was locally acted-upon in a way that removed
+  // it from INBOX (archive, snooze, trash, spam, etc.). If so, honor the
+  // local intent and avoid re-adding INBOX during server reconciliation.
+  let isLocallyInboxRemoved = false;
+  const locallyAddedLabels = new Set<string>();
+  try {
+    const journalAll = await db.getAll('journal');
+    for (const e of journalAll as any[]) {
+      if (!e || e.threadId !== threadId || !e.intent) continue;
+      const rem = Array.isArray(e.intent.removeLabelIds) ? e.intent.removeLabelIds : [];
+      const add = Array.isArray(e.intent.addLabelIds) ? e.intent.addLabelIds : [];
+      if (rem.includes('INBOX')) {
+        isLocallyInboxRemoved = true;
+        for (const a of add) locallyAddedLabels.add(a);
+      }
+    }
+  } catch (_) {
+    // best-effort: if journal read fails, proceed normally
+  }
+
   const txMsgs = db.transaction('messages', 'readwrite');
   const updatedMessages: Record<string, GmailMessage> = {};
   for (const mid of thread.messageIds) {
     const current = (await txMsgs.store.get(mid)) as GmailMessage | undefined;
     if (!current) continue;
-    const newLabels = labelsByMessage[mid] || current.labelIds;
-    const newMsg: GmailMessage = { ...current, labelIds: Array.from(new Set(newLabels)) };
+    const serverLabels = labelsByMessage[mid] || current.labelIds || [];
+    const labelSet = new Set(serverLabels);
+    // If the user performed any local action that removed INBOX, honor it by
+    // preventing INBOX from being re-added and by retaining locally-added
+    // labels (e.g., TRASH or snooze labels).
+    if (isLocallyInboxRemoved) {
+      labelSet.delete('INBOX');
+      for (const a of locallyAddedLabels) labelSet.add(a);
+    }
+    const newMsg: GmailMessage = { ...current, labelIds: Array.from(labelSet) };
     updatedMessages[mid] = newMsg;
     await txMsgs.store.put(newMsg);
   }
   await txMsgs.done;
-  // Thread labels = union of message labels
+
+  // Thread labels = union of message labels (but respect local trash)
   const union = new Set<string>();
-  for (const arr of Object.values(labelsByMessage)) arr.forEach((l) => union.add(l));
+  for (const mid of thread.messageIds) {
+    const labels = labelsByMessage[mid] || [];
+    for (const l of labels) union.add(l);
+  }
+  if (isLocallyInboxRemoved) {
+    union.delete('INBOX');
+    for (const a of locallyAddedLabels) union.add(a);
+  }
   const newThread: GmailThread = { ...thread, labelIds: Array.from(union) };
   await db.put('threads', newThread);
   // Update stores

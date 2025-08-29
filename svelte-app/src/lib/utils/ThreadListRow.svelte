@@ -13,6 +13,7 @@
   import SnoozePanel from '$lib/snooze/SnoozePanel.svelte';
   import { lastSelectedSnoozeRuleKey } from '$lib/stores/snooze';
   import Icon from '$lib/misc/_icon.svelte';
+  import Layer from '$lib/misc/Layer.svelte';
   import iconExpand from '@ktibow/iconset-material-symbols/keyboard-arrow-down';
   import iconArchive from '@ktibow/iconset-material-symbols/archive';
   import iconDelete from '@ktibow/iconset-material-symbols/delete';
@@ -23,6 +24,8 @@
   import { labels as labelsStore } from '$lib/stores/labels';
   import { queueThreadModify, recordIntent } from '$lib/queue/intents';
   import iconSparkles from '@ktibow/iconset-material-symbols/auto-awesome';
+  import iconInfo from '@ktibow/iconset-material-symbols/info';
+  import { getPrecomputeSummary } from '$lib/ai/precompute';
 
   // Lazy import to avoid circular or route coupling; fallback no-op if route not mounted
   async function scheduleReload() {
@@ -68,6 +71,39 @@
       const status = (thread as any).aiSubjectStatus as ('none'|'pending'|'ready'|'error') | undefined;
       const ai = (thread as any).aiSubject as string | undefined;
       return !!(status === 'ready' && ai && ai.trim());
+    } catch { return false; }
+  })());
+  // Consider a summary "ready" for UI purposes if we have any cached summary text.
+  // This ensures the UI will prefer showing a previously computed summary while
+  // a newer summary (different version) is being recomputed in the background.
+  const aiSummaryReady = $derived((() => {
+    try {
+      const s = thread.summary as string | undefined;
+      return !!(s && String(s).trim());
+    } catch { return false; }
+  })());
+
+  // Stale indicator: true when a cached summary exists but its version differs
+  // from the current app summary schema/version and the cached summary does
+  // not appear up-to-date for the current thread content. If the cached
+  // summary is present and the content appears unchanged since it was
+  // generated, prefer the cached summary (treat as not stale) even if the
+  // configured AI summary version has incremented. This mirrors the
+  // precompute/explain logic used elsewhere.
+  const aiSummaryStale = $derived((() => {
+    try {
+      // Without versioning, a summary is considered stale only if the
+      // content has changed since it was generated (bodyHash/summaryUpdatedAt)
+      try {
+        if (!thread.summary) return false;
+        const bodyHash = (thread as any).bodyHash;
+        const summaryUpdatedAt = (thread as any).summaryUpdatedAt || 0;
+        const lastMsgDate = thread.lastMsgMeta?.date || 0;
+        // If there's no bodyHash/updatedAt info, be conservative and mark not stale
+        if (!bodyHash || !summaryUpdatedAt) return false;
+        // If the last message is newer than the summary update, treat as stale
+        return lastMsgDate > summaryUpdatedAt;
+      } catch { return false; }
     } catch { return false; }
   })());
 
@@ -396,33 +432,248 @@
     }
   }
 
+  async function explainAiMissing(e: Event): Promise<void> {
+    try {
+      e.preventDefault?.();
+      e.stopPropagation?.();
+      const status = (thread as any).summaryStatus || 'none';
+      // legacy aiSummaryVersion removed; no-op
+      const nowVersion = undefined as any;
+      // legacy summaryVersion removed; ignore
+      const threadVersion = 0;
+      const bodyHash = (thread as any).bodyHash;
+      const summaryUpdatedAt = (thread as any).summaryUpdatedAt || 0;
+      const lastMsgDate = thread.lastMsgMeta?.date || 0;
+      const contentUnchanged = !!bodyHash && summaryUpdatedAt && lastMsgDate <= summaryUpdatedAt;
+
+      const anchor = e.currentTarget as HTMLElement | undefined;
+
+      // Quick short-circuit cases first
+      if (status === 'pending') {
+        // Include timestamps where available and avoid showing legacy version fields
+        let txt = 'AI summary is being recomputed in the background.';
+        if (summaryUpdatedAt) txt += `\nCached summary last updated: ${formatDateTime(summaryUpdatedAt)}`;
+        const pendingSince = (thread as any).summaryUpdatedAt === summaryUpdatedAt && (thread as any).summaryStatus === 'pending' ? (thread as any).summaryUpdatedAt : (thread as any).aiSubjectUpdatedAt || 0;
+        if (pendingSince) txt += `\nRecompute started: ${formatDateTime(pendingSince)}`;
+        txt += `\nCached summary present: ${!!thread.summary}`;
+        if (thread.summary && String(thread.summary).trim()) txt += `\nContent has changed since cached summary: ${!contentUnchanged ? 'yes' : 'no'}`;
+        showTooltip(txt, 8000, e.currentTarget as HTMLElement);
+        return;
+      }
+      if (status === 'error') {
+        let txt = 'AI summary generation failed. Open the thread and click Summarize to retry.';
+        showTooltip(txt, 8000, e.currentTarget as HTMLElement);
+        return;
+      }
+
+      // Build a list of applicable troubleshooting reasons for this thread
+      const applicable: string[] = [];
+      try {
+        // Global precompute summary (errors/warns, activity)
+        const preSummary = getPrecomputeSummary();
+        if ((preSummary && (preSummary.errors || 0) > 0)) applicable.push('Errors occurred during precompute; check precompute logs for details.');
+        // Precompute disabled
+        if (!$settings?.precomputeSummaries) applicable.push('Background precompute is disabled in Settings.');
+
+        // Thread-level checks
+        const labels = thread.labelIds || [];
+        const inInbox = labels.includes('INBOX');
+        const inSpamOrTrash = labels.includes('SPAM') || labels.includes('TRASH');
+        if (!inInbox || inSpamOrTrash) applicable.push('This thread is not visible in INBOX (it may be in SPAM or TRASH or filtered by Gmail).');
+
+        // Missing or stale cached summary
+        if (!thread.summary || !String(thread.summary).trim()) applicable.push('No cached AI summary exists for this thread.');
+        if (summaryUpdatedAt && lastMsgDate && lastMsgDate > summaryUpdatedAt) applicable.push('Local cached summary appears stale compared to the last message; sync with Gmail to refresh thread data.');
+
+        // Body availability / scopes: prefer detecting cached message bodies before
+        // assuming missing Gmail scopes. If we don't have a thread-level bodyHash,
+        // check the local messages store for a cached full message body first.
+        if (!bodyHash) {
+          try {
+            const lastId = (thread.messageIds && thread.messageIds.length) ? thread.messageIds[thread.messageIds.length - 1] : null;
+            let foundCachedBody = false;
+            if (lastId) {
+              try {
+                const { getDB } = await import('$lib/db/indexeddb');
+                const db = await getDB();
+                const cached = await db.get('messages', lastId);
+                if (cached && (cached.bodyText || cached.bodyHtml)) foundCachedBody = true;
+              } catch (_) {
+                // ignore DB errors and fall back to token checks below
+              }
+            }
+            if (!foundCachedBody) {
+              try {
+                const { fetchTokenInfo } = await import('$lib/gmail/auth');
+                try {
+                  const info = await fetchTokenInfo();
+                  const hasBodyScopes = !!info?.scope && (info.scope.includes('gmail.readonly') || info.scope.includes('gmail.modify'));
+                  if (!hasBodyScopes) {
+                    applicable.push('Missing Gmail read/modify scopes: the app may not have access to full message bodies.');
+                  } else {
+                    applicable.push('Message bodies appear unavailable for this thread (could not fetch full message).');
+                  }
+                } catch (_) {
+                  applicable.push('Unable to determine Gmail token scopes; message bodies may be unavailable.');
+                }
+              } catch (_) {
+                applicable.push('Message bodies may be unavailable or token info could not be read.');
+              }
+            }
+          } catch (_) {}
+        }
+
+        // Previous per-thread failures
+        if ((thread as any).summaryStatus === 'error' || (thread as any).aiSubjectStatus === 'error') applicable.push('Previous AI summary generation for this thread failed.');
+      } catch (_) {}
+
+      // If version mismatch and cached summary exists, explain and list applicable reasons
+      // If we have a cached summary, explain its freshness using timestamps
+      if (thread.summary && String(thread.summary).trim()) {
+        let txt = 'Cached AI summary available.';
+        txt += `\nCached summary status: ${(thread as any).summaryStatus || 'none'}`;
+        if (summaryUpdatedAt) txt += `\nCached summary last updated: ${formatDateTime(summaryUpdatedAt)}`;
+        if (lastMsgDate) txt += `\nLast message date: ${formatDateTime(lastMsgDate)}`;
+        if (summaryUpdatedAt && lastMsgDate && lastMsgDate > summaryUpdatedAt) txt += `\nNote: cached summary appears stale relative to last message.`;
+        if (applicable.length) txt += '\n\nApplicable reasons:\n' + applicable.map((r) => `- ${r}`).join('\n');
+        showTooltip(txt, 10000, e.currentTarget as HTMLElement);
+        return;
+      }
+
+      // If version mismatch and no cached summary, attempt to start background precompute
+      // No cached summary: explain reasons and start precompute. Include timestamps where available
+      if (!(thread.summary && String(thread.summary).trim())) {
+        let txt = `No cached AI summary is available for this thread. Starting background precompute to generate missing summaries.`;
+        // Keep a short history only: show cached summary timestamp (if any) and last message date
+        if (summaryUpdatedAt) txt += `\nLast cached summary update: ${formatDateTime(summaryUpdatedAt)}`;
+        if (lastMsgDate) txt += `\nLast message date: ${formatDateTime(lastMsgDate)}`;
+        if (applicable.length) txt += '\n\nApplicable reasons:\n' + applicable.map((r) => `- ${r}`).join('\n');
+        showTooltip(txt, 9000, anchor);
+        try {
+          const mod = await import('$lib/ai/precompute');
+          void (mod as any).precomputeNow(25);
+        } catch (_) {
+          showTooltip('Failed to start background precompute. Open Settings and ensure an AI API key is configured.', 8000, anchor);
+        }
+        return;
+      }
+
+      // Default case: show reasons and action
+      let txt = 'No AI summary available. Open the thread and click Summarize to generate one.';
+      if (applicable.length) txt += '\n\nApplicable reasons:\n' + applicable.map((r) => `- ${r}`).join('\n');
+      showTooltip(txt, 9000, e.currentTarget as HTMLElement);
+      return;
+    } catch (_) {}
+  }
+
+  // Tooltip state and helpers (render tooltip as a fixed element appended to document.body
+  // so it won't be clipped by the row container)
+  import { onDestroy } from 'svelte';
+  let tooltipText = $state('');
+  let tooltipTimer: number | null = $state(null);
+  let tooltipEl: HTMLElement | null = null;
+
+  function createTooltipElement(): HTMLElement {
+    const el = document.createElement('div');
+    el.className = 'thread-tooltip';
+    el.setAttribute('role', 'status');
+    el.setAttribute('aria-live', 'polite');
+    el.style.position = 'fixed';
+    el.style.zIndex = '40';
+    // Make tooltip opaque and match previous tooltip visuals.
+    // Use CSS variables where possible but force opaque rendering and disable blending/backdrop
+    el.style.setProperty('background-color', 'rgb(var(--m3-scheme-surface))');
+    el.style.setProperty('color', 'rgb(var(--m3-scheme-on-surface))');
+    el.style.setProperty('border', '1px solid rgb(var(--m3-scheme-outline))');
+    el.style.setProperty('padding', '0.5rem 0.75rem');
+    el.style.setProperty('border-radius', '0.375rem');
+    el.style.setProperty('font-size', '0.75rem');
+    el.style.setProperty('white-space', 'pre-wrap');
+    el.style.setProperty('box-shadow', 'var(--m3-util-elevation-2)');
+    // Force opaque and normal blending to avoid translucency from theme or backdrop
+    el.style.setProperty('opacity', '1');
+    el.style.setProperty('backdrop-filter', 'none');
+    el.style.setProperty('mix-blend-mode', 'normal');
+    el.style.setProperty('pointer-events', 'auto');
+    el.style.boxSizing = 'border-box';
+    document.body.appendChild(el);
+    return el;
+  }
+
+  function positionTooltipForAnchor(anchor: HTMLElement, el: HTMLElement) {
+    try {
+      const rect = anchor.getBoundingClientRect();
+      const margin = 6;
+      // Prefer placing just below the anchor, but keep inside viewport
+      const top = Math.min(window.innerHeight - 8, rect.bottom + margin);
+      let left = rect.left;
+      // Ensure tooltip doesn't overflow to the right
+      const maxW = Math.min(352, window.innerWidth - 16);
+      el.style.maxWidth = maxW + 'px';
+      // If left + maxW would overflow, shift left
+      if (left + maxW + 8 > window.innerWidth) left = Math.max(8, window.innerWidth - maxW - 8);
+      el.style.left = left + 'px';
+      el.style.top = top + 'px';
+    } catch {}
+  }
+
+  function showTooltip(text: string, ms = 6000, anchor?: HTMLElement) {
+    try {
+      tooltipText = text;
+      if (!tooltipEl) tooltipEl = createTooltipElement();
+      tooltipEl.textContent = text;
+      if (anchor) positionTooltipForAnchor(anchor, tooltipEl);
+      // start timer
+      if (tooltipTimer) { clearTimeout(tooltipTimer); tooltipTimer = null; }
+      tooltipTimer = setTimeout(() => { try { if (tooltipEl) { tooltipEl.remove(); tooltipEl = null; } tooltipTimer = null; } catch {} }, ms) as unknown as number;
+    } catch (_) {}
+  }
+
+  function hideTooltip() {
+    try {
+      if (tooltipTimer) { clearTimeout(tooltipTimer); tooltipTimer = null; }
+      if (tooltipEl) { tooltipEl.remove(); tooltipEl = null; }
+    } catch (_) {}
+  }
+
+  onDestroy(() => { try { if (tooltipEl) { tooltipEl.remove(); tooltipEl = null; } } catch {} });
+
   function formatDateTime(ts?: number): string {
     if (!ts) return '';
     try {
       const date = new Date(ts);
       const today = new Date();
       const timeStr = date.toLocaleString(undefined, { hour: 'numeric', minute: '2-digit' });
-      const isToday = (date.getFullYear() === today.getFullYear() &&
-                       date.getMonth() === today.getMonth() &&
-                       date.getDate() === today.getDate());
-      if (isToday) {
-        return `Today, ${timeStr}`;
+
+      // Compute days difference (positive for past dates)
+      const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+      const startOfDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+      const diffDays = Math.round((startOfToday.getTime() - startOfDate.getTime()) / 86400000);
+
+      // Handle today/yesterday as before
+      if (diffDays === 0) return `Today, ${timeStr}`;
+      if (diffDays === 1) return `Yesterday, ${timeStr}`;
+
+      // Build rough relative prefix
+      let relative = '';
+      if (diffDays < 7) {
+        relative = `${diffDays} day${diffDays === 1 ? '' : 's'} ago`;
+      } else if (diffDays < 30) {
+        const weeks = Math.floor(diffDays / 7);
+        relative = `${weeks} week${weeks === 1 ? '' : 's'} ago`;
+      } else {
+        const months = Math.round(diffDays / 30);
+        relative = `${months} month${months === 1 ? '' : 's'} ago`;
       }
-      const yesterday = new Date(today);
-      yesterday.setDate(today.getDate() - 1);
-      const isYesterday = (date.getFullYear() === yesterday.getFullYear() &&
-                           date.getMonth() === yesterday.getMonth() &&
-                           date.getDate() === yesterday.getDate());
-      if (isYesterday) {
-        return `Yesterday, ${timeStr}`;
-      }
-      return date.toLocaleString(undefined, {
+
+      const full = date.toLocaleString(undefined, {
         weekday: 'short',
         month: 'short',
         day: 'numeric',
         hour: 'numeric',
         minute: '2-digit'
       });
+      return `${relative}, ${full}`;
     } catch {
       return '';
     }
@@ -455,8 +706,23 @@
   });
 
   // Dynamic trailing snooze buttons (3rd and 4th)
-  let thirdSnoozeKey = $derived(normalizeRuleKey($lastSelectedSnoozeRuleKey || '1h'));
-  let fourthSnoozeKey = $derived(incrementSnoozeKey(thirdSnoozeKey));
+  // Compute plain reactive string labels so the template always receives text
+  // (some derived helpers can produce values that aren't plain strings at
+  // render time, causing empty children). Keep safe fallbacks.
+  let thirdSnoozeKey = $state('1h');
+  let fourthSnoozeKey = $state('2h');
+  $effect(() => {
+    try {
+      thirdSnoozeKey = normalizeRuleKey($lastSelectedSnoozeRuleKey || '1h');
+    } catch {
+      thirdSnoozeKey = '1h';
+    }
+    try {
+      fourthSnoozeKey = incrementSnoozeKey(thirdSnoozeKey || '1h');
+    } catch {
+      fourthSnoozeKey = '2h';
+    }
+  });
 
   // Local autoclose action for details menus (mirrors SplitButton behavior)
   const autoclose = (node: HTMLDetailsElement) => {
@@ -515,18 +781,30 @@
 </script>
 
 {#snippet defaultLeading()}
-  <div class={`avatar ${unread ? 'unread' : ''}`} aria-hidden="true">{senderInitial}</div>
+  <div class="leading-wrap">
+    <div class={`avatar ${unread ? 'unread' : ''}`} aria-hidden="true">{senderInitial}</div>
+    {#if Array.isArray(thread.messageIds) && (thread.messageIds || []).length > 1}
+      <div class="msg-count" aria-hidden="true">{(thread.messageIds || []).length}</div>
+    {/if}
+  </div>
 {/snippet}
 
 {#snippet threadHeadline()}
   <span class="row-headline">
     <span class="title">
-      {#if aiSubjectReady}
-        <span class="ai-flag" aria-label="AI generated" title="AI generated">
-          <Icon icon={iconSparkles} />
-        </span>
-      {/if}
+      <span class="meta">
+        {#if aiSummaryReady}
+          <span class={`ai-flag ${aiSummaryStale ? 'stale' : ''}`} aria-label={aiSummaryStale ? 'AI summary stale' : 'AI summary available'} title={aiSummaryStale ? 'AI summary stale' : 'AI summary available'}>
+            <Icon icon={iconSparkles} />
+          </span>
+        {:else}
+          <span class="ai-missing" role="button" tabindex="0" aria-label="AI summary unavailable" title="AI summary unavailable" onpointerenter={() => { /* noop for hover */ }} onclick={(e) => { e.preventDefault(); e.stopPropagation(); explainAiMissing(e); }} onkeydown={(e) => { if ((e as KeyboardEvent).key === 'Enter' || (e as KeyboardEvent).key === ' ') { e.preventDefault(); e.stopPropagation(); explainAiMissing(e); } }} onfocusin={() => { /* noop */ }}>
+            <Icon icon={iconInfo} />
+          </span>
+        {/if}
+      </span>
       {threadDisplaySubject}
+      <!-- Tooltip is rendered as a fixed element attached to document.body -->
     </span>
   </span>
 {/snippet}
@@ -553,15 +831,21 @@
     {/if}
     <Button variant="text" onclick={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); animateAndArchive(); }}>Archive</Button>
     <Button variant="text" color="error" onclick={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); animateAndDelete(); }}>Delete</Button>
-    <Button variant="text" onclick={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); trySnooze(thirdSnoozeKey); }}>{thirdSnoozeKey}</Button>
+    <Button variant="text" onclick={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); trySnooze(thirdSnoozeKey); }}>
+      <span class="snooze-label">{thirdSnoozeKey}</span>
+    </Button>
     <div class="snooze-wrap" role="button" tabindex="0" data-no-row-nav onclick={(e) => { const t = e.target as Element; if (t?.closest('summary,button,input,select,textarea,a,[role="menu"],[role="menuitem"]')) { e.stopPropagation(); return; } e.preventDefault(); e.stopPropagation(); }} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { const t = e.target as Element; if (t?.closest('summary,button,input,select,textarea,a,[role="menu"],[role="menuitem"]')) { e.stopPropagation(); return; } e.preventDefault(); e.stopPropagation(); } }}>
-      <Button variant="text" onclick={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); trySnooze(fourthSnoozeKey); }}>{fourthSnoozeKey}</Button>
+      <Button variant="text" onclick={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); trySnooze(fourthSnoozeKey); }}>
+        <span class="snooze-label">{fourthSnoozeKey}</span>
+      </Button>
       <div class="snooze-buttons">
         <details class="menu-toggle" bind:this={snoozeDetails} use:autoclose ontoggle={(e) => { const isOpen = (e.currentTarget as HTMLDetailsElement).open; snoozeMenuOpen = isOpen; }}>
-          <summary aria-label="Snooze menu" aria-haspopup="menu" aria-expanded={snoozeMenuOpen} onpointerdown={(e: PointerEvent) => e.stopPropagation()} onclick={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); const d = snoozeDetails || (e.currentTarget as HTMLElement).closest('details') as HTMLDetailsElement | null; if (!d) return; if (!d.open) { openSnoozeMenuAndShowPicker(); } else { d.open = false; } }}>
-            <Button variant="text" iconType="full" aria-label="Snooze menu" class="expand-button">
+          <summary aria-label="Snooze menu" aria-haspopup="menu" aria-expanded={snoozeMenuOpen} onpointerdown={(e: PointerEvent) => e.stopPropagation()} onclick={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); const d = snoozeDetails || (e.currentTarget as HTMLElement).closest('details') as HTMLDetailsElement | null; if (!d) return; if (!d.open) { openSnoozeMenuAndShowPicker(); } else { (d as HTMLDetailsElement).open = false; } }}>
+            <!-- Render MD3-styled container directly in summary (avoid nested button) -->
+            <span class="m3-container m3-font-label-large text icon-full expand-button outlined" title="Snooze options">
+              <Layer />
               <Icon icon={iconExpand} />
-            </Button>
+            </span>
           </summary>
           <div class="snooze-menu">
             <Menu>
@@ -573,6 +857,7 @@
             </Menu>
           </div>
         </details>
+        <!-- debug removed -->
       </div>
     </div>
   </div>
@@ -678,11 +963,31 @@
   /* Separate snooze and toggle button styles */
   .snooze-buttons { display:inline-flex; align-items:center; position: relative; gap: 0.5rem; flex-wrap: nowrap; }
   .menu-toggle { position: relative; }
-  .menu-toggle > :global(:not(summary)) { position: fixed !important; z-index: 10; left: 50%; top: 0; pointer-events: auto; transform: translateX(-50%); margin-top: 1rem; }
+  /* Hide the menu content when closed to avoid it leaking into the row layout. */
+  .menu-toggle > :global(:not(summary)) { display: none; }
+  /* When the details element is open, display/position the popover as an overlay. */
+  .menu-toggle[open] > :global(:not(summary)) { display: block; position: fixed !important; z-index: 10; left: 50%; top: 0; pointer-events: auto; transform: translateX(-50%); margin-top: 1rem; }
   /* Reset native marker on summary for MD3 button inside */
-  .menu-toggle > summary { list-style: none; }
+  .menu-toggle > summary {
+    list-style: none;
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent;
+    border: none;
+    padding: 0;
+    margin: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
   /* Slightly larger tap target for expand */
-  .expand-button { min-width: 2.25rem; min-height: 2.25rem; }
+  .expand-button { min-width: 2.25rem; min-height: 2.25rem; display:inline-flex; align-items:center; justify-content:center; padding:0.25rem; border-radius:var(--m3-util-rounding-medium); }
+  /* Outlined variant for just the expand button */
+  .expand-button.outlined {
+    outline: 1px solid rgb(var(--m3-scheme-outline-variant));
+    background: rgb(var(--m3-scheme-surface));
+  }
+  .expand-button.outlined > :global(svg) { color: rgb(var(--m3-scheme-on-surface-variant)); }
   .leading-checkbox {
     display: inline-flex;
     align-items: center;
@@ -720,6 +1025,21 @@
     color: rgb(var(--m3-scheme-on-surface-variant));
     flex-shrink: 0;
   }
+  .leading-wrap { position: relative; display: inline-flex; align-items: center; gap: 0.375rem; }
+  .msg-count {
+    position: absolute;
+    left: 0.15rem;
+    bottom: -0.35rem;
+    min-width: 1.2rem;
+    height: 1.2rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.625rem;
+    color: rgb(var(--m3-scheme-surface-variant));
+    background: rgba(0,0,0,0); /* keep background transparent to remain discreet */
+    opacity: 0.65;
+  }
   .avatar.unread {
     background: rgb(var(--m3-scheme-primary));
     color: rgb(var(--m3-scheme-on-primary));
@@ -747,6 +1067,23 @@
     white-space: nowrap;
   }
   .row-headline .meta :global(svg) { width: 1rem; height: 1rem; }
+  .ai-missing { margin-left: 0.25rem; color: rgb(var(--m3-scheme-on-surface-variant)); display: inline-flex; align-items: center; }
+  .ai-missing :global(svg) { width: 1rem; height: 1rem; }
+  .ai-flag { margin-left: 0.25rem; display:inline-flex; align-items:center; }
+  .ai-flag.stale { color: rgb(var(--m3-scheme-on-surface)); filter: grayscale(60%); opacity: 0.9; }
+  .tooltip {
+    position: absolute;
+    z-index: 40;
+    background: rgb(var(--m3-scheme-surface));
+    color: rgb(var(--m3-scheme-on-surface));
+    border: 1px solid rgb(var(--m3-scheme-outline));
+    padding: 0.5rem 0.75rem;
+    border-radius: 0.375rem;
+    font-size: 0.75rem;
+    max-width: 22rem;
+    white-space: pre-wrap;
+    box-shadow: var(--m3-util-elevation-2);
+  }
   .supporting { display: flex; align-items: center; gap: 0.5rem; }
   .labels-wrap { display:flex; gap: 0.25rem; flex-wrap: wrap; }
   .badge {

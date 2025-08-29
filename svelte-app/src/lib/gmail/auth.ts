@@ -434,7 +434,8 @@ export function getAuthState(): AuthState {
 // Export a snapshot of current auth diagnostics for copy-to-clipboard flows
 export function getAuthDiagnostics(): Record<string, unknown> {
   try {
-    return {
+    const now = Date.now();
+    const diagnostics: Record<string, unknown> = {
       at: new Date().toISOString(),
       ready: getAuthState().ready,
       tokenClientReady: !!tokenClient,
@@ -443,8 +444,71 @@ export function getAuthDiagnostics(): Record<string, unknown> {
       hasOauth2: typeof window !== 'undefined' ? !!(window as any).google?.accounts?.oauth2 : undefined,
       lastInitAt,
       lastInitOk,
-      lastInitError
+      lastInitError,
+      // Enhanced network and environment diagnostics
+      network: {
+        online: typeof navigator !== 'undefined' ? navigator.onLine : undefined,
+        connection: typeof navigator !== 'undefined' ? (navigator as any).connection?.effectiveType : undefined,
+        userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : undefined,
+        platform: typeof navigator !== 'undefined' ? navigator.platform : undefined,
+        language: typeof navigator !== 'undefined' ? navigator.language : undefined
+      },
+      // Script loading diagnostics
+      scriptLoading: {
+        gisScriptElement: typeof document !== 'undefined' ? {
+          id: document.getElementById('gis-script')?.id,
+          src: document.getElementById('gis-script')?.getAttribute('src'),
+          async: (document.getElementById('gis-script') as HTMLScriptElement)?.async,
+          defer: (document.getElementById('gis-script') as HTMLScriptElement)?.defer,
+          parentNode: !!document.getElementById('gis-script')?.parentNode
+        } : undefined,
+        headElement: typeof document !== 'undefined' ? !!document.head : undefined,
+        bodyElement: typeof document !== 'undefined' ? !!document.body : undefined
+      },
+      // Window object diagnostics
+      window: {
+        location: typeof window !== 'undefined' ? {
+          href: window.location?.href,
+          origin: window.location?.origin,
+          protocol: window.location?.protocol,
+          host: window.location?.host,
+          hostname: window.location?.hostname,
+          port: window.location?.port,
+          pathname: window.location?.pathname,
+          search: window.location?.search
+        } : undefined,
+        innerWidth: typeof window !== 'undefined' ? window.innerWidth : undefined,
+        innerHeight: typeof window !== 'undefined' ? window.innerHeight : undefined,
+        screen: typeof window !== 'undefined' ? {
+          width: window.screen?.width,
+          height: window.screen?.height,
+          availWidth: window.screen?.availWidth,
+          availHeight: window.screen?.availHeight
+        } : undefined
+      },
+      // Timing information
+      timing: {
+        currentTime: now,
+        lastInitTime: lastInitAt ? new Date(lastInitAt).getTime() : undefined,
+        timeSinceLastInit: lastInitAt ? now - new Date(lastInitAt).getTime() : undefined
+      },
+      // Local storage diagnostics
+      storage: {
+        localStorageAvailable: typeof localStorage !== 'undefined',
+        localStorageKeys: typeof localStorage !== 'undefined' ? Object.keys(localStorage) : undefined,
+        sessionStorageAvailable: typeof sessionStorage !== 'undefined',
+        sessionStorageKeys: typeof sessionStorage !== 'undefined' ? Object.keys(sessionStorage) : undefined
+      },
+      // Cookie diagnostics
+      cookies: {
+        cookieEnabled: typeof navigator !== 'undefined' ? navigator.cookieEnabled : undefined,
+        cookieCount: typeof document !== 'undefined' ? document.cookie.split(';').length : undefined
+      },
+      // Browser diagnostics
+      browser: captureBrowserDiagnostics()
     };
+    
+    return diagnostics;
   } catch (_) {
     return {};
   }
@@ -516,4 +580,56 @@ export async function signOut(): Promise<void> {
     } catch (_) {}
   } catch (_) {}
 }
+
+// Capture browser console errors and network information
+function captureBrowserDiagnostics(): Record<string, unknown> {
+  const diagnostics: Record<string, unknown> = {};
+  
+  try {
+    // Capture performance information
+    if (typeof performance !== 'undefined') {
+      try {
+        const navigation = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming;
+        if (navigation) {
+          diagnostics.performance = {
+            domContentLoaded: navigation.domContentLoadedEventEnd - navigation.domContentLoadedEventStart,
+            loadComplete: navigation.loadEventEnd - navigation.loadEventStart,
+            domInteractive: navigation.domInteractive,
+            firstPaint: performance.getEntriesByName('first-paint')[0]?.startTime,
+            firstContentfulPaint: performance.getEntriesByName('first-contentful-paint')[0]?.startTime
+          };
+        }
+      } catch (_) {}
+    }
+    
+    // Capture resource loading information
+    if (typeof performance !== 'undefined') {
+      try {
+        const resources = performance.getEntriesByType('resource');
+        const googleResources = resources.filter((r: any) => 
+          r.name.includes('google') || r.name.includes('accounts.google.com') || r.name.includes('gsi')
+        );
+        
+        diagnostics.resourceLoading = {
+          totalResources: resources.length,
+          googleResources: googleResources.length,
+          googleResourceDetails: googleResources.map((r: any) => ({
+            name: r.name,
+            duration: r.duration,
+            transferSize: r.transferSize,
+            initiatorType: r.initiatorType,
+            failed: r.duration === 0
+          }))
+        };
+      } catch (_) {}
+    }
+    
+  } catch (e) {
+    diagnostics.browserDiagnosticsError = e instanceof Error ? e.message : String(e);
+  }
+  
+  return diagnostics;
+}
+
+// Test network connectivity to Google's servers
 

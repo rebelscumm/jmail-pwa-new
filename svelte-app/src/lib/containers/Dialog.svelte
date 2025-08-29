@@ -13,6 +13,7 @@
     open = $bindable(),
     closeOnEsc = true,
     closeOnClick = true,
+    pushHistory = true,
     onEsc,
     onClick,
     ...extra
@@ -24,53 +25,38 @@
     open: boolean;
     closeOnEsc?: boolean;
     closeOnClick?: boolean;
+    pushHistory?: boolean;
     onEsc?: () => void;
     onClick?: () => void;
   } & HTMLDialogAttributes = $props();
 
   let dialog: HTMLDialogElement | undefined = $state();
-  let __pushedHistoryEntry = $state(false);
-  let __popHandler: ((e: PopStateEvent) => void) | null = $state(null);
+  import { pushOverlay } from '$lib/utils/overlayHistory';
+  let __overlayHandle: { token: string; marker: string; close: () => void } | null = $state(null);
   $effect(() => {
     if (!dialog) return;
     if (open) dialog.showModal();
     else dialog.close();
   });
 
-  // Push a synthetic history entry while dialog is open so Android back closes it first
+  // Use centralized overlay history helper to avoid accidental navigation when
+  // other overlays or navigations have intervened.
   $effect(() => {
     try {
-      if (open && !__pushedHistoryEntry) {
-        history.pushState({ ...history.state, __m3_overlay: 'dialog' }, "", location.href);
-        __pushedHistoryEntry = true;
-        const handler = (e: PopStateEvent) => {
-          // Back pressed: close the dialog instead of navigating away
-          open = false;
-        };
-        __popHandler = handler;
-        window.addEventListener('popstate', handler, { once: true });
-      } else if (!open && __pushedHistoryEntry) {
-        // Dialog was closed programmatically (ESC/click/button). Consume our synthetic entry.
-        __pushedHistoryEntry = false;
-        if (__popHandler) {
-          window.removeEventListener('popstate', __popHandler);
-          __popHandler = null;
-        }
-        // Pop our overlay entry without leaving the page
-        history.back();
+      if (pushHistory && open && !__overlayHandle) {
+        __overlayHandle = pushOverlay('dialog', () => { open = false; });
+      } else if (!open && __overlayHandle) {
+        try { __overlayHandle.close(); } catch {}
+        __overlayHandle = null;
       }
     } catch {}
   });
 
   onDestroy(() => {
     try {
-      if (__pushedHistoryEntry) {
-        if (__popHandler) {
-          window.removeEventListener('popstate', __popHandler);
-          __popHandler = null;
-        }
-        __pushedHistoryEntry = false;
-        history.back();
+      if (__overlayHandle) {
+        try { __overlayHandle.close(); } catch {}
+        __overlayHandle = null;
       }
     } catch {}
   });

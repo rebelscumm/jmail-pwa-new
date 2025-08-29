@@ -1,11 +1,17 @@
 <script lang="ts">
   import { precomputeStatus } from '$lib/stores/precompute';
+  import { writable } from 'svelte/store';
   import LinearProgress from '$lib/forms/LinearProgress.svelte';
   import Icon from '$lib/misc/_icon.svelte';
   import iconSparkles from '@ktibow/iconset-material-symbols/auto-awesome';
   import iconClose from '@ktibow/iconset-material-symbols/close';
+  import { show as showSnackbar } from '$lib/containers/snackbar';
+  import { onDestroy } from 'svelte';
   
+  // Accept an optional onClose prop or dispatch a close event when X clicked
   let { onClose }: { onClose?: () => void } = $props();
+  import { createEventDispatcher } from 'svelte';
+  const dispatch = createEventDispatcher();
   
   const progressPercent = $derived($precomputeStatus.total > 0 
     ? Math.round(($precomputeStatus.processed / $precomputeStatus.total) * 100)
@@ -18,6 +24,138 @@
   const timeString = $derived(elapsedTime < 60 
     ? `${elapsedTime}s` 
     : `${Math.floor(elapsedTime / 60)}m ${elapsedTime % 60}s`);
+
+  // Watch for completion to show final summary snackbar
+  let prevRunning = false;
+  const runningErrorSummary = writable('');
+  let unsub = precomputeStatus.subscribe(async (s) => {
+    try {
+      // While running, attempt to surface up to three recent unique error messages
+      if (s.isRunning && (s as any)._errors > 0) {
+        try {
+          const mod = await import('$lib/ai/precompute');
+          const getLogs = typeof (mod as any).getPrecomputeLogs === 'function' ? (mod as any).getPrecomputeLogs : null;
+          const logs = getLogs ? (getLogs() as any[]) : [];
+          const errorLogs = logs.filter((l:any) => l.level && l.level.toLowerCase() === 'error');
+          const uniq: string[] = [];
+          for (const e of errorLogs) {
+            const msg = typeof e.message === 'string' ? (e.message.split('\n')[0] || e.message).trim() : String(e.message || '');
+            if (msg && !uniq.includes(msg)) uniq.push(msg);
+            if (uniq.length >= 3) break;
+          }
+          runningErrorSummary.set(uniq.length ? uniq.map((m, i) => `${i+1}. ${m}`).join(' — ') : '');
+        } catch (e) {
+          runningErrorSummary.set('');
+        }
+      } else {
+        runningErrorSummary.set('');
+      }
+    } catch {}
+    try {
+      // detect transition from running -> not running
+      if (prevRunning && !s.isRunning) {
+        const counts = (precomputeStatus as any).getCounts ? (precomputeStatus as any).getCounts() : { errors: 0, warns: 0 };
+        // Attempt to fetch up to three error descriptions to include inline in the snackbar
+        let errorSummary = '';
+        // Prefer exact processed count from precomputeStatus._lastProcessed when available
+        let successCount: number | null = null;
+        try {
+          const v: any = s as any;
+          if (typeof v._lastProcessed === 'number') {
+            successCount = Math.max(0, v._lastProcessed - (counts.errors || 0));
+          }
+        } catch {}
+
+        if (successCount === null && counts.errors > 0) {
+          try {
+            const mod = await import('$lib/ai/precompute');
+            const getLogs = typeof (mod as any).getPrecomputeLogs === 'function' ? (mod as any).getPrecomputeLogs : null;
+            const logs = getLogs ? (getLogs() as any[]) : [];
+            const errorLogs = logs.filter((l:any) => l.level && l.level.toLowerCase() === 'error');
+            if (errorLogs.length > 0) {
+              // Take up to three error messages, de-duplicate by message text
+              const uniq: string[] = [];
+              for (const e of errorLogs) {
+                const msg = typeof e.message === 'string' ? e.message.trim() : String(e.message || '');
+                if (msg && !uniq.includes(msg)) uniq.push(msg);
+                if (uniq.length >= 3) break;
+              }
+              if (uniq.length > 0) {
+                errorSummary = '\nErrors: ' + uniq.map((m, i) => `${i+1}. ${m}`).join('\n');
+              }
+            }
+            // Try to find the Completed log entry to determine processed count
+            try {
+              const completed = logs.find((l:any) => typeof l.message === 'string' && l.message.indexOf('[Precompute] Completed:') >= 0);
+              if (completed && completed.message) {
+                const idx = completed.message.indexOf('{');
+                if (idx >= 0) {
+                  const jsonPart = completed.message.slice(idx);
+                  try {
+                    const parsed = JSON.parse(jsonPart);
+                    if (typeof parsed.processed === 'number') {
+                      // successful items approximated as processed - errors
+                      successCount = parsed.processed - (counts.errors || 0);
+                      if (successCount < 0) successCount = 0;
+                    }
+                  } catch {}
+                }
+              }
+            } catch {}
+          } catch (e) {
+            // ignore and fall back to generic message
+          }
+        }
+
+        // Gather provider error diagnostics from logs (rate limits, quota, etc.)
+        let providerDiagnostics = '';
+        try {
+          const mod = await import('$lib/ai/precompute');
+          const getLogs = typeof (mod as any).getPrecomputeLogs === 'function' ? (mod as any).getPrecomputeLogs : null;
+          const logs = getLogs ? (getLogs() as any[]) : [];
+          const diag = logs.filter((l:any) => l.message && /rate limit|rate limited|quota|insufficient_quota|rate limit exceeded|rate limit/i.test(l.message));
+          if (diag.length) {
+            const uniq = Array.from(new Set(diag.map(d => d.message))).slice(0,3);
+            providerDiagnostics = '\nProvider issues: ' + uniq.map((u,i) => `${i+1}. ${u}`).join('\n');
+          }
+        } catch {}
+
+        const message = counts.errors > 0
+          ? `Precompute finished: ${counts.errors} errors, ${counts.warns} warnings.${successCount !== null ? ` ${successCount} succeeded.` : ''}${errorSummary || ''}` + providerDiagnostics
+          : (counts.warns > 0 ? `Precompute finished with ${counts.warns} warnings.` + providerDiagnostics : 'Precompute completed successfully.' + providerDiagnostics);
+        // Offer Copy + View actions via snackbar. View will dispatch a global event
+        // so a top-level component (TopAppBar) can open the Precompute logs dialog.
+        const actions: Record<string, () => void> = {
+          'Copy logs': async () => {
+            try {
+              const mod = await import('$lib/ai/precompute');
+              const getLogs = typeof (mod as any).getPrecomputeLogs === 'function' ? (mod as any).getPrecomputeLogs : null;
+              const logs = getLogs ? getLogs() : [];
+              const txt = logs.map((l:any) => `[${new Date(l.ts).toLocaleString()}] ${l.level.toUpperCase()}: ${l.message}`).join('\n');
+              await navigator.clipboard.writeText(txt);
+              showSnackbar({ message: 'Logs copied', closable: true });
+            } catch (e) {
+              showSnackbar({ message: 'Failed to copy logs', closable: true });
+            }
+          },
+          'View logs': async () => {
+            try {
+              // Let the app open the logs dialog; dispatch a global event so the
+              // topbar (or any interested listener) can handle showing the dialog.
+              window.dispatchEvent(new CustomEvent('jmail:show-precompute-logs'));
+            } catch (e) {
+              // Fallback to snackbar if dispatch fails
+              showSnackbar({ message: 'Could not open logs', closable: true });
+            }
+          }
+        };
+
+        showSnackbar({ message, actions, timeout: counts.errors > 0 ? null : 6000 });
+      }
+    } catch {}
+    prevRunning = !!s.isRunning;
+  });
+  onDestroy(() => { try { unsub(); } catch {} });
 </script>
 
 {#if $precomputeStatus.isRunning}
@@ -36,17 +174,26 @@
         <div class="progress-stats">
           <span class="progress-count">{$precomputeStatus.processed} / {$precomputeStatus.total}</span>
           <span class="progress-time">{timeString}</span>
+          <span class="progress-badges">
+            {#if ($precomputeStatus._errors || 0) > 0}
+              <span class="badge error" title={$runningErrorSummary || 'Click to view logs.'}>
+                {($precomputeStatus._errors || 0)} errors{#if $runningErrorSummary}: {$runningErrorSummary}{/if}
+              </span>
+            {/if}
+            {#if ($precomputeStatus._warns || 0) > 0}
+              <span class="badge warn">{($precomputeStatus._warns || 0)} warnings</span>
+            {/if}
+          </span>
         </div>
-        {#if onClose}
-          <button 
-            class="close-button" 
-            onclick={onClose}
-            aria-label="Close progress indicator"
-            title="Close progress indicator"
-          >
-            <Icon icon={iconClose} />
-          </button>
-        {/if}
+        <!-- Always show a close X in the top-right; prefer prop handler if provided, else dispatch `close` -->
+        <button 
+          class="close-button" 
+          onclick={() => { try { if (typeof onClose === 'function') onClose(); else dispatch('close'); } catch {} }}
+          aria-label="Close progress indicator"
+          title="Close progress indicator"
+        >
+          <Icon icon={iconClose} />
+        </button>
       </div>
       
       <div class="progress-bar">
@@ -102,7 +249,7 @@
     min-width: 0;
   }
   
-  .sparkle-icon {
+  .progress-info :global(.sparkle-icon) {
     color: rgb(var(--m3-scheme-primary));
     flex-shrink: 0;
   }

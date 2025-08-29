@@ -17,6 +17,7 @@
   import type { HTMLAttributes } from "svelte/elements";
   import { fade } from "svelte/transition";
   import iconX from "@ktibow/iconset-material-symbols/close";
+  import iconCopy from "@ktibow/iconset-material-symbols/content-copy-outline";
   import Icon from "$lib/misc/_icon.svelte";
   import SnackbarItem from "./SnackbarItem.svelte";
   import Layer from "$lib/misc/Layer.svelte";
@@ -31,7 +32,7 @@
     config?: SnackbarConfig;
     closeButtonTitle?: string;
   } & HTMLAttributes<HTMLDivElement> = $props();
-  export const show = ({ message, actions = {}, closable = false, timeout = 4000 }: SnackbarIn) => {
+  export const show = ({ message, actions = {}, closable = true, timeout = 4000 }: SnackbarIn) => {
     snackbar = { message, actions, closable, timeout };
     clearTimeout(timeoutId);
     if (timeout)
@@ -39,6 +40,17 @@
         snackbar = undefined;
       }, timeout);
   };
+
+  async function copyMessageToClipboard() {
+    if (!snackbar) return;
+    try {
+      await navigator.clipboard.writeText(snackbar.message);
+      // Briefly replace current snackbar with a confirmation
+      show({ message: "Copied", closable: true, timeout: 1000 });
+    } catch (e) {
+      show({ message: "Failed to copy", closable: true });
+    }
+  }
 
   let snackbar: Required<SnackbarIn> | undefined = $state();
   let timeoutId: number;
@@ -51,7 +63,9 @@
   <div class="holder" out:fade={{ duration: 200 }} {...extra}>
     {#key snackbar}
       <SnackbarItem {...config}>
-        <p class="m3-font-body-medium">{snackbar.message}</p>
+        <div class="message-container">
+          <p class="m3-font-body-medium message">{snackbar.message}</p>
+        </div>
         {#each Object.entries(snackbar.actions) as [key, action]}
           <button
             type="button"
@@ -64,7 +78,18 @@
             {key}
           </button>
         {/each}
-        {#if snackbar.closable}
+        <div class="actions">
+          <button
+            type="button"
+            class="action m3-font-label-large copy"
+            title="Copy"
+            aria-label="Copy snackbar message"
+            onclick={async () => {
+              await copyMessageToClipboard();
+            }}
+          >
+            <Icon icon={iconCopy} />
+          </button>
           <button
             type="button"
             class="close"
@@ -74,9 +99,9 @@
             }}
           >
             <Layer />
-            <Icon icon={iconX} />
+            <Icon icon={iconX} class="close-icon" />
           </button>
-        {/if}
+        </div>
       </SnackbarItem>
     {/key}
   </div>
@@ -91,9 +116,9 @@
     transform: translate(-50%, 0);
     z-index: 3;
   }
-  p {
-    margin-right: auto;
-  }
+  .message-container { max-width: 60rem; }
+  .message { margin-right: auto; max-width: 48rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Allow multiline expanded view when user opens notifications dialog; keep single-line by default */
   button {
     display: flex;
     align-self: stretch;
@@ -116,9 +141,10 @@
     color: var(--m3-scheme-inverse-primary);
     padding: 0 0.5rem;
   }
+  .actions { display:flex; align-items:center; gap:0.25rem; }
   .close {
     color: var(--m3-scheme-inverse-on-surface);
     padding: 0 0.75rem;
-    margin-right: -1rem;
+    margin-right: 0;
   }
 </style>

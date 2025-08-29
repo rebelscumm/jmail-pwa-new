@@ -42,33 +42,22 @@
     if (height < 48) close("low");
   });
 
-  // Push a synthetic history entry while sheet is open so Android back closes it first
-  let __pushedHistoryEntry = $state(false);
-  let __popHandler: ((e: PopStateEvent) => void) | null = $state(null);
+  // Use centralized overlay history helper to avoid accidental navigation
+  import { pushOverlay } from '$lib/utils/overlayHistory';
+  let __overlayHandle: { token: string; marker: string; close: () => void } | null = $state(null);
   $effect(() => {
     try {
-      // The dialog opens immediately via action; consider it open after mount
-      if (!__pushedHistoryEntry) {
-        history.pushState({ ...history.state, __m3_overlay: 'sheet' }, "", location.href);
-        __pushedHistoryEntry = true;
-        const handler = (_e: PopStateEvent) => {
-          close("esc");
-        };
-        __popHandler = handler;
-        window.addEventListener('popstate', handler, { once: true });
+      if (!__overlayHandle) {
+        __overlayHandle = pushOverlay('sheet', () => { close('esc'); });
       }
     } catch {}
   });
 
   onDestroy(() => {
     try {
-      if (__pushedHistoryEntry) {
-        if (__popHandler) {
-          window.removeEventListener('popstate', __popHandler);
-          __popHandler = null;
-        }
-        __pushedHistoryEntry = false;
-        history.back();
+      if (__overlayHandle) {
+        try { __overlayHandle.close(); } catch {}
+        __overlayHandle = null;
       }
     } catch {}
   });

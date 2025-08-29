@@ -26,6 +26,7 @@
   import iconArrowDown from "@ktibow/iconset-material-symbols/arrow-downward";
   import iconArrowUp from "@ktibow/iconset-material-symbols/arrow-upward";
   import iconSparkles from "@ktibow/iconset-material-symbols/auto-awesome";
+  import iconCopy from "@ktibow/iconset-material-symbols/content-copy-outline";
   import Dialog from "$lib/containers/Dialog.svelte";
   import { searchQuery } from "$lib/stores/search";
   // Derive threadId defensively in case params are briefly undefined during navigation
@@ -92,6 +93,21 @@
     const raw = a.lastMsgMeta.from || '';
     const m = raw.match(/^(.*?)\s*<([^>]+)>/);
     return (m ? (m[1] || m[2]) : raw).toLowerCase();
+  }
+  async function copyAiSubject() {
+    try {
+      if (!aiSubjectSummary) { showSnackbar({ message: 'No AI subject', closable: true }); return; }
+      await navigator.clipboard.writeText(aiSubjectSummary);
+      showSnackbar({ message: 'AI subject copied', closable: true });
+    } catch (e) { showSnackbar({ message: 'Failed to copy AI subject', closable: true }); }
+  }
+
+  async function copyAiBody() {
+    try {
+      if (!aiBodySummary) { showSnackbar({ message: 'No AI summary', closable: true }); return; }
+      await navigator.clipboard.writeText(aiBodySummary);
+      showSnackbar({ message: 'AI summary copied', closable: true });
+    } catch (e) { showSnackbar({ message: 'Failed to copy AI summary', closable: true }); }
   }
   function getSubject(a: import('$lib/types').GmailThread): string { return (a.lastMsgMeta.subject || '').toLowerCase(); }
   function getDate(a: import('$lib/types').GmailThread): number { return num(a.lastMsgMeta.date) || 0; }
@@ -192,27 +208,34 @@
       const date = new Date(n);
       const today = new Date();
       const timeStr = date.toLocaleString(undefined, { hour: 'numeric', minute: '2-digit' });
-      const isToday = (date.getFullYear() === today.getFullYear() &&
-                       date.getMonth() === today.getMonth() &&
-                       date.getDate() === today.getDate());
-      if (isToday) {
-        return `Today, ${timeStr}`;
+
+      // Compute days difference (positive for past dates)
+      const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+      const startOfDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+      const diffDays = Math.round((startOfToday.getTime() - startOfDate.getTime()) / 86400000);
+
+      if (diffDays === 0) return `Today, ${timeStr}`;
+      if (diffDays === 1) return `Yesterday, ${timeStr}`;
+
+      let relative = '';
+      if (diffDays < 7) {
+        relative = `${diffDays} day${diffDays === 1 ? '' : 's'} ago`;
+      } else if (diffDays < 30) {
+        const weeks = Math.floor(diffDays / 7);
+        relative = `${weeks} week${weeks === 1 ? '' : 's'} ago`;
+      } else {
+        const months = Math.round(diffDays / 30);
+        relative = `${months} month${months === 1 ? '' : 's'} ago`;
       }
-      const yesterday = new Date(today);
-      yesterday.setDate(today.getDate() - 1);
-      const isYesterday = (date.getFullYear() === yesterday.getFullYear() &&
-                           date.getMonth() === yesterday.getMonth() &&
-                           date.getDate() === yesterday.getDate());
-      if (isYesterday) {
-        return `Yesterday, ${timeStr}`;
-      }
-      return date.toLocaleString(undefined, {
+
+      const full = date.toLocaleString(undefined, {
         weekday: 'short',
         month: 'short',
         day: 'numeric',
         hour: 'numeric',
         minute: '2-digit'
       });
+      return `${relative}, ${full}`;
     } catch { return ''; }
   }
   async function copyDiagnostics(reason: string, mid?: string, error?: unknown) {
@@ -403,8 +426,20 @@
           m = full;
         }
       } catch (_) {}
-      const bodyText = m.bodyText || m.snippet;
+      // Prefer full body text, fall back to snippet or whatever is rendered in the viewer DOM
+      let bodyText = m.bodyText || m.snippet || '';
       const bodyHtml = m.bodyHtml;
+      if (!bodyText) {
+        try {
+          if (typeof document !== 'undefined') {
+            // Try to extract the visible text for this message from the rendered viewer.
+            const el = document.querySelector(`[data-mid="${mid}"] .html-body`) || document.querySelector(`[data-mid="${mid}"] pre`) || document.querySelector(`[data-mid="${mid}"]`);
+            if (el && typeof (el as HTMLElement).innerText === 'string') {
+              bodyText = (el as HTMLElement).innerText.trim();
+            }
+          }
+        } catch (_) {}
+      }
       // Compute full message summary first (token heavy), then derive subject from it (token light)
       const bodyTextOut = await aiSummarizeEmail(subject, bodyText, bodyHtml, m.attachments);
       const subjectText = await aiSummarizeSubject(subject, undefined, undefined, bodyTextOut);
@@ -423,17 +458,15 @@
           const combined = `${subject}\n\n${bodyText || ''}${!bodyText && bodyHtml ? bodyHtml : ''}${attText ? `\n\n${attText}` : ''}`.trim();
           const bodyHash = simpleHash(combined || subject || ct.threadId);
           const nowMs = Date.now();
-          const nowVersion = Number($settings.aiSummaryVersion || 1);
           const next = {
             ...ct,
             summary: (bodyTextOut || '').trim() || ct.summary,
             summaryStatus: (bodyTextOut && bodyTextOut.trim()) ? 'ready' : (ct.summaryStatus || 'error'),
-            summaryVersion: nowVersion,
+            // Preserve summaryUpdatedAt and bodyHash; do not write legacy version fields
             summaryUpdatedAt: nowMs,
             bodyHash,
             aiSubject: (subjectText || '').trim() || (ct as any).aiSubject,
             aiSubjectStatus: (subjectText && subjectText.trim()) ? 'ready' : ((ct as any).aiSubjectStatus || 'error'),
-            subjectVersion: nowVersion,
             aiSubjectUpdatedAt: nowMs
           } as import('$lib/types').GmailThread as any;
           await db.put('threads', next);
@@ -447,8 +480,9 @@
       showSnackbar({ message: 'AI summary ready', closable: true });
     } catch (e) {
       const { message, retryAfterSeconds } = getFriendlyAIErrorMessage(e, 'Summarize');
+      const rootCauses = 'Possible root causes: missing summary field, precompute disabled, missing Gmail body scopes, filtered threads, previous precompute failure.';
       showSnackbar({
-        message,
+        message: `${message}\n${rootCauses}`,
         actions: {
           Retry: () => { void summarize(mid); },
           Copy: async () => {
@@ -631,8 +665,54 @@ function scrollToBottom() {
 
 {#if currentThread}
   <div style="display:flex; flex-direction:column; gap:0.75rem; max-width:64rem; margin:0 auto;">
-    <Card variant="elevated">
-      <h2 class="m3-font-title-large" style="margin:0; display:flex; flex-wrap:wrap; align-items:baseline; gap:0.5rem;">
+
+    {#if summarizing || aiSubjectSummary || aiBodySummary}
+      <div style="display:flex; flex-direction:column; gap:0.5rem;">
+        <!-- AI subject (prominent/up top). Use sparkles icon next to copy button instead of a text label. -->
+        <Card variant="elevated">
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem;">
+            <div style="flex:1; margin:0 0 0.25rem;">
+              {#if summarizing && !aiSubjectSummary}
+                <div style="display:flex; align-items:center; gap:0.5rem;"></div>
+              {/if}
+            </div>
+            <div style="display:flex; gap:0.25rem; align-items:center;">
+              <Icon icon={iconSparkles} />
+              <Button variant="text" onclick={copyAiSubject} title="Copy" aria-label="Copy AI subject">
+                <Icon icon={iconCopy} />
+              </Button>
+            </div>
+          </div>
+          {#if summarizing && !aiSubjectSummary}
+            <LoadingIndicator size={20} />
+          {:else if aiSubjectSummary}
+            <h2 class="m3-font-title-large" style="margin:0; overflow-wrap:anywhere; word-break:break-word;">{aiSubjectSummary}</h2>
+          {/if}
+        </Card>
+
+        <!-- AI body summary (slightly larger font) -->
+        <Card variant="outlined">
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem;">
+            <div style="flex:1; margin:0 0 0.25rem;"></div>
+            <div style="display:flex; gap:0.25rem; align-items:center;">
+              <Icon icon={iconSparkles} />
+              <Button variant="text" onclick={copyAiBody} title="Copy" aria-label="Copy AI summary">
+                <Icon icon={iconCopy} />
+              </Button>
+            </div>
+          </div>
+          {#if summarizing && !aiBodySummary}
+            <LoadingIndicator size={20} />
+          {:else if aiBodySummary}
+            <pre class="m3-font-body-medium" style="white-space:pre-wrap; margin:0; font-size:115%;">{aiBodySummary}</pre>
+          {/if}
+        </Card>
+      </div>
+    {/if}
+
+    <!-- Real subject (less prominent) -->
+    <Card variant="outlined">
+      <h3 class="m3-font-title-small" style="margin:0; display:flex; flex-wrap:wrap; align-items:baseline; gap:0.5rem;">
         <span style="overflow-wrap:anywhere; word-break:break-word;">{currentThread.lastMsgMeta.subject}</span>
         {#if currentThread.lastMsgMeta.from}
           <span class="from">{currentThread.lastMsgMeta.from}</span>
@@ -640,29 +720,8 @@ function scrollToBottom() {
         {#if currentThread.lastMsgMeta?.date}
           <span class="badge m3-font-label-small">{formatDateTime(currentThread.lastMsgMeta.date)}</span>
         {/if}
-      </h2>
+      </h3>
     </Card>
-
-    {#if summarizing || aiSubjectSummary || aiBodySummary}
-      <div style="display:flex; flex-direction:column; gap:0.5rem;">
-        <Card variant="outlined">
-          <div class="m3-font-title-small" style="margin:0 0 0.25rem; color:rgb(var(--m3-scheme-on-surface-variant))">AI Subject</div>
-          {#if summarizing && !aiSubjectSummary}
-            <LoadingIndicator size={20} />
-          {:else if aiSubjectSummary}
-            <pre class="m3-font-body-medium" style="white-space:pre-wrap; margin:0;">{aiSubjectSummary}</pre>
-          {/if}
-        </Card>
-        <Card variant="outlined">
-          <div class="m3-font-title-small" style="margin:0 0 0.25rem; color:rgb(var(--m3-scheme-on-surface-variant))">AI Summary</div>
-          {#if summarizing && !aiBodySummary}
-            <LoadingIndicator size={20} />
-          {:else if aiBodySummary}
-            <pre class="m3-font-body-medium" style="white-space:pre-wrap; margin:0;">{aiBodySummary}</pre>
-          {/if}
-        </Card>
-      </div>
-    {/if}
 
     <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
       <Button variant="text" onclick={() => relogin(currentThread.messageIds?.[0])}>Re-login</Button>

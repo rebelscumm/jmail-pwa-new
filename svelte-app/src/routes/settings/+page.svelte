@@ -43,8 +43,16 @@
   let _precomputeSummaries = $state(false);
   let _precomputeUseBatch = $state(true);
   let _precomputeUseContextCache = $state(true);
+  // If true, auto-run a nightly/initial backfill when missing summaries detected
+  // Defaults to ON
+  let _precomputeAutoRun = $state(true);
+  // legacy summary version removed; keep UI element but hidden
   let _aiSummaryVersion = $state(1);
+  // If true, precompute will honor version mismatches and force recompute across inbox
+  // when aiSummaryVersion changes. Default is false to avoid mass recompute without user intent.
+  let _forceRecomputeOnVersionBump = $state(false);
   let _precomputeInfo = $state('');
+  let _quotaView = $state('No quota events recorded.');
   let importMappingInput = $state<HTMLInputElement | null>(null);
   let _swipeRightPrimary = $state<'archive' | 'delete'>('archive');
   let _swipeLeftPrimary = $state<'archive' | 'delete'>('delete');
@@ -62,6 +70,7 @@
   const persistentKeys = ['Desktop','long-term'];
   const ruleKeys = [ ...new Set([ ...quickKeys, ...hourKeys, ...dayKeys, ...weekdayKeys, ...timeKeys, ...persistentKeys ]) ];
   let _fontScalePercent = $state(100);
+  let _inboxPageSize = $state(100);
 
   // Tabs
   let currentTab = $state<'app' | 'api' | 'mapping' | 'backups'>('app');
@@ -88,10 +97,13 @@
     _taskFilePath = s.taskFilePath || '';
     _trailingRefreshDelayMs = Number(s.trailingRefreshDelayMs || 5000);
     _trailingSlideOutDurationMs = Number((s as any).trailingSlideOutDurationMs || 260);
+    _inboxPageSize = Number(s.inboxPageSize || 100);
     _precomputeSummaries = !!(s as any).precomputeSummaries;
     _precomputeUseBatch = (s as any).precomputeUseBatch !== false;
     _precomputeUseContextCache = (s as any).precomputeUseContextCache !== false;
+    _precomputeAutoRun = !!(s as any).precomputeAutoRun;
     _aiSummaryVersion = Number((s as any).aiSummaryVersion || 1);
+    _forceRecomputeOnVersionBump = !!(s as any).forceRecomputeOnVersionBump;
     _swipeRightPrimary = (s.swipeRightPrimary || 'archive') as any;
     _swipeLeftPrimary = (s.swipeLeftPrimary || 'delete') as any;
     _confirmDelete = !!s.confirmDelete;
@@ -105,6 +117,8 @@
     const tx = db.transaction('labels');
     labels = await tx.store.getAll();
     backups = await listBackups();
+    // Mark initialLoaded only after we've populated local state from $settings
+    initialLoaded = true;
   });
 
   // Track dirty state for guards
@@ -141,7 +155,7 @@
     } catch { return false; }
   });
 
-  $effect(() => { if ($settings) initialLoaded = true; });
+  // initialLoaded is set after settings are fully loaded in onMount
 
   // SvelteKit navigation guard
   let removeBeforeUnload: (() => void) | null = null;
@@ -261,7 +275,7 @@
   }
 
   async function saveAppSettings() {
-    await updateAppSettings({ anchorHour: _anchorHour, roundMinutes: _roundMinutes, unreadOnUnsnooze: _unreadOnUnsnooze, notifEnabled: _notifEnabled, aiProvider: _aiProvider, aiApiKey: _aiApiKey, aiModel: _aiModel, aiSummaryModel: _aiSummaryModel, aiDraftModel: _aiDraftModel, aiPageFetchOptIn: _aiPageFetchOptIn, taskFilePath: _taskFilePath, trailingRefreshDelayMs: Math.max(0, Number(_trailingRefreshDelayMs || 0)), trailingSlideOutDurationMs: Math.max(0, Number(_trailingSlideOutDurationMs || 0)), swipeRightPrimary: _swipeRightPrimary, swipeLeftPrimary: _swipeLeftPrimary, confirmDelete: _confirmDelete, swipeCommitVelocityPxPerSec: Math.max(100, Number(_swipeCommitVelocityPxPerSec || 1000)), swipeDisappearMs: Math.max(100, Number(_swipeDisappearMs || 800)), fontScalePercent: Math.max(50, Math.min(200, Number(_fontScalePercent || 100))), precomputeSummaries: _precomputeSummaries, precomputeUseBatch: _precomputeUseBatch, precomputeUseContextCache: _precomputeUseContextCache, aiSummaryVersion: Math.max(1, Number(_aiSummaryVersion || 1)) });
+    await updateAppSettings({ anchorHour: _anchorHour, roundMinutes: _roundMinutes, unreadOnUnsnooze: _unreadOnUnsnooze, notifEnabled: _notifEnabled, aiProvider: _aiProvider, aiApiKey: _aiApiKey, aiModel: _aiModel, aiSummaryModel: _aiSummaryModel, aiDraftModel: _aiDraftModel, aiPageFetchOptIn: _aiPageFetchOptIn, taskFilePath: _taskFilePath, trailingRefreshDelayMs: Math.max(0, Number(_trailingRefreshDelayMs || 0)), trailingSlideOutDurationMs: Math.max(0, Number(_trailingSlideOutDurationMs || 0)), swipeRightPrimary: _swipeRightPrimary, swipeLeftPrimary: _swipeLeftPrimary, confirmDelete: _confirmDelete, swipeCommitVelocityPxPerSec: Math.max(100, Number(_swipeCommitVelocityPxPerSec || 1000)), swipeDisappearMs: Math.max(100, Number(_swipeDisappearMs || 800)), fontScalePercent: Math.max(50, Math.min(200, Number(_fontScalePercent || 100))), precomputeSummaries: _precomputeSummaries, precomputeUseBatch: _precomputeUseBatch, precomputeUseContextCache: _precomputeUseContextCache, inboxPageSize: Math.max(10, Number(_inboxPageSize || 100)) });
     if (_notifEnabled && 'Notification' in window) {
       const p = await Notification.requestPermission();
       if (p !== 'granted') {
@@ -307,7 +321,7 @@
     try {
       const db = await getDB();
       const threads = await db.getAll('threads');
-      const counts = threads.reduce((acc, t: any) => {
+      const counts = threads.reduce((acc: Record<string, number>, t: any) => {
         const s = t?.summaryStatus || 'none';
         acc[s] = (acc[s] || 0) + 1;
         return acc;
@@ -316,12 +330,38 @@
         at: new Date().toISOString(),
         totalThreads: threads.length,
         summary: counts,
-        sample: threads.slice(0, 5).map((t) => ({ id: t.threadId, status: t.summaryStatus, updatedAt: t.summaryUpdatedAt }))
+        sample: threads.slice(0, 5).map((t: any) => ({ id: t.threadId, status: t.summaryStatus, updatedAt: t.summaryUpdatedAt }))
       };
       await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
       _precomputeInfo = 'Stats copied to clipboard.';
     } catch (e: unknown) {
       _precomputeInfo = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  async function refreshQuotaState() {
+    try {
+      const db = await getDB();
+      const saved = await db.get('settings', 'aiQuotaState');
+      if (!saved) { _quotaView = 'No quota events recorded.'; return; }
+      const lines: string[] = [];
+      for (const k of Object.keys(saved)) {
+        const s: any = (saved as any)[k] || {};
+        lines.push(`${k}: last429At=${s.last429At ? new Date(s.last429At).toLocaleString() : 'none'} failCount=${s.failCount || 0} backoffMs=${s.backoffMs || 0}`);
+      }
+      _quotaView = lines.join('\n');
+    } catch (e) {
+      _quotaView = `Failed to load quota state: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  async function clearQuotaState() {
+    try {
+      const db = await getDB();
+      await db.put('settings', {}, 'aiQuotaState');
+      _quotaView = 'Cleared.';
+    } catch (e) {
+      _quotaView = `Failed to clear quota state: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
 
@@ -353,6 +393,7 @@
       <TextFieldOutlined label="Round minutes (1-60)" type="number" min="1" max="60" step="1" bind:value={(_roundMinutes as any)} />
       <TextFieldOutlined label="Trailing refresh delay (ms)" type="number" min="0" step="100" bind:value={(_trailingRefreshDelayMs as any)} />
       <TextFieldOutlined label="Slide-out duration on refresh (ms)" type="number" min="0" step="20" bind:value={(_trailingSlideOutDurationMs as any)} />
+      <TextFieldOutlined label="Inbox page size (messages per load)" type="number" min="10" step="10" bind:value={(_inboxPageSize as any)} />
       <div style="display:flex; gap:0.5rem; align-items:center;">
         <TextFieldOutlined label="Font size (%)" type="number" min="50" max="200" step="1" bind:value={(_fontScalePercent as any)} />
         <Button variant="outlined" onclick={() => (_fontScalePercent = Math.max(50, Math.min(200, Number(_fontScalePercent || 0) - 1)))}>-1%</Button>
@@ -485,6 +526,15 @@
         </Checkbox>
         <span class="m3-font-body-medium">Use Gemini Batch Mode for nightly backfill (½ price)</span>
       </label>
+      <label style="display:flex; align-items:center; gap:0.5rem;">
+        <Switch bind:checked={_precomputeAutoRun} />
+        <span class="m3-font-body-medium">Auto-run nightly/initial backfill (default ON)</span>
+      </label>
+      <div style="grid-column: 1 / -1; margin-top:0.5rem; padding:0.5rem; border:1px dashed var(--m3-outline-variant); border-radius:6px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;"><div class="m3-font-body-medium">Quota & Rate-limit dashboard</div><div><Button variant="outlined" onclick={refreshQuotaState}>Refresh quota state</Button> <Button variant="text" onclick={clearQuotaState}>Clear quota state</Button></div></div>
+        <div style="color: rgb(var(--m3-scheme-on-surface-variant)); font-size:0.875rem; margin-bottom:0.5rem;">Shows recent provider rate-limit/backoff events persisted across sessions.</div>
+        <div style="font-family:monospace; white-space:pre-wrap; max-height:12vh; overflow:auto; border:1px solid rgb(var(--m3-scheme-outline)); padding:0.5rem; border-radius:6px; background:rgb(var(--m3-scheme-surface-container-lowest));">{_quotaView}</div>
+      </div>
       <label style="display:flex; align-items:center; gap:0.5rem;">
         <Checkbox>
           <input type="checkbox" bind:checked={_precomputeUseContextCache} />

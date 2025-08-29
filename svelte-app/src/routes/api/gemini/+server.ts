@@ -114,9 +114,54 @@ export const POST: RequestHandler = async ({ request }) => {
     return new Response(JSON.stringify({ results: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
   }
 
-  // Best-effort parallel online generation (fallback when Batch Mode isn't available)
+  // Prefer combined-batch single-generation to minimize per-item cost; fall back to parallel per-item runs
   try {
-    if (action === 'summarize_batch') {
+    if (action === 'summarize_batch_combined' || action === 'subject_batch_combined') {
+      // Attempt to craft a single prompt containing a JSON array of items to return id/text pairs
+      const mode: 'summary' | 'subject' = action.indexOf('subject') >= 0 ? 'subject' : 'summary';
+      // Build an instruction that asks Gemini to return JSON: [{id: "...", text: "..."}, ...]
+      const combinedPromptParts: string[] = [];
+      combinedPromptParts.push(mode === 'summary'
+        ? `You are a concise assistant. For each entry in the input array, produce a short bullet-list summary (max 8 bullets) of the provided email content. Return a JSON array of objects with properties {"id":"<id>","text":"<summary>"}. Ensure JSON is the only output.`
+        : `You improve email subjects. For each entry in the input array, produce a single-line subject (<=15 words). Return a JSON array of objects with properties {"id":"<id>","text":"<subject>"}. Ensure JSON is the only output.`);
+
+      // Append the items payload as a JSON string in the prompt so Gemini has context
+      try {
+        combinedPromptParts.push(`INPUT:${JSON.stringify(items.map(it => ({ id: it.id, text: it.text || '' })))}`);
+      } catch (_) {
+        // fallback to a simpler concatenation if stringify fails
+        combinedPromptParts.push('INPUT: ' + items.map(it => `${it.id}: ${String(it.text || '')}`).join('\n---\n'));
+      }
+
+      const combinedText = combinedPromptParts.join('\n\n');
+
+      try {
+        const combinedResp = await callGeminiGenerate(combinedText, apiKey, model, useCache, mode);
+        // Try to parse JSON from the response
+        const jsonStart = combinedResp.indexOf('[');
+        if (jsonStart >= 0) {
+          const jsonPart = combinedResp.slice(jsonStart);
+          try {
+            const parsed = JSON.parse(jsonPart);
+            if (Array.isArray(parsed)) {
+              const out = parsed.map((p: any) => ({ id: String(p.id || ''), text: String(p.text || '') }));
+              return new Response(JSON.stringify({ results: out, map: Object.fromEntries(out.map((r) => [r.id, r.text])) }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+            }
+          } catch (e) {
+            // parsing failed; fall through to per-item
+          }
+        }
+      } catch (e) {
+        // combined call failed; fall through to per-item
+      }
+      // If we reach here, combined attempt failed; fall back to per-item parallel
+      const outFallback = await mapWithConcurrency(items, 4, async (it) => {
+        const text = await callGeminiGenerate(it.text || '', apiKey, model, useCache, mode);
+        return { id: it.id, text };
+      });
+      return new Response(JSON.stringify({ results: outFallback, map: Object.fromEntries(outFallback.map((r) => [r.id, r.text])) }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+
+    } else if (action === 'summarize_batch') {
       const out = await mapWithConcurrency(items, 4, async (it) => {
         const text = await callGeminiGenerate(it.text || '', apiKey, model, useCache, 'summary');
         return { id: it.id, text };

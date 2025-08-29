@@ -43,15 +43,59 @@ export async function copyGmailDiagnosticsToClipboard(extra?: Record<string, unk
     try {
       tokenInfo = await fetchTokenInfo();
     } catch (_) {}
-    const data = { entries, outbox, tokenInfo, ...(extra || {}) };
+    // Ensure `extra` is a plain object before spreading to avoid runtime errors
+    const safeExtra = (extra && typeof extra === 'object') ? Array.isArray(extra) ? { extra } : extra : {};
+    const data = { entries, outbox, tokenInfo, ...safeExtra };
     const text = JSON.stringify(data, null, 2);
     // eslint-disable-next-line no-console
     console.log('[GmailAPI] Diagnostics', data);
+    
+    // Try modern clipboard API first
     if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-      await navigator.clipboard.writeText(text);
-      return true;
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch (clipboardError) {
+        console.warn('[GmailAPI] Clipboard API failed:', clipboardError);
+        // Continue to fallback methods
+      }
     }
-  } catch (_) {}
+    
+    // Fallback 1: Try document.execCommand (older browsers)
+    if (typeof document !== 'undefined' && document.queryCommandSupported && document.queryCommandSupported('copy')) {
+      try {
+        // Create a temporary textarea element
+        const textArea = document.createElement('textarea');
+        textArea.value = text;
+        textArea.style.position = 'fixed';
+        textArea.style.left = '-999999px';
+        textArea.style.top = '-999999px';
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        
+        const successful = document.execCommand('copy');
+        document.body.removeChild(textArea);
+        
+        if (successful) {
+          return true;
+        }
+      } catch (execCommandError) {
+        console.warn('[GmailAPI] execCommand fallback failed:', execCommandError);
+      }
+    }
+    
+    // Fallback 2: Show in alert for manual copy (last resort)
+    try {
+      alert('Diagnostics (copy manually):\n\n' + text);
+      return false; // Not technically copied to clipboard
+    } catch (alertError) {
+      console.warn('[GmailAPI] Alert fallback failed:', alertError);
+    }
+    
+  } catch (error) {
+    console.error('[GmailAPI] copyGmailDiagnosticsToClipboard failed:', error);
+  }
   return false;
 }
 

@@ -29,10 +29,12 @@ export type GmailThread = {
   summary?: string;
   /** Precompute status for the summary */
   summaryStatus?: 'none' | 'pending' | 'ready' | 'error';
-  /** App-controlled version for summary prompt/schema */
-  summaryVersion?: number;
+  /** Deprecated: summaryVersion removed. Presence of `summary` indicates a cached AI summary. */
+  summaryVersion?: never;
   /** Last update timestamp for the summary (ms epoch) */
   summaryUpdatedAt?: number;
+  /** Timestamp user explicitly requested a regeneration (ms epoch) */
+  summaryUserRequestedAt?: number;
   /** Hash of the content used for the current summary (subject+body) */
   bodyHash?: string;
   /** AI-improved subject line for the thread */

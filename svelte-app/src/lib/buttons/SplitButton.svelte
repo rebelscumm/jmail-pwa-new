@@ -13,7 +13,7 @@
     menu,
     onclick,
   }: {
-    variant: "elevated" | "filled" | "tonal" | "outlined";
+    variant: "elevated" | "filled" | "tonal" | "outlined" | "text";
     x?: "inner" | "right";
     y?: "down" | "up";
     children: Snippet;
@@ -97,6 +97,12 @@
       color: rgb(var(--m3-scheme-on-primary));
     }
 
+    /* Text variant: plain text surface like other text buttons */
+    &.text .split {
+      background-color: transparent;
+      color: rgb(var(--m3-scheme-primary));
+    }
+
     &.tonal .split {
       background-color: rgb(var(--m3-scheme-secondary-container));
       color: rgb(var(--m3-scheme-on-secondary-container));
@@ -177,6 +183,18 @@
     border-end-end-radius: var(--m3-split-button-outer-shape);
     /* Reset default summary marker */
     list-style: none;
+    /* Reset native summary button appearance so it matches MD3 button styles */
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent;
+    border: none;
+    color: inherit;
+    padding: 0.375rem;
+    margin: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    outline: none;
   }
   summary::-webkit-details-marker { display: none; }
 
@@ -193,6 +211,11 @@
     }
     summary > :global(svg) {
       transition: rotate var(--m3-util-easing-fast);
+    }
+    /* Focus ring for keyboard accessibility using MD3 token */
+    summary:focus-visible {
+      box-shadow: 0 0 0 3px rgb(var(--m3-scheme-primary) / 0.16);
+      border-radius: var(--m3-split-button-outer-shape);
     }
 
   	details > :global(:not(summary)) {

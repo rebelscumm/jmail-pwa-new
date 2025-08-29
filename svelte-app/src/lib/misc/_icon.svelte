@@ -1,19 +1,14 @@
 <script lang="ts">
-  import type { IconifyIcon } from "@iconify/types";
-
-  let {
-    icon,
-    width = "1em",
-    height = "1em",
-    class: clazz,
-  }: {
-    icon: IconifyIcon;
-    width?: string;
-    height?: string;
-    class?: string;
-  } = $props();
+  // @ts-nocheck
+  /// <reference types="svelte" />
+  let { icon, width = '1em', height = '1em', class: clazz = '' } = $props();
+  // Keep a DOM container for injecting raw SVG body safely at runtime
+  let svgContainer: HTMLElement | null = null;
+  $effect(() => {
+    try {
+      if (svgContainer) svgContainer.innerHTML = icon && (icon as any).body ? (icon as any).body : '';
+    } catch {}
+  });
 </script>
 
-<svg {width} {height} class={clazz} viewBox="0 0 {icon.width} {icon.height}">
-  {@html icon.body}
-</svg>
+<svg bind:this={svgContainer} {width} {height} class={clazz} viewBox="0 0 {icon?.width || 24} {icon?.height || 24}"></svg>

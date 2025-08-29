@@ -1,37 +1,24 @@
-<script lang="ts">
-  import type { Snippet } from "svelte";
-  import type { IconifyIcon } from "@iconify/types";
+<script>
+  // @ts-nocheck
+  /// <reference types="svelte" />
   import Icon from "$lib/misc/_icon.svelte";
   import Layer from "$lib/misc/Layer.svelte";
-  import type { ButtonAttrs } from "$lib/misc/typing-utils";
 
   let {
     variant,
-    icon,
-    trailingIcon,
+    icon = null,
+    trailingIcon = null,
     elevated = false,
     disabled = false,
     selected = false,
     children,
     ...extra
-  }: {
-    /**
-     * general is filter/suggestion since they're the same.
-     * | name       | use              | example                       | phrasing           |
-     * |------------|------------------|-------------------------------|--------------------|
-     * | input      | information item | like a person in the to field | user-entered thing |
-     * | assist     | smart actions    | like add to calendar          | start with a verb  |
-     * | filter     | selection        | like in a search page         | category           |
-     * | suggestion | smart actions    | like a chat response          | query/message      |
-     */
-    variant: "input" | "assist" | "general";
-    icon?: IconifyIcon | undefined;
-    trailingIcon?: IconifyIcon | undefined;
-    elevated?: boolean;
-    disabled?: boolean;
-    selected?: boolean;
-    children: Snippet;
-  } & ButtonAttrs = $props();
+  } = $props();
+// Render children safely: call nested snippet functions until we get a primitive/string
+// If `children` is a Svelte snippet function, render it with {@render children()}.
+// Otherwise render the primitive value directly. This avoids losing DOM
+// fragments when the slot returns nodes rather than plain strings.
+
 </script>
 
 <button
@@ -47,7 +34,13 @@
   {#if icon}
     <Icon {icon} class="leading" />
   {/if}
-  <span class="m3-font-label-large">{@render children()}</span>
+  <span class="m3-font-label-large" style="color: rgb(var(--m3-scheme-on-surface)); color: #222;">
+    {#if typeof children === 'function'}
+      {@render children()}
+    {:else}
+      {children}
+    {/if}
+  </span>
   {#if trailingIcon}
     <Icon icon={trailingIcon} class="trailing" />
   {/if}

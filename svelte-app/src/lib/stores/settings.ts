@@ -35,12 +35,17 @@ export type AppSettings = {
   fontScalePercent?: number;
   /** Enable precomputation of summaries in background */
   precomputeSummaries?: boolean;
+  /** Auto-run a nightly / initial backfill when missing summaries are detected (once per 24h) */
+  precomputeAutoRun?: boolean;
   /** Prefer Gemini Batch Mode for nightly backfills */
   precomputeUseBatch?: boolean;
   /** Use Gemini Context Caching for stable instructions/signatures */
   precomputeUseContextCache?: boolean;
-  /** Summary prompt/schema version for cache invalidation */
-  aiSummaryVersion?: number;
+  // Note: AI summary schema version concept removed; cached summaries are
+  // treated as binary (exists / does not exist) and preserved while thread
+  // remains in INBOX. No app-controlled summary version is stored.
+  /** Number of messages to load per inbox page */
+  inboxPageSize?: number;
 };
 
 const DEFAULTS: AppSettings = {
@@ -63,7 +68,11 @@ const DEFAULTS: AppSettings = {
   precomputeSummaries: false,
   precomputeUseBatch: true,
   precomputeUseContextCache: true,
-  aiSummaryVersion: 1
+  
+  // Auto-run nightly/initial backfill by default
+  precomputeAutoRun: true,
+  // Default to 100 messages per page for a denser inbox load while keeping performance reasonable
+  inboxPageSize: 100
 };
 
 export const settings = writable<AppSettings>({ ...DEFAULTS });

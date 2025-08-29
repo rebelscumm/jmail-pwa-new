@@ -32,12 +32,18 @@ import { precomputeStatus } from '$lib/stores/precompute';
   import iconInbox from '@ktibow/iconset-material-symbols/inbox';
   import iconMarkEmailUnread from '@ktibow/iconset-material-symbols/mark-email-unread';
   import iconSmartToy from '@ktibow/iconset-material-symbols/smart-toy';
+  import iconClose from '@ktibow/iconset-material-symbols/close';
   import iconSparkles from '@ktibow/iconset-material-symbols/auto-awesome';
+  import iconLogs from '@ktibow/iconset-material-symbols/article';
+  import iconNotifications from '@ktibow/iconset-material-symbols/notifications';
   import { onMount } from 'svelte';
   import { trailingHolds } from '$lib/stores/holds';
+  import { labels as labelsStore } from '$lib/stores/labels';
   let { onSyncNow, backHref, backLabel }: { onSyncNow?: () => void; backHref?: string; backLabel?: string } = $props();
   let overflowDetails: HTMLDetailsElement;
   let aboutOpen = $state(false);
+  let notificationsOpen = $state(false);
+  let notifications = $state([] as any[]);
   let __menuPushed = $state(false);
   let __menuPopHandler: ((e: PopStateEvent) => void) | null = $state(null);
   function toggleOverflow(e: MouseEvent) {
@@ -133,64 +139,85 @@ import { precomputeStatus } from '$lib/stores/precompute';
       
       showSnackbar({ message: 'Starting precompute...' });
       const { precomputeNow } = await import('$lib/ai/precompute');
-      const result = await precomputeNow(25);
-      
-      if (result && result.processed > 0) {
-        showSnackbar({ message: `Precompute complete: ${result.processed} items processed`, timeout: 4000 });
-      } else if (result && result.processed === 0) {
-        if (result.total > 0) {
-          // Check if this is because there are no inbox threads
-          try {
-            const { getDB } = await import('$lib/db/indexeddb');
-            const db = await getDB();
-            const allThreads = await db.getAll('threads');
-            const inboxThreads = allThreads.filter(t => t.labelIds?.includes('INBOX'));
-            const nonSpamTrashThreads = inboxThreads.filter(t => !t.labelIds?.includes('SPAM') && !t.labelIds?.includes('TRASH'));
-            
-            if (inboxThreads.length === 0) {
-              showSnackbar({ 
-                message: 'No inbox threads found. Sync your inbox first.', 
-                timeout: 4000,
-                actions: {
-                  'Sync Now': () => { doSync(); }
-                }
-              });
-            } else if (nonSpamTrashThreads.length === 0) {
-              showSnackbar({ 
-                message: 'All inbox threads are in SPAM/TRASH. Check your email filters.', 
-                timeout: 4000,
-                actions: {
-                  'Check Settings': () => { location.href = '/settings'; }
-                }
-              });
-            } else {
-              showSnackbar({ 
-                message: 'Precompute completed but no items were processed. Check console for AI API errors.', 
-                timeout: 6000,
-                actions: {
-                  'Check Settings': () => { location.href = '/settings'; }
-                }
-              });
+      const result: any = await precomputeNow(25);
+      // If the precompute module returned a skip reason, surface it to the user and offer a force-run
+      if (result && result.__reason) {
+        showSnackbar({
+          message: `Precompute skipped: ${result.__reason}`,
+          timeout: 8000,
+          actions: {
+            'Force run': async () => {
+              showSnackbar({ message: 'Forcing precompute now…', timeout: 2000 });
+              const forced: any = await precomputeNow(25);
+              if (forced && forced.processed > 0) showSnackbar({ message: `Precompute complete: ${forced.processed} items processed`, timeout: 4000 });
+              else showSnackbar({ message: 'Precompute did not process any items', timeout: 4000 });
             }
-          } catch (e) {
-            console.error('Error checking thread details:', e);
-            showSnackbar({ 
-              message: 'Precompute completed but no items were processed. Check console for AI API errors.', 
-              timeout: 6000,
-              actions: {
-                'Check Settings': () => { location.href = '/settings'; }
-              }
-            });
           }
-        } else {
-          showSnackbar({ message: 'No email threads found to process', timeout: 3000 });
-        }
+        });
+      } else if (result && result.processed > 0) {
+        showSnackbar({ message: `Precompute complete: ${result.processed} items processed`, timeout: 4000 });
       } else {
-        showSnackbar({ message: 'Precompute complete', timeout: 2500 });
+        showSnackbar({ message: 'Precompute did not process any items', timeout: 4000 });
       }
     } catch (e) {
       const errorMsg = e instanceof Error ? e.message : String(e);
       showSnackbar({ message: `Precompute failed: ${errorMsg}`, timeout: 5000 });
+    }
+  }
+
+  // Open a simple dialog showing precompute logs (reads from precompute module)
+  let precomputeLogsOpen = $state(false);
+  let precomputeLogsContent: { ts: number; level: string; message: string }[] = $state([]);
+  // MD3-compliant summary dialog state
+  let precomputeSummaryOpen = $state(false);
+  let precomputeSummary: any = $state(null);
+
+  async function doShowPrecomputeLogs() {
+    try {
+      const mod = await import('$lib/ai/precompute');
+      if (typeof (mod as any).getPrecomputeLogs === 'function') {
+        precomputeLogsContent = (mod as any).getPrecomputeLogs();
+      } else {
+        precomputeLogsContent = [];
+      }
+      precomputeLogsOpen = true;
+    } catch (e) {
+      showSnackbar({ message: `Could not load logs: ${e instanceof Error ? e.message : e}`, timeout: 4000 });
+    }
+  }
+
+  async function doShowPrecomputeSummary() {
+    try {
+      const mod = await import('$lib/ai/precompute');
+      const summary = typeof (mod as any).getPrecomputeSummary === 'function' ? (mod as any).getPrecomputeSummary() : null;
+      if (!summary) {
+        showSnackbar({ message: 'No precompute summary available', timeout: 3000 });
+        return;
+      }
+      summary.reasons = Array.isArray(summary.reasons) ? summary.reasons : [];
+      if (!summary.reasons.length) {
+        if (summary.total === 0) summary.reasons.push('Precompute has not produced any logs; it may not have run yet.');
+        if (summary.errors && summary.errors > 0) summary.reasons.push('AI errors occurred during precompute. Inspect logs for details.');
+        summary.reasons.push('Gmail scopes or labels may prevent reading full message bodies required for summaries.');
+        summary.reasons.push('Local cache may be out of sync with Gmail server; try Sync to refresh threads.');
+      }
+      precomputeSummary = summary;
+      precomputeSummaryOpen = true;
+    } catch (e) {
+      showSnackbar({ message: `Could not load summary: ${e instanceof Error ? e.message : e}`, timeout: 4000 });
+    }
+  }
+
+  async function doBackfillSummaryVersions() {
+    try {
+      const ok = confirm('Backfill cached AI summaries for unchanged inbox threads? This will update your local database. Continue?');
+      if (!ok) return;
+      showSnackbar({ message: 'Backfilling AI summaries...', timeout: null });
+      const { backfillSummaryVersions } = await import('$lib/db/indexeddb');
+      const res = await backfillSummaryVersions();
+      showSnackbar({ message: `Backfilled ${res.updated} of ${res.scanned} threads`, timeout: 5000 });
+    } catch (e) {
+      showSnackbar({ message: `Backfill failed: ${e instanceof Error ? e.message : String(e)}`, timeout: 6000 });
     }
   }
 
@@ -253,15 +280,20 @@ import { precomputeStatus } from '$lib/stores/precompute';
         const d = overflowDetails;
         const isOpen = !!(d && d.open);
         if (isOpen && !__menuPushed) {
-          history.pushState({ ...history.state, __m3_overlay: 'menu' }, '', location.href);
-          __menuPushed = true;
-          const handler = (_e: PopStateEvent) => { const dd = overflowDetails; if (dd && dd.open) dd.open = false; };
-          __menuPopHandler = handler;
-          window.addEventListener('popstate', handler, { once: true });
+          // Replace manual history handling with centralized helper
+          try {
+            import('$lib/utils/overlayHistory').then(m => {
+              try {
+                const handle = m.pushOverlay('menu', () => { const dd = overflowDetails; if (dd && dd.open) dd.open = false; });
+                __menuPushed = true;
+                __menuPopHandler = (_e: PopStateEvent) => { try { handle.close(); } catch {} };
+                window.addEventListener('popstate', __menuPopHandler, { once: true });
+              } catch {}
+            }).catch(() => {});
+          } catch {}
         } else if (!isOpen && __menuPushed) {
           __menuPushed = false;
           if (__menuPopHandler) { window.removeEventListener('popstate', __menuPopHandler); __menuPopHandler = null; }
-          history.back();
         }
       } catch {}
     };
@@ -385,11 +417,50 @@ import { precomputeStatus } from '$lib/stores/precompute';
     } catch (e) {
       console.error(e);
     }
+    // Refresh label stats on mount
+    try { await refreshLabelStats(); } catch (_) {}
+    // Update label stats when a global refresh occurs
+    try { window.addEventListener('jmail:refresh', refreshLabelStats as EventListener); } catch (_) {}
+  });
+
+  // Listen for global request to show precompute logs (dispatched by snackbar action)
+  onMount(() => {
+    function handleShowPrecomputeLogs() {
+      try {
+        // Prefer centralized function to load and show the dialog
+        doShowPrecomputeLogs();
+      } catch (e) {}
+    }
+    try { window.addEventListener('jmail:show-precompute-logs', handleShowPrecomputeLogs); } catch (e) {}
+    return () => { try { window.removeEventListener('jmail:show-precompute-logs', handleShowPrecomputeLogs); } catch (e) {} };
   });
 
   // Ticking clock to evaluate hold expirations for real-time counters
   let now = $state(Date.now());
   onMount(() => { const id = setInterval(() => { now = Date.now(); }, 250); return () => clearInterval(id); });
+
+  // Optional inbox label totals fetched from Gmail (preferred authoritative counts)
+  let inboxMessagesTotal = $state<number | undefined>(undefined);
+  let inboxMessagesUnread = $state<number | undefined>(undefined);
+
+  async function refreshLabelStats() {
+    try {
+      const { getLabel } = await import('$lib/gmail/api');
+      const inboxLabel = await getLabel('INBOX');
+      const mt = typeof inboxLabel?.messagesTotal === 'number' ? inboxLabel.messagesTotal : undefined;
+      const mu = typeof inboxLabel?.messagesUnread === 'number' ? inboxLabel.messagesUnread : undefined;
+      inboxMessagesTotal = mt;
+      inboxMessagesUnread = mu;
+      // Immediately update the rendered counters with authoritative values when available
+      if (typeof mt === 'number') renderedInboxCount = mt;
+      if (typeof mu === 'number') renderedUnreadCount = mu;
+    } catch (e) {
+      inboxMessagesTotal = undefined;
+      inboxMessagesUnread = undefined;
+    }
+  }
+
+  // Do not mirror labelsStore here to avoid stale/duplicated counts; rely on fresh API fetch via refreshLabelStats()
 
   // Inbox counters (local view based on cached threads + trailing holds)
   const inboxThreads = $derived(($threadsStore || []).filter((t) => {
@@ -402,6 +473,51 @@ import { precomputeStatus } from '$lib/stores/precompute';
   }));
   const inboxCount = $derived(inboxThreads.length);
   const unreadCount = $derived(inboxThreads.filter((t) => (t.labelIds || []).includes('UNREAD')).length);
+  // Schedule authoritative label stat refresh when local counts change
+  let _labelRefreshTimer: number | undefined;
+  function scheduleLabelRefresh() {
+    try {
+      if (typeof _labelRefreshTimer !== 'undefined') window.clearTimeout(_labelRefreshTimer);
+    } catch {}
+    _labelRefreshTimer = window.setTimeout(() => { try { refreshLabelStats(); } catch {} }, 800);
+  }
+  // React to derived value changes (these are reactive primitives, not Svelte stores)
+  $effect(() => {
+    try { renderedInboxCount = Number(inboxCount || 0); } catch { renderedInboxCount = 0; }
+    scheduleLabelRefresh();
+  });
+  $effect(() => {
+    try { renderedUnreadCount = Number(unreadCount || 0); } catch { renderedUnreadCount = 0; }
+    scheduleLabelRefresh();
+  });
+  // Cleanup timer when component unmounts
+  $effect(() => {
+    return () => { try { if (typeof _labelRefreshTimer !== 'undefined') clearTimeout(_labelRefreshTimer); } catch {} };
+  });
+  
+  // Render-safe primitive values to avoid accidentally printing function sources
+  let renderedInboxCount = $state(0);
+  let renderedUnreadCount = $state(0);
+  $effect(() => {
+    try {
+      if (typeof inboxMessagesTotal === 'number') {
+        renderedInboxCount = inboxMessagesTotal;
+      } else {
+        try { renderedInboxCount = Number(inboxCount || 0); } catch { renderedInboxCount = 0; }
+      }
+    } catch {
+      renderedInboxCount = 0;
+    }
+    try {
+      if (typeof inboxMessagesUnread === 'number') {
+        renderedUnreadCount = inboxMessagesUnread;
+      } else {
+        try { renderedUnreadCount = Number(unreadCount || 0); } catch { renderedUnreadCount = 0; }
+      }
+    } catch {
+      renderedUnreadCount = 0;
+    }
+  });
 </script>
 
 <div class="topbar">
@@ -474,9 +590,15 @@ import { precomputeStatus } from '$lib/stores/precompute';
       {/snippet}
     </SplitButton>
 
-    <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
-      <Chip variant="general" icon={iconInbox} disabled title="Inbox threads" onclick={() => {}}>{inboxCount}</Chip>
-      <Chip variant="general" icon={iconMarkEmailUnread} disabled title="Unread threads" onclick={() => {}}>{unreadCount}</Chip>
+    <div style="display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap;">
+      <div style="display:flex; align-items:center; gap:0.5rem;">
+        <Icon icon={iconInbox} width="1.25rem" height="1.25rem" />
+        <div style="color: rgb(var(--m3-scheme-on-surface)); padding: 0.15rem 0.5rem; border-radius: 0.5rem; font-weight: 700;">{renderedInboxCount}</div>
+      </div>
+      <div style="display:flex; align-items:center; gap:0.5rem;">
+        <Icon icon={iconMarkEmailUnread} width="1.25rem" height="1.25rem" />
+        <div style="color: rgb(var(--m3-scheme-on-surface)); padding: 0.15rem 0.5rem; border-radius: 0.5rem; font-weight: 700;">{renderedUnreadCount}</div>
+      </div>
     </div>
 
     <details class="overflow" bind:this={overflowDetails}>
@@ -486,12 +608,30 @@ import { precomputeStatus } from '$lib/stores/precompute';
         </Button>
       </summary>
       <Menu>
-                 <MenuItem icon={iconSparkles} onclick={doPrecompute}>
-           Run Precompute
-         </MenuItem>
+        <!-- Precompute group header -->
+        <MenuItem icon="space" disabled={true} onclick={() => {}}>
+          <strong style="font-weight:600;">Precompute</strong>
+        </MenuItem>
+        <MenuItem icon={iconSparkles} onclick={doPrecompute}>
+          Run Precompute
+        </MenuItem>
+        <MenuItem icon={iconLogs} onclick={doShowPrecomputeLogs}>
+          Review Precompute Logs
+        </MenuItem>
+        <MenuItem icon={iconSmartToy} onclick={doShowPrecomputeSummary}>
+          Precompute Summary
+        </MenuItem>
         <MenuItem icon={iconSettings} onclick={() => (location.href = '/settings')}>Settings</MenuItem>
         <MenuItem icon={iconRefresh} onclick={() => { const u = new URL(window.location.href); u.searchParams.set('refresh', '1'); location.href = u.toString(); }}>Check for App Update</MenuItem>
         <MenuItem icon={iconCopy} onclick={doCopyDiagnostics}>Copy diagnostics</MenuItem>
+        <MenuItem icon={iconNotifications} onclick={async () => {
+          try {
+            const { getHistory } = await import('$lib/containers/snackbar');
+            notifications = getHistory();
+            notificationsOpen = true;
+          } catch (e) { showSnackbar({ message: 'Failed to load notifications', closable: true }); }
+        }}>Notifications</MenuItem>
+        <MenuItem icon={iconSparkles} onclick={doBackfillSummaryVersions}>Backfill AI summary versions</MenuItem>
         <MenuItem icon={iconLogout} onclick={doRelogin}>Re-login</MenuItem>
         <MenuItem icon={iconInfo} onclick={() => { aboutOpen = true; }}>About</MenuItem>
       </Menu>
@@ -509,6 +649,141 @@ import { precomputeStatus } from '$lib/stores/precompute';
         <Button variant="text" onclick={() => (aboutOpen = false)}>Close</Button>
       {/snippet}
     </Dialog>
+    <Dialog icon={iconLogs} headline="Precompute logs" bind:open={precomputeLogsOpen} closeOnClick={false}>
+      {#snippet children()}
+        <div class="log-list" role="log" aria-live="polite" style="position:relative;">
+          {#if precomputeLogsContent.length}
+            <div style="position:absolute; top:0.5rem; right:0.5rem;">
+              <Button variant="text" onclick={() => (precomputeLogsOpen = false)} aria-label="Close">
+                <Icon icon={iconClose} />
+              </Button>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:0.5rem; max-height:60vh; overflow:auto;">
+              <div style="display:flex; gap:0.5rem; align-items:center;">
+                <div style="flex:1; color: rgb(var(--m3-scheme-on-surface-variant)); font-size:0.85rem;">Showing latest precompute logs</div>
+                <Button variant="outlined" iconType="left" onclick={async () => {
+                  try {
+                    const txt = precomputeLogsContent.map((l:any) => `[${new Date(l.ts).toLocaleString()}] ${l.level.toUpperCase()}: ${l.message}`).join('\n');
+                    await navigator.clipboard.writeText(txt);
+                    showSnackbar({ message: 'Logs copied', closable: true });
+                  } catch (e) { showSnackbar({ message: 'Failed to copy logs', closable: true }); }
+                }} title="Copy logs to clipboard" aria-label="Copy logs to clipboard">
+                  <Icon icon={iconCopy} />
+                  <span style="font-size:0.85rem;">Copy</span>
+                </Button>
+              </div>
+              <div style="max-height:48vh; overflow:auto; font-family:monospace; font-size:0.9rem; white-space:pre-wrap;">{#each precomputeLogsContent as l}
+                <div>[{new Date(l.ts).toLocaleString()}] {l.level.toUpperCase()}: {l.message}</div>
+              {/each}</div>
+            </div>
+          {:else}
+            <div>No precompute logs available.</div>
+          {/if}
+        </div>
+      {/snippet}
+      {#snippet buttons()}
+        <Button variant="text" onclick={() => (precomputeLogsOpen = false)}>Close</Button>
+      {/snippet}
+    </Dialog>
+
+    <Dialog icon={iconNotifications} headline="Notifications" bind:open={notificationsOpen} closeOnClick={false}>
+      {#snippet children()}
+        {#if notifications && notifications.length}
+          <div style="display:flex; flex-direction:column; gap:0.5rem; max-width:40rem;">
+            {#each notifications as n, i}
+              <div style="padding:0.5rem; border:1px solid rgb(var(--m3-scheme-outline)); border-radius:6px;">
+                <div style="display:flex; justify-content:space-between; gap:0.5rem; align-items:start;">
+                  <div style="flex:1; white-space:pre-wrap;">{n.message}</div>
+                  <div style="display:flex; flex-direction:column; gap:0.25rem; align-items:flex-end;">
+                    <Button variant="text" onclick={async () => { try { await navigator.clipboard.writeText(n.message || ''); showSnackbar({ message: 'Copied', closable: true }); } catch { showSnackbar({ message: 'Failed to copy', closable: true }); } }} title="Copy">Copy</Button>
+                  </div>
+                </div>
+                {#if n.actions && Object.keys(n.actions).length}
+                  <div style="display:flex; gap:0.5rem; margin-top:0.5rem; flex-wrap:wrap;">
+                    {#each Object.entries(n.actions) as [k, action]}
+                      <Button variant="text" onclick={() => { try { (action as any)(); } catch {} }}>{k}</Button>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        {:else}
+          <div>No notifications</div>
+        {/if}
+      {/snippet}
+      {#snippet buttons()}
+        <Button variant="outlined" onclick={async () => { try { const m = await import('$lib/containers/snackbar'); m.clearHistory(); notifications = []; showSnackbar({ message: 'Notifications cleared', closable: true }); } catch { showSnackbar({ message: 'Failed to clear', closable: true }); } }}>Clear</Button>
+        <Button variant="text" onclick={() => (notificationsOpen = false)}>Close</Button>
+      {/snippet}
+    </Dialog>
+
+    <!-- Precompute Summary Dialog (MD3-compliant) -->
+    <Dialog icon={iconSmartToy} headline="Precompute Summary" bind:open={precomputeSummaryOpen} closeOnClick={false} pushHistory={false}>
+      {#snippet children()}
+        {#if precomputeSummary}
+          <div style="position:relative; display:flex; flex-direction:column; gap:0.5rem; min-width:20rem; max-width:40rem; max-height:60vh; overflow:auto;">
+            <div style="position:absolute; top:0.5rem; right:0.5rem;">
+              <Button variant="text" onclick={() => (precomputeSummaryOpen = false)} aria-label="Close">
+                <Icon icon={iconClose} />
+              </Button>
+            </div>
+            <div style="font-weight:600">Precompute Summary</div>
+            <div style="display:flex; gap:1rem; flex-wrap:wrap;">
+              <div>Total logs: <strong>{precomputeSummary.total}</strong></div>
+              <div>Last hour: <strong>{precomputeSummary.lastHour}</strong></div>
+              <div>Last day: <strong>{precomputeSummary.lastDay}</strong></div>
+              <div>Errors: <strong>{precomputeSummary.errors}</strong> | Warnings: <strong>{precomputeSummary.warns}</strong></div>
+            </div>
+
+            <hr/>
+
+            {#if precomputeSummary.lastRun && Object.keys(precomputeSummary.lastRun.errorTypes || {}).length}
+              <div style="font-size:0.9rem; font-weight:600;">Most recent precompute: {precomputeSummary.lastRun.processed ?? '?'} processed of {precomputeSummary.lastRun.total ?? '?'} candidates</div>
+              <div style="margin:0.25rem 0 0 0; color: rgb(var(--m3-scheme-on-surface-variant));">
+                {#each Object.entries(precomputeSummary.lastRun.errorTypes) as [msg, count]}
+                  <div style="font-family:monospace; white-space:pre-wrap; margin-top:0.25rem;">{count} × {msg}</div>
+                {/each}
+              </div>
+            {:else}
+              <div style="color: rgb(var(--m3-scheme-on-surface-variant));">No recent run error breakdown available.</div>
+            {/if}
+
+            {#if precomputeSummary.lastRun && precomputeSummary.lastRun.runLogs && precomputeSummary.lastRun.runLogs.length}
+              {#if precomputeSummary.lastRun.runLogs.filter((r: any) => r.level === 'error' || /failed|error/i.test(String(r.message))).length}
+                <div style="font-size:0.9rem; font-weight:600; margin-top:0.25rem;">Identified issues in most recent run</div>
+                <div style="color: rgb(var(--m3-scheme-on-surface-variant)); margin-top:0.25rem;">
+                  {#each precomputeSummary.lastRun.runLogs.filter((r: any) => r.level === 'error' || /failed|error/i.test(String(r.message))) as f}
+                    <div style="font-family:monospace; white-space:normal; margin-top:0.25rem;">[{new Date(f.ts).toLocaleString()}] {f.level.toUpperCase()}: {f.message}</div>
+                  {/each}
+                </div>
+              {:else}
+                <div style="color: rgb(var(--m3-scheme-on-surface-variant));">No specific errors detected in the most recent run.</div>
+              {/if}
+            {:else}
+              <div style="color: rgb(var(--m3-scheme-on-surface-variant));">No recent run logs available.</div>
+            {/if}
+          </div>
+        {:else}
+          <div>No precompute summary available.</div>
+        {/if}
+      {/snippet}
+      {#snippet buttons()}
+        <Button variant="outlined" iconType="left" onclick={async () => {
+          try {
+            const s = precomputeSummary;
+            // Keep the JSON copy button for advanced users; copy lastRun JSON if available
+            const payload = s.lastRun ? { lastRun: s.lastRun } : { summary: s };
+            await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+            showSnackbar({ message: 'Summary JSON copied', closable: true });
+          } catch (e) { showSnackbar({ message: 'Failed to copy summary', closable: true }); }
+        }}>
+          <Icon icon={iconCopy} />
+          <span>Copy JSON</span>
+        </Button>
+        <Button variant="text" onclick={() => (precomputeSummaryOpen = false)}>Close</Button>
+      {/snippet}
+    </Dialog>
   </div>
 </div>
 
@@ -524,7 +799,6 @@ import { precomputeStatus } from '$lib/stores/precompute';
   .left, .right { display: flex; align-items: center; gap: 0.5rem; }
   .right { flex: 1; flex-wrap: wrap; min-width: 0; justify-content: flex-end; }
   .label { margin-inline-start: 0.25rem; }
-  .search { display: flex; align-items: center; }
   .search-field { flex: 1 1 12rem; min-width: 0; }
   .search-field :global(.m3-container) {
     min-width: 12rem;
@@ -550,4 +824,5 @@ import { precomputeStatus } from '$lib/stores/precompute';
     right: auto !important;
     bottom: auto !important;
   }
+  :global(.chip-icon) { width:1.1rem; height:1.1rem; flex:0 0 auto; }
 </style>
