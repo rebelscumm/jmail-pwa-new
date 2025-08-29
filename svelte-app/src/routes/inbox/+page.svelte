@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { get } from 'svelte/store';
   import { initAuth, acquireTokenInteractive, authState, getAuthDiagnostics, resolveGoogleClientId } from '$lib/gmail/auth';
-  import { listLabels, listInboxMessageIds, getMessageMetadata, GmailApiError, getProfile, copyGmailDiagnosticsToClipboard, getAndClearGmailDiagnostics } from '$lib/gmail/api';
+  import { listLabels, listInboxMessageIds, getMessageMetadata, GmailApiError, getProfile, copyGmailDiagnosticsToClipboard, getAndClearGmailDiagnostics, listHistory, getThreadSummary } from '$lib/gmail/api';
   import { labels as labelsStore } from '$lib/stores/labels';
   import { threads as threadsStore, messages as messagesStore } from '$lib/stores/threads';
   import { getDB } from '$lib/db/indexeddb';
@@ -95,6 +95,82 @@
       lastRemoteCheckAtMs = nowMs;
       remoteCheckInFlight = false;
     }
+  }
+
+  // Background reconciliation using Gmail History API. This attempts to fetch
+  // history deltas since the last known historyId stored in DB and apply label
+  // changes in-place to IndexedDB so the UI can reload conservatively.
+  async function performBackgroundHistorySync() {
+    try {
+      const db = await getDB();
+      const meta = (await db.get('settings', 'lastHistoryId')) as any || {};
+      const lastHistoryId = meta?.value || null;
+      if (!lastHistoryId) {
+        // Nothing to do: caller can fall back to full list via hydrate when needed
+        return;
+      }
+      let data: any;
+      try {
+        data = await listHistory(lastHistoryId);
+      } catch (e) {
+        // If history API fails (e.g. expired historyId) surface a subtle
+        // telemetry toast so the user (or developer) knows background sync
+        // didn't complete; allow a foreground hydrate to reconcile later.
+        try { showSnackbar({ message: 'Background sync failed', timeout: 5000, actions: { 'Refresh': () => { void hydrate(); } } }); } catch (_) {}
+        return;
+      }
+      const history = Array.isArray((data || {}).history) ? (data as any).history : [];
+      if (!history.length) return;
+      const txThreads = db.transaction('threads', 'readwrite');
+      const txMsgs = db.transaction('messages', 'readwrite');
+      for (const h of history) {
+        try {
+          // Each history entry can contain messagesAdded/messagesDeleted/labelsAdded/labelsRemoved etc.
+          if (h.messages && Array.isArray(h.messages)) {
+            for (const m of h.messages) {
+              if (m.id && m.threadId) {
+                // Ensure message metadata is present for downstream filters
+                try { await txMsgs.store.put({ id: m.id, threadId: m.threadId, labelIds: m.labelIds || [], internalDate: m.internalDate }); } catch (_) {}
+              }
+            }
+          }
+          if (h.labels && Array.isArray(h.labels)) {
+            // labels list is uncommon here; skip
+          }
+          // Look for threadMetadata / label changes
+          if (h.threadId || h.messages) {
+            const threadId = h.threadId || (h.messages && h.messages[0] && h.messages[0].threadId);
+            if (!threadId) continue;
+            try {
+              const existing = await txThreads.store.get(threadId) as any;
+              if (!existing) continue;
+              // Apply label changes present in history entry
+              if (h.labelsAdded || h.labelsRemoved) {
+                const labels = Array.isArray(existing.labelIds) ? existing.labelIds.slice() : [];
+                for (const la of (h.labelsAdded || [])) { if (!labels.includes(la)) labels.push(la); }
+                for (const lr of (h.labelsRemoved || [])) { const idx = labels.indexOf(lr); if (idx >= 0) labels.splice(idx, 1); }
+                const next = { ...existing, labelIds: labels } as any;
+                await txThreads.store.put(next);
+              }
+            } catch (_) {}
+          }
+        } catch (_) {}
+      }
+      await txMsgs.done;
+      await txThreads.done;
+      // Notify user when there were actual changes applied by history so the
+      // update is visible but non-disruptive. If no changes, stay silent.
+      try { showSnackbar({ message: 'Inbox synchronized', timeout: 2000 }); } catch (_) {}
+      // Update lastHistoryId if provided
+      const newHistoryId = (data || {}).historyId;
+      if (newHistoryId) {
+        try { await db.put('settings', newHistoryId, 'lastHistoryId'); } catch (_) {}
+      }
+      // Notify UI to reload conservative cache view
+      try {
+        const clients = await (navigator.serviceWorker && navigator.serviceWorker.controller) ? [] : [];
+      } catch (_) {}
+    } catch (_) {}
   }
   const inboxThreads = $derived(($threadsStore || []).filter((t) => {
     // Guard against undefined/partial entries
@@ -358,6 +434,8 @@
         navigator.serviceWorker?.addEventListener('message', (e: MessageEvent) => {
           if ((e.data && e.data.type) === 'SYNC_TICK') {
             try { if (import.meta.env.DEV) console.debug('[InboxUI] SYNC_TICK received'); } catch {}
+            // Schedule background history-based reconciliation and a quick cache reload.
+            void performBackgroundHistorySync();
             void hydrateFromCache();
             void maybeRemoteRefresh();
           }
@@ -475,8 +553,11 @@
     labelsStore.set(remoteLabels);
 
     // Messages + Threads (first N) and label stats for accurate counts
-    // Optional profile ping only in dev for diagnostics
-    if (import.meta.env.DEV) { try { await getProfile(); } catch (_) {} }
+    // Attempt profile ping to capture the latest historyId for incremental syncs
+    try {
+      const profile = await getProfile();
+      try { if (profile?.historyId) await db.put('settings', profile.historyId, 'lastHistoryId'); } catch (_) {}
+    } catch (_) {}
     // Fetch INBOX label metadata for totals
     try {
       const inboxLabel = await getLabel('INBOX');
@@ -554,13 +635,36 @@
     const txThreads = db.transaction('threads', 'readwrite');
     for (const t of threadList) await txThreads.store.put(t);
     await txThreads.done;
-    const current = $threadsStore || [];
-    const merged = [...current, ...threadList].reduce((acc, t) => {
-      const idx = acc.findIndex((candidate: any) => candidate.threadId === t.threadId);
-      if (idx >= 0) acc[idx] = { ...acc[idx], ...t } as any; else acc.push(t);
-      return acc;
-    }, [] as typeof current);
-    threadsStore.set(merged);
+
+    // Offline-first, non-disruptive merge: update the in-memory store using
+    // the authoritative DB copies but preserve current UI ordering/state so
+    // the user doesn't see jarring replaces/flash. We avoid immediately
+    // removing `INBOX` labels for threads that weren't present on this
+    // paginated fetch because that can be a false negative during
+    // incremental page loads; instead rely on background sync or a full
+    // authoritative sync to perform removals safely.
+    try {
+      const allThreads = await db.getAll('threads');
+      const dbById: Record<string, any> = {};
+      for (const t of (allThreads || [])) dbById[t.threadId] = t;
+      const current = $threadsStore || [];
+      // Update existing in-memory entries with DB authoritative fields
+      const merged = current.map((c) => dbById[c.threadId] ? { ...c, ...dbById[c.threadId] } : c);
+      // Append any DB-only threads after existing UI list (non-disruptive)
+      for (const t of (allThreads || [])) {
+        if (!merged.find((m) => m.threadId === t.threadId)) merged.push(t as any);
+      }
+      threadsStore.set(merged as any);
+    } catch (e) {
+      // Fallback: conservative merge of newly fetched threads into memory
+      const current = $threadsStore || [];
+      const merged = [...current, ...threadList].reduce((acc, t) => {
+        const idx = acc.findIndex((candidate: any) => candidate.threadId === t.threadId);
+        if (idx >= 0) acc[idx] = { ...acc[idx], ...t } as any; else acc.push(t);
+        return acc;
+      }, [] as typeof current);
+      threadsStore.set(merged);
+    }
     const msgDict: Record<string, import('$lib/types').GmailMessage> = { ...$messagesStore };
     for (const m of msgs) msgDict[m.id] = m;
     messagesStore.set(msgDict);

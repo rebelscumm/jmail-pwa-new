@@ -448,6 +448,17 @@ export async function getProfile(): Promise<{ emailAddress: string; messagesTota
   return data;
 }
 
+export async function listHistory(startHistoryId: string): Promise<any> {
+  const q = new URLSearchParams();
+  q.set('startHistoryId', String(startHistoryId));
+  // Request thread/message changes; let caller decide how to interpret
+  // Use maxResults conservatively to avoid huge payloads
+  q.set('maxResults', '1000');
+  const data = await api<any>(`/history?${q.toString()}`);
+  pushGmailDiag({ type: 'history_list', startHistoryId, dataSummary: Array.isArray((data || {}).history) ? { entries: (data as any).history.length } : undefined });
+  return data;
+}
+
 export async function getLabel(labelId: string): Promise<GmailLabel & { id: string }> {
   type LabelResponse = GmailLabel & {
     messageListVisibility?: string;
