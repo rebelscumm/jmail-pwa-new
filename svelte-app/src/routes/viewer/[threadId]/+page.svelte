@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { page } from "$app/stores";
   import { goto } from "$app/navigation";
   import { messages, threads } from "$lib/stores/threads";
@@ -660,6 +661,75 @@ function scrollToTop() {
 function scrollToBottom() {
   window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' });
 }
+
+// Keyboard shortcuts for viewer
+function isEventFromTextInput(e: KeyboardEvent): boolean {
+  const t = e.target as HTMLElement | null;
+  if (!t) return false;
+  const tag = (t.tagName || '').toLowerCase();
+  const editable = (t as any).isContentEditable;
+  return tag === 'input' || tag === 'textarea' || editable;
+}
+
+function onKeyDown(e: KeyboardEvent) {
+  // Ignore when typing or if attachment dialog is open
+  if (isEventFromTextInput(e)) return;
+  if (attDialogOpen) return;
+  const ct = currentThread;
+  if (!ct) return;
+
+  // Esc: back to inbox
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    navigateToInbox();
+    return;
+  }
+  // j/k: next/previous thread
+  if (e.key === 'j' || e.key === 'J') {
+    e.preventDefault();
+    gotoNext();
+    return;
+  }
+  if (e.key === 'k' || e.key === 'K') {
+    e.preventDefault();
+    gotoPrev();
+    return;
+  }
+  // e or y: archive
+  if ((e.key === 'e' || e.key === 'E' || e.key === 'y' || e.key === 'Y')) {
+    e.preventDefault();
+    archiveThread(ct.threadId).then(async () => {
+      try { showSnackbar({ message: 'Archived', actions: { Undo: () => undoLast(1) } }); } catch {}
+      await navigateToInbox();
+    });
+    return;
+  }
+  // Delete or # : delete
+  if (e.key === 'Delete' || e.key === '#') {
+    // Optional confirm via settings
+    if ($settings.confirmDelete) {
+      const ok = confirm('Delete this conversation?');
+      if (!ok) return;
+    }
+    e.preventDefault();
+    trashThread(ct.threadId).then(async () => {
+      try { showSnackbar({ message: 'Deleted', actions: { Undo: () => undoLast(1) } }); } catch {}
+      await navigateToInbox();
+    });
+    return;
+  }
+  // z: undo
+  if (e.key === 'z' || e.key === 'Z') {
+    e.preventDefault();
+    void undoLast(1);
+    return;
+  }
+}
+
+onMount(() => {
+  try { window.addEventListener('keydown', onKeyDown); } catch {}
+  return () => { try { window.removeEventListener('keydown', onKeyDown); } catch {} };
+});
 
 </script>
 
