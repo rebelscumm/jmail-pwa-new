@@ -833,6 +833,41 @@ import { precomputeStatus } from '$lib/stores/precompute';
           Dev tools
           <div class="menu-desc">Common developer utilities</div>
         </MenuItem>
+        <MenuItem icon={iconTerminal} onclick={async () => {
+          try {
+            // Probe the network for Gmail requests and show a concise snackbar with the request URL and a short response snippet
+            showSnackbar({ message: 'Inspecting Gmail network requests…', timeout: 1500 });
+            // Collect recent diagnostics and filter for api_request / api_response entries related to gmail
+            const buf = getAndClearGmailDiagnostics();
+            const entries = (buf || []).filter((e: any) => (e.type === 'api_request' || e.type === 'api_response') && typeof e.path === 'string' && e.path.includes('gmail') );
+            // If none found, surface instruction to open Network tab instead
+            if (!entries || entries.length === 0) {
+              showSnackbar({ message: 'No Gmail network entries found. Open DevTools Network and filter for "/api/gmail"', closable: true, timeout: 8000 });
+              return;
+            }
+            // Build a short summary: list most recent 3 unique paths with status/snippet when available
+            const byPath: Record<string, any> = {};
+            for (const e of entries.slice(-50)) {
+              try {
+                const p = e.path || '';
+                if (!byPath[p]) byPath[p] = { requests: 0, last: null };
+                byPath[p].requests++;
+                byPath[p].last = e;
+              } catch (_) {}
+            }
+            const keys = Object.keys(byPath).slice(-3).reverse();
+            const summaryLines: string[] = [];
+            for (const k of keys) {
+              const v = byPath[k];
+              const last = v.last || {};
+              const status = last.status || '';
+              const snippet = (typeof last.responseSnippet === 'string' && last.responseSnippet.length > 0) ? last.responseSnippet.slice(0, 200) : (typeof last.body === 'string' ? last.body.slice(0, 200) : '');
+              summaryLines.push(`${k} → ${status || '??'} ${snippet ? '- ' + snippet.replace(/\s+/g, ' ').trim() : ''}`);
+            }
+            const message = summaryLines.join('\n');
+            showSnackbar({ message: message, timeout: null, actions: { Copy: async () => { try { await navigator.clipboard.writeText(message); showSnackbar({ message: 'Copied', timeout: 1000 }); } catch { showSnackbar({ message: 'Copy failed', timeout: 2000 }); } } } });
+          } catch (e) { showSnackbar({ message: `Inspection failed: ${e instanceof Error ? e.message : String(e)}`, closable: true }); }
+        }}>Inspect Gmail requests</MenuItem>
         <MenuItem icon={iconNotifications} onclick={async () => {
           try {
             const { getHistory } = await import('$lib/containers/snackbar');

@@ -117,7 +117,15 @@
     z-index: 3;
   }
   .message-container { max-width: 60rem; }
-  .message { margin-right: auto; max-width: 48rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Allow snackbar messages to wrap onto multiple lines instead of truncating */
+  .message {
+    margin-right: auto;
+    max-width: 48rem;
+    overflow: visible;
+    text-overflow: unset;
+    white-space: normal;
+    word-break: break-word; /* break long words/URLs if needed */
+  }
   /* Allow multiline expanded view when user opens notifications dialog; keep single-line by default */
   button {
     display: flex;
