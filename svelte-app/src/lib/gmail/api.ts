@@ -1,8 +1,8 @@
-import { ensureValidToken, fetchTokenInfo, acquireTokenForScopes, SCOPES, refreshTokenSilent, acquireTokenInteractive } from '$lib/gmail/auth';
+import { fetchTokenInfo } from '$lib/gmail/auth';
 import { pushGmailDiag, getAndClearGmailDiagnostics } from '$lib/gmail/diag';
 import type { GmailLabel, GmailMessage, GmailAttachment } from '$lib/types';
 
-const GMAIL_BASE = 'https://gmail.googleapis.com/gmail/v1/users/me';
+const GMAIL_PROXY_BASE = '/api/gmail';
 
 export class GmailApiError extends Error {
   status: number;
@@ -102,52 +102,17 @@ export async function copyGmailDiagnosticsToClipboard(extra?: Record<string, unk
 }
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  let token = await ensureValidToken();
-  let tokenFp = fingerprintToken(token);
   let tokenInfoAtRequest: { scope?: string; expires_in?: string; aud?: string } | undefined;
   try { tokenInfoAtRequest = await fetchTokenInfo(); } catch (_) {}
-  pushGmailDiag({ type: 'api_request', path, method: (init && 'method' in (init as any) && (init as any).method) ? (init as any).method : 'GET', tokenInfo: tokenInfoAtRequest, tokenFp });
-  let res = await fetch(`${GMAIL_BASE}${path}`, {
+  pushGmailDiag({ type: 'api_request', path, method: (init && 'method' in (init as any) && (init as any).method) ? (init as any).method : 'GET', tokenInfo: tokenInfoAtRequest });
+  let res = await fetch(`${GMAIL_PROXY_BASE}${path}`, {
     ...init,
     headers: {
-      Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
       ...(init?.headers || {})
-    }
+    },
+    credentials: 'include'
   });
-  // If unauthorized, try one silent refresh and retry
-  if (res.status === 401) {
-    try {
-      pushGmailDiag({ type: 'api_401_detected', path, tokenFp });
-      token = await refreshTokenSilent('api_401_retry');
-      tokenFp = fingerprintToken(token);
-      res = await fetch(`${GMAIL_BASE}${path}`, {
-        ...init,
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          ...(init?.headers || {})
-        }
-      });
-    } catch (_) {}
-  }
-  // If still unauthorized, attempt an interactive re-auth with minimal friction
-  if (res.status === 401) {
-    try {
-      pushGmailDiag({ type: 'api_401_retry_interactive', path, tokenFp });
-      await acquireTokenInteractive('consent', 'api_401_retry');
-      token = await ensureValidToken();
-      tokenFp = fingerprintToken(token);
-      res = await fetch(`${GMAIL_BASE}${path}`, {
-        ...init,
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          ...(init?.headers || {})
-        }
-      });
-    } catch (_) {}
-  }
   if (!res.ok) {
     let message = `Gmail API error ${res.status}`;
     let details: unknown;
@@ -171,14 +136,14 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     // Detect Gmail's 403 FORBIDDEN variant that can occur with quota or restricted data
     const statusText = (body as any)?.error?.status || (body as any)?.status;
     const reason = Array.isArray((body as any)?.error?.errors) ? (body as any).error.errors.map((e: any) => e?.reason).join(',') : undefined;
-    pushGmailDiag({ type: 'api_error', path, status: res.status, message, contentType: res.headers.get('content-type') || undefined, details: body, tokenFp, statusText, reason });
+    pushGmailDiag({ type: 'api_error', path, status: res.status, message, contentType: res.headers.get('content-type') || undefined, details: body, statusText, reason });
     throw new GmailApiError(message, res.status, details);
   }
   // Some Gmail endpoints (e.g., batchModify) return 204 No Content.
   // Safely handle empty bodies and non-JSON responses.
   try {
     const text = await res.text();
-    pushGmailDiag({ type: 'api_response', path, status: res.status, contentType: res.headers.get('content-type') || undefined, bodyLength: (text || '').length, tokenFp });
+    pushGmailDiag({ type: 'api_response', path, status: res.status, contentType: res.headers.get('content-type') || undefined, bodyLength: (text || '').length });
     if (!text) return undefined as unknown as T;
     try {
       return JSON.parse(text) as T;

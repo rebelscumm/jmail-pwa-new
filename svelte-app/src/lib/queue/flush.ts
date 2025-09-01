@@ -7,13 +7,7 @@ import { copyGmailDiagnosticsToClipboard } from '$lib/gmail/api';
 import { applyRemoteLabels } from './intents';
 
 export async function flushOnce(now = Date.now()): Promise<void> {
-  // Ensure auth is initialized before attempting any Gmail API calls
-  try {
-    const { getAuthState } = await import('$lib/gmail/auth');
-    const state = getAuthState();
-    // Only proceed if GIS client is ready AND we have a valid, unexpired token in state
-    if (!state.ready || !state.accessToken || !state.expiryMs || state.expiryMs <= Date.now()) return;
-  } catch (_) {}
+  // In server-managed auth mode, we rely on the server session; proceed and handle 401s per-call.
   const db = await getDB();
   const due = await getDueOps(now);
   if (!due.length) return;
