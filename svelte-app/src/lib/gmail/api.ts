@@ -45,7 +45,33 @@ export async function copyGmailDiagnosticsToClipboard(extra?: Record<string, unk
     } catch (_) {}
     // Ensure `extra` is a plain object before spreading to avoid runtime errors
     const safeExtra = (extra && typeof extra === 'object') ? Array.isArray(extra) ? { extra } : extra : {};
-    const data = { entries, outbox, tokenInfo, ...safeExtra };
+    // Build a curated list of recent network requests/responses for easy debugging
+    try {
+      const networkCandidates = (entries || []).filter((e: any) => ['api_request', 'api_response', 'api_error'].includes(e.type));
+      const networkRequests = networkCandidates.slice(-20).map((e: any) => ({
+        time: e.time,
+        type: e.type,
+        path: e.path,
+        method: e.method,
+        fullUrl: e.fullUrl || undefined,
+        status: e.status || undefined,
+        statusText: e.statusText || undefined,
+        responseSnippet: typeof e.body === 'string' ? e.body.slice(0, 1024) : (typeof e.responseSnippet === 'string' ? e.responseSnippet.slice(0,1024) : undefined),
+        tokenInfo: e.tokenInfo || undefined,
+        details: e.details || undefined
+      }));
+      (safeExtra as any).networkRequests = networkRequests;
+    } catch (_) {}
+
+    const data = { entries, outbox, tokenInfo, ...safeExtra } as Record<string, unknown>;
+    // Include stack trace if available in extra
+    try {
+      if (extra && typeof extra === 'object' && 'error' in extra) {
+        const err = (extra as any).error;
+        if (err instanceof Error) data.stack = err.stack;
+        else if (typeof err === 'string') data.stack = err;
+      }
+    } catch (_) {}
     const text = JSON.stringify(data, null, 2);
     // eslint-disable-next-line no-console
     console.log('[GmailAPI] Diagnostics', data);

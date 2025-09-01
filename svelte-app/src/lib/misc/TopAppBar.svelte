@@ -12,11 +12,11 @@ import { precomputeStatus } from '$lib/stores/precompute';
   import Chip from '$lib/forms/Chip.svelte';
   import Icon from '$lib/misc/_icon.svelte';
   import { show as showSnackbar } from '$lib/containers/snackbar';
-  import { copyGmailDiagnosticsToClipboard } from '$lib/gmail/api';
+  import { copyGmailDiagnosticsToClipboard, getAndClearGmailDiagnostics } from '$lib/gmail/api';
   import Dialog from '$lib/containers/Dialog.svelte';
   import { appVersion, buildId } from '$lib/utils/version';
   import { checkForUpdateOnce, hardReloadNow } from '$lib/update/checker';
-  import { signOut, acquireTokenInteractive, resolveGoogleClientId, initAuth } from '$lib/gmail/auth';
+  import { signOut, acquireTokenInteractive, resolveGoogleClientId, initAuth, getAuthDiagnostics } from '$lib/gmail/auth';
   import { threads as threadsStore } from '$lib/stores/threads';
   import iconSearch from '@ktibow/iconset-material-symbols/search';
   import iconMore from '@ktibow/iconset-material-symbols/more-vert';
@@ -349,10 +349,112 @@ import { precomputeStatus } from '$lib/stores/precompute';
       await signOut();
       const cid = resolveGoogleClientId() || '';
       if (cid) { try { await initAuth(cid); } catch (_) {} }
-      await acquireTokenInteractive('consent', 'topbar_relogin');
-      location.href = '/inbox';
+      try {
+        await acquireTokenInteractive('consent', 'topbar_relogin');
+        location.href = '/inbox';
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (typeof msg === 'string' && msg.includes('Auth not initialized')) {
+          try {
+            const loginUrl = typeof window !== 'undefined' ? new URL('/api/google-login', window.location.href).toString() : '/api/google-login';
+            window.location.href = loginUrl;
+            return;
+          } catch (_) {}
+        }
+        throw e;
+      }
     } catch (e) {
-      showSnackbar({ message: `Re-login failed: ${e instanceof Error ? e.message : e}`, closable: true });
+      const errMsg = e instanceof Error ? e.message : String(e);
+      showSnackbar({
+        message: `Re-login failed: ${errMsg}`,
+        closable: true,
+        timeout: null,
+        actions: {
+          Copy: async () => {
+            try {
+              const authDiag = getAuthDiagnostics();
+              let buffered = [] as any[];
+              try { buffered = getAndClearGmailDiagnostics() || []; } catch (_) { buffered = []; }
+
+              // Attempt quick server probe for /api/gmail/profile to capture server-side status
+              let serverProbe: Record<string, unknown> | undefined = undefined;
+              try {
+                const ctrl = new AbortController();
+                const id = setTimeout(() => ctrl.abort(), 5000);
+                const r = await fetch('/api/gmail/profile', { method: 'GET', credentials: 'include', signal: ctrl.signal });
+                clearTimeout(id);
+                let bodyText: string | undefined = undefined;
+                try { bodyText = await r.text(); } catch (_) { bodyText = undefined; }
+                serverProbe = { status: r.status, statusText: r.statusText, body: typeof bodyText === 'string' ? (bodyText.length > 2000 ? bodyText.slice(0, 2000) + '…' : bodyText) : undefined };
+              } catch (probeErr) {
+                serverProbe = { error: probeErr instanceof Error ? probeErr.message : String(probeErr) };
+              }
+
+              // Service worker and environment info
+              const swController = (typeof navigator !== 'undefined' && navigator.serviceWorker && (navigator.serviceWorker as any).controller) ? (navigator.serviceWorker as any).controller.scriptURL : undefined;
+              const permissions: Record<string, unknown> = {};
+              try {
+                if (typeof navigator !== 'undefined' && (navigator as any).permissions && typeof (navigator as any).permissions.query === 'function') {
+                  // Non-blocking: query a few common permissions (may reject in some browsers)
+                  try { const p = await (navigator as any).permissions.query({ name: 'notifications' as any }); permissions.notifications = p.state; } catch (_) {}
+                }
+              } catch (_) {}
+
+              // Parse cookies into map for easier inspection
+              const cookiesMap: Record<string, string> = {};
+              try {
+                if (typeof document !== 'undefined' && document.cookie) {
+                  String(document.cookie).split(';').forEach((c) => {
+                    const i = c.indexOf('=');
+                    if (i === -1) return;
+                    const k = c.slice(0, i).trim();
+                    const v = c.slice(i + 1).trim();
+                    cookiesMap[k] = v;
+                  });
+                }
+              } catch (_) {}
+
+              const extra: Record<string, unknown> = {
+                reason: 'relogin_failed',
+                error: errMsg,
+                stack: e instanceof Error ? e.stack : undefined,
+                authDiagnostics: authDiag,
+                bufferedEntries: buffered,
+                serverProbe,
+                swController,
+                permissions,
+                clientIdResolved: (() => { try { return resolveGoogleClientId(); } catch { return undefined; } })(),
+                clientIdPreview: (() => { try { const c = resolveGoogleClientId(); return c ? String(c).slice(0, 8) + '…' : undefined; } catch { return undefined; } })(),
+                location: typeof window !== 'undefined' ? window.location.href : undefined,
+                userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : undefined,
+                platform: typeof navigator !== 'undefined' ? navigator.platform : undefined,
+                cookies: cookiesMap,
+                localStorageKeys: typeof localStorage !== 'undefined' ? Object.keys(localStorage) : undefined,
+                importantLocalStorageValues: (() => { try { return { GOOGLE_CLIENT_ID: localStorage.getItem('GOOGLE_CLIENT_ID'), VITE_GOOGLE_CLIENT_ID: localStorage.getItem('VITE_GOOGLE_CLIENT_ID') }; } catch { return undefined; } })(),
+                date: new Date().toISOString()
+              };
+
+              const text = JSON.stringify(extra, null, 2);
+              let ok = false;
+              try {
+                if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+                  await navigator.clipboard.writeText(text);
+                  ok = true;
+                }
+              } catch (_) { ok = false; }
+              if (!ok) {
+                try { ok = !!(await copyGmailDiagnosticsToClipboard(extra)); } catch (_) { ok = false; }
+              }
+              if (!ok) {
+                try { console.log('Re-login diagnostics:', extra); } catch (_) {}
+              }
+              showSnackbar({ message: ok ? 'Diagnostics copied' : 'Diagnostics logged to console', closable: true });
+            } catch (_) {
+              showSnackbar({ message: 'Failed to copy diagnostics', closable: true });
+            }
+          }
+        }
+      });
     }
   }
   async function doCopyDiagnostics() {
@@ -373,6 +475,86 @@ import { precomputeStatus } from '$lib/stores/precompute';
     } catch (_) {}
     const ok = await copyGmailDiagnosticsToClipboard({ reason: 'topbar_manual_copy' });
     showSnackbar({ message: ok ? 'Diagnostics copied' : 'Failed to copy diagnostics', closable: true });
+  }
+
+  // Helper: copy the Static Web Apps start command for local dev
+  async function doCopySwaCommand() {
+    try {
+      const cmd = 'swa start ./svelte-app --api-location ./api --run "npm run dev --prefix svelte-app"';
+      await navigator.clipboard.writeText(cmd);
+      showSnackbar({ message: 'swa start command copied', closable: true });
+    } catch (e) {
+      showSnackbar({ message: 'Failed to copy swa command', closable: true });
+    }
+  }
+
+  // Helper: copy a local.settings.json example for Functions local dev
+  async function doCopyLocalSettings() {
+    try {
+      const example = `{
+  "IsEncrypted": false,
+  "Values": {
+    "FUNCTIONS_WORKER_RUNTIME": "node",
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "OPENAI_API_KEY": "sk-xxxx",
+    "APP_BASE_URL": "http://localhost:4280",
+    "GOOGLE_CLIENT_ID": "your-google-client-id.apps.googleusercontent.com",
+    "GOOGLE_CLIENT_SECRET": "your-google-client-secret",
+    "GOOGLE_SCOPES": "https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.labels https://www.googleapis.com/auth/gmail.readonly",
+    "COOKIE_SECRET": "change-this-long-random-secret",
+    "COOKIE_SIGNING_SECRET": "change-this-other-secret",
+    "COOKIE_SECURE": "false"
+  }
+}`;
+      await navigator.clipboard.writeText(example);
+      showSnackbar({ message: 'local.settings.json example copied', closable: true });
+    } catch (e) {
+      showSnackbar({ message: 'Failed to copy local.settings.json example', closable: true });
+    }
+  }
+
+  // Small state for API probe dialog when proxy returns unexpected SPA HTML
+  let apiProbeOpen = $state(false);
+  let apiProbeResult: any = $state(undefined as any);
+
+  // Helper: test that the /api/gmail proxy is reachable and copy a short probe result
+  async function doTestApiProxy() {
+    try {
+      showSnackbar({ message: 'Testing API proxy…' });
+      const ctrl = new AbortController();
+      const id = setTimeout(() => ctrl.abort(), 5000);
+      const r = await fetch('/api/gmail/profile', { method: 'GET', credentials: 'include', signal: ctrl.signal });
+      clearTimeout(id);
+      let bodyText: string | undefined = undefined;
+      try { bodyText = await r.text(); } catch (_) { bodyText = undefined; }
+      const probe = { status: r.status, statusText: r.statusText, body: typeof bodyText === 'string' ? (bodyText.length > 2000 ? bodyText.slice(0, 2000) + '…' : bodyText) : undefined };
+
+      // Detect the common local-dev failure where the frontend SPA is returned
+      // for /api/* requests (SWA proxy or Functions host not running).
+      const isSpaHtml404 = r.status === 404 && typeof bodyText === 'string' && /<!doctype html|<html/i.test(bodyText || '');
+      apiProbeResult = { ...probe, isSpaHtml404 };
+
+      if (isSpaHtml404) {
+        showSnackbar({
+          message: 'API proxy appears to be routing to the frontend (404 HTML). API host may not be running.',
+          timeout: 8000,
+          closable: true,
+          actions: {
+            Help: () => { apiProbeOpen = true; },
+            'Copy swa start command': async () => { await doCopySwaCommand(); showSnackbar({ message: 'swa command copied', closable: true }); }
+          }
+        });
+
+        // Also attempt to copy probe payload for easier debugging
+        try { await navigator.clipboard.writeText(JSON.stringify(probe, null, 2)); showSnackbar({ message: 'API probe result copied', closable: true }); } catch (_) {}
+        return;
+      }
+
+      try { await navigator.clipboard.writeText(JSON.stringify(probe, null, 2)); showSnackbar({ message: 'API probe result copied', closable: true }); } catch (_) { showSnackbar({ message: 'API probe complete (could not copy)', closable: true }); }
+    } catch (e) {
+      const em = e instanceof Error ? e.message : String(e);
+      showSnackbar({ message: `API probe failed: ${em}`, closable: true });
+    }
   }
 
   let cacheVersion = $state('unknown');
@@ -609,22 +791,57 @@ import { precomputeStatus } from '$lib/stores/precompute';
         </Button>
       </summary>
       <Menu>
-        <!-- Precompute group header -->
+        <!-- Primary: Inbox / Sync -->
+        <MenuItem icon="space" disabled={true} onclick={() => {}}>
+          <strong style="font-weight:600;">Inbox & Sync</strong>
+        </MenuItem>
+        <MenuItem icon={iconSync} onclick={doSync}>
+          Sync Now
+          <div class="menu-desc">Flush pending ops and refresh inbox from server</div>
+        </MenuItem>
+        <MenuItem icon={iconRefresh} onclick={() => { const u = new URL(window.location.href); u.searchParams.set('refresh', '1'); location.href = u.toString(); }}>
+          Check for App Update
+      
+        </MenuItem>
+
+        <!-- Precompute section -->
         <MenuItem icon="space" disabled={true} onclick={() => {}}>
           <strong style="font-weight:600;">Precompute</strong>
         </MenuItem>
         <MenuItem icon={iconSparkles} onclick={doPrecompute}>
           Run Precompute
+          <div class="menu-desc">Generate AI summaries for cached threads (requires AI key)</div>
         </MenuItem>
         <MenuItem icon={iconLogs} onclick={doShowPrecomputeLogs}>
           Review Precompute Logs
+          <div class="menu-desc">Inspect recent precompute activity and errors</div>
         </MenuItem>
         <MenuItem icon={iconSmartToy} onclick={doShowPrecomputeSummary}>
           Precompute Summary
+          <div class="menu-desc">View aggregate stats and recent run details</div>
         </MenuItem>
-        <MenuItem icon={iconSettings} onclick={() => (location.href = '/settings')}>Settings</MenuItem>
-        <MenuItem icon={iconRefresh} onclick={() => { const u = new URL(window.location.href); u.searchParams.set('refresh', '1'); location.href = u.toString(); }}>Check for App Update</MenuItem>
-        <MenuItem icon={iconCopy} onclick={doCopyDiagnostics}>Copy diagnostics</MenuItem>
+        <MenuItem icon={iconSparkles} onclick={doBackfillSummaryVersions}>Backfill AI summary versions</MenuItem>
+
+        <!-- Dev / Diagnostics section (recommended sequence included) -->
+        <MenuItem icon="space" disabled={true} onclick={() => {}}>
+          <strong style="font-weight:600;">Developer tools</strong>
+        </MenuItem>
+        <MenuItem icon={iconCopy} onclick={doCopySwaCommand} aria-label="Copy swa start command">
+          Copy swa start command
+          <div class="menu-desc"><strong>Step 1 —</strong> Run this in your shell to start frontend + Functions locally</div>
+        </MenuItem>
+        <MenuItem icon={iconCopy} onclick={doCopyLocalSettings} aria-label="Copy local.settings.json example">
+          Copy local.settings.json example
+          <div class="menu-desc"><strong>Step 2 —</strong> Paste into <code>api/local.settings.json</code> and update secrets</div>
+        </MenuItem>
+        <MenuItem icon={iconCopy} onclick={doTestApiProxy} aria-label="Test API proxy">
+          Test API proxy
+          <div class="menu-desc"><strong>Step 3 —</strong> Probe <code>/api/gmail/profile</code> to confirm proxying; result copied</div>
+        </MenuItem>
+        <MenuItem icon={iconCopy} onclick={doCopyDiagnostics}>
+          Copy diagnostics
+          <div class="menu-desc">Collect auth, cookies, and recent network probe for troubleshooting</div>
+        </MenuItem>
         <MenuItem icon={iconNotifications} onclick={async () => {
           try {
             const { getHistory } = await import('$lib/containers/snackbar');
@@ -632,8 +849,10 @@ import { precomputeStatus } from '$lib/stores/precompute';
             notificationsOpen = true;
           } catch (e) { showSnackbar({ message: 'Failed to load notifications', closable: true }); }
         }}>Notifications</MenuItem>
-        <MenuItem icon={iconSparkles} onclick={doBackfillSummaryVersions}>Backfill AI summary versions</MenuItem>
+
+        <!-- Account & About -->
         <MenuItem icon={iconLogout} onclick={doRelogin}>Re-login</MenuItem>
+        <MenuItem icon={iconSettings} onclick={() => (location.href = '/settings')}>Settings</MenuItem>
         <MenuItem icon={iconInfo} onclick={() => { aboutOpen = true; }}>About</MenuItem>
       </Menu>
     </details>
@@ -716,6 +935,41 @@ import { precomputeStatus } from '$lib/stores/precompute';
       {#snippet buttons()}
         <Button variant="outlined" onclick={async () => { try { const m = await import('$lib/containers/snackbar'); m.clearHistory(); notifications = []; showSnackbar({ message: 'Notifications cleared', closable: true }); } catch { showSnackbar({ message: 'Failed to clear', closable: true }); } }}>Clear</Button>
         <Button variant="text" onclick={() => (notificationsOpen = false)}>Close</Button>
+      {/snippet}
+    </Dialog>
+
+    <!-- API probe dialog shown when SPA HTML 404 is detected during probe -->
+    <Dialog icon={iconRefresh} headline="API probe result" bind:open={apiProbeOpen} closeOnClick={false} pushHistory={false}>
+      {#snippet children()}
+        {#if apiProbeResult}
+          <div style="display:flex; flex-direction:column; gap:0.5rem; min-width:20rem; max-width:40rem;">
+            <div><strong>Status</strong>: {apiProbeResult.status} {apiProbeResult.statusText}</div>
+            {#if apiProbeResult.isSpaHtml404}
+              <div style="color:var(--m3-scheme-error);">The request returned the frontend HTML (404). This usually means the API host or SWA proxy is not running.</div>
+              <div>Suggested fixes:</div>
+              <ul>
+                <li>Start the SWA CLI: <code>swa start ./svelte-app --api-location ./api --run "npm run dev --prefix svelte-app"</code></li>
+                <li>Or run Functions host and frontend separately: <code>cd api && func start</code> and <code>npm run dev --prefix svelte-app</code></li>
+                <li>Ensure `api/gmail-proxy/index.js` exists and exports an HTTP function.</li>
+              </ul>
+            {:else}
+              <div>Probe body:</div>
+              <pre style="max-height:40vh; overflow:auto; font-family:monospace; white-space:pre-wrap;">{apiProbeResult.body}</pre>
+            {/if}
+            <div style="display:flex; gap:0.5rem;">
+              <Button variant="outlined" iconType="left" onclick={async () => { try { await navigator.clipboard.writeText(JSON.stringify(apiProbeResult, null, 2)); showSnackbar({ message: 'Probe copied', closable: true }); } catch { showSnackbar({ message: 'Failed to copy probe', closable: true }); } }}>
+                <Icon icon={iconCopy} />
+                <span>Copy JSON</span>
+              </Button>
+              <Button variant="text" onclick={() => { apiProbeOpen = false; }}>Close</Button>
+            </div>
+          </div>
+        {:else}
+          <div>No probe result available.</div>
+        {/if}
+      {/snippet}
+      {#snippet buttons()}
+        <!-- buttons handled inline -->
       {/snippet}
     </Dialog>
 

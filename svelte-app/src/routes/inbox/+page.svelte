@@ -44,6 +44,7 @@
   let ready = $state(false);
   let apiErrorMessage: string | null = $state(null);
   let apiErrorStatus: number | undefined = $state();
+  let apiErrorStack: string | undefined = $state();
   let nextPageToken: string | undefined = $state();
   let syncing = $state(false);
   let authoritativeSyncProgress = $state({ running: false, pagesCompleted: 0, pagesTotal: 0 });
@@ -603,8 +604,22 @@
         CLIENT_ID = CLIENT_ID || resolveGoogleClientId() as string;
         try { await initAuth(CLIENT_ID); } catch (_) {}
       }
-      await acquireTokenInteractive('consent', 'inbox_signin_click');
-      await hydrate();
+      try {
+        await acquireTokenInteractive('consent', 'inbox_signin_click');
+        await hydrate();
+      } catch (e: unknown) {
+        // If auth is intentionally server-managed, fall back to server-side login flow
+        const msg = e instanceof Error ? e.message : String(e);
+        if (typeof msg === 'string' && msg.includes('Auth not initialized')) {
+          try {
+            // Redirect to server login endpoint to establish server-managed session
+            const loginUrl = typeof window !== 'undefined' ? new URL('/api/google-login', window.location.href).toString() : '/api/google-login';
+            window.location.href = loginUrl;
+            return;
+          } catch (_) {}
+        }
+        throw e;
+      }
     } catch (e: unknown) {
       setApiError(e);
       try {
@@ -928,7 +943,7 @@
     }
   }
 
-  async function copyDiagnostics() {
+  async function copyDiagnostics(): Promise<boolean> {
     try {
       const payload = {
         note: 'Gmail diagnostics snapshot',
@@ -959,6 +974,7 @@
     } catch (_) {
       copiedDiagOk = false;
     }
+    return copiedDiagOk;
   }
 
   if (typeof window !== 'undefined') {
@@ -1124,15 +1140,36 @@
       {/if}
       <div style="display:flex; gap:0.5rem; justify-content:flex-end; margin-top:0.75rem;">
         <Button variant="text" href="https://myaccount.google.com/permissions">Review permissions</Button>
+        <Button variant="outlined" onclick={async () => {
+          try {
+            const ok = await copyDiagnostics();
+            showSnackbar({ message: ok ? 'Diagnostics copied to clipboard' : 'Failed to copy diagnostics; check console', closable: true });
+          } catch (_) {
+            showSnackbar({ message: 'Failed to copy diagnostics; check console', closable: true });
+          }
+        }}>Copy diagnostics</Button>
         <Button variant="filled" onclick={signIn}>Sign in with Google</Button>
       </div>
     </Card>
   {:else if apiErrorMessage}
     <Card variant="outlined" style="max-width:36rem; margin: 0 auto 1rem;">
-      <h3 class="m3-font-title-medium" style="margin:0 0 0.25rem 0">Something went wrong</h3>
+      <h3 class="m3-font-title-medium" style="margin:0 0 0.25rem 0">{apiErrorStatus ? `Error ${apiErrorStatus}` : 'Error'}</h3>
       <p class="m3-font-body-medium" style="margin:0; color:rgb(var(--m3-scheme-on-surface-variant))">{apiErrorMessage}</p>
+      <p class="m3-font-body-small" style="margin:0.25rem 0 0; color:rgb(var(--m3-scheme-on-surface-variant))">If you just completed Google sign-in, wait a moment and click "Try again". If the problem persists, copy diagnostics and open an issue.</p>
+      <details style="margin-top:0.5rem;">
+        <summary style="cursor:pointer; font-size:0.9rem; color:rgb(var(--m3-scheme-on-surface-variant));">Show diagnostic preview</summary>
+        <pre style="white-space:pre-wrap; word-break:break-word; font-size:0.75rem; max-height:16rem; overflow:auto; background:rgba(0,0,0,0.03); padding:0.5rem; border-radius:4px;">{JSON.stringify({ errorStatus: apiErrorStatus, errorMessage: apiErrorMessage, ...getAuthDiagnostics() }, null, 2)}</pre>
+      </details>
       <div style="display:flex; gap:0.5rem; justify-content:flex-end; margin-top:0.75rem;">
-        <Button variant="text" onclick={() => { apiErrorMessage = null; apiErrorStatus = undefined; }}>Dismiss</Button>
+        <Button variant="text" onclick={() => { apiErrorMessage = null; apiErrorStatus = undefined; apiErrorStack = undefined; }}>Dismiss</Button>
+        <Button variant="outlined" onclick={async () => {
+          try {
+            const ok = await copyDiagnostics();
+            showSnackbar({ message: ok ? 'Diagnostics copied to clipboard' : 'Failed to copy diagnostics; check console', closable: true });
+          } catch (_) {
+            showSnackbar({ message: 'Failed to copy diagnostics; check console', closable: true });
+          }
+        }}>Copy diagnostics</Button>
         <Button variant="filled" onclick={signIn}>Try again</Button>
       </div>
     </Card>

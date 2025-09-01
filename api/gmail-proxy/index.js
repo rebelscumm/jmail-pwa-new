@@ -52,8 +52,13 @@ module.exports = async function (context, req) {
     return;
   }
 
+  // Ensure path is appended correctly to avoid double slashes which can
+  // cause the Gmail API to return 404 for some routes.
   const base = "https://gmail.googleapis.com/gmail/v1/users/me";
-  const url = `${base}/${path}`.replace(/\/$/, "");
+  const cleanPath = path ? `/${path.replace(/^\/+/, '')}` : '';
+  const url = `${base}${cleanPath}`;
+  // Debug: record constructed URL for troubleshooting 404s
+  try { context.log(`[gmail-proxy] incoming path=${path} cleanPath=${cleanPath} url=${url} method=${method}`); } catch (_) {}
   const headers = {
     Authorization: `Bearer ${token}`,
     "Content-Type": "application/json"
@@ -64,6 +69,10 @@ module.exports = async function (context, req) {
   }
   const r = await fetch(url, init);
   const text = await r.text();
+  // If Gmail returned an error status, log the body to help debug 404/403
+  if (!r.ok) {
+    try { context.log(`[gmail-proxy] gmail response status=${r.status} statusText=${r.statusText} body=${text.slice(0,1024)}`); } catch (_) {}
+  }
   const forward = ["content-type"]; // safe subset
   const hdr = { "Set-Cookie": resHeaders };
   for (const h of forward) {

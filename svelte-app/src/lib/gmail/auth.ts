@@ -98,9 +98,27 @@ export async function initAuth(clientId: string) {
     if (!window?.google?.accounts?.oauth2) {
       throw new Error('GIS loaded but window.google.accounts.oauth2 is unavailable');
     }
-    // In server-managed auth mode, we don't request tokens in the browser anymore.
-    // We keep a minimal ready state for UI and diagnostics.
-    tokenClient = null as any;
+    // Attempt to initialize a client-side TokenClient when GIS exposes initTokenClient.
+    // This enables interactive client-side sign-in flows in environments where
+    // client-managed auth is desired. If initTokenClient is not available or
+    // initialization fails, fall back to server-managed mode (tokenClient left null).
+    try {
+      if (typeof (window as any).google?.accounts?.oauth2?.initTokenClient === 'function') {
+        try {
+          tokenClient = (window as any).google.accounts.oauth2.initTokenClient({
+            client_id: clientId,
+            scope: SCOPES,
+            callback: () => {}
+          }) as unknown as typeof tokenClient;
+        } catch (_) {
+          tokenClient = null as any;
+        }
+      } else {
+        tokenClient = null as any;
+      }
+    } catch (_) {
+      tokenClient = null as any;
+    }
     authState.update((s) => ({ ...s, ready: true }));
     // No local token persistence in server-managed mode.
     lastInitOk = true;
