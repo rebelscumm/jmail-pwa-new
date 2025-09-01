@@ -21,6 +21,7 @@
         <li><span class="k"># or Delete</span><span class="v">Delete</span></li>
         <li><span class="k">e</span><span class="v">Archive (Gmail uses e)</span></li>
         <li><span class="k">z</span><span class="v">Undo</span></li>
+        <li><span class="k">Esc</span><span class="v">Back to inbox (from viewer)</span></li>
       </ul>
       <p class="m3-font-body-small note">Note: Shortcuts generally ignore typing inside inputs and respect current page context.</p>
     </div>
