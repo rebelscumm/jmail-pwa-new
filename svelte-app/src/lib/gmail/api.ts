@@ -118,8 +118,18 @@ export async function copyGmailDiagnosticsToClipboard(extra?: Record<string, unk
     } catch (_) {
       // If snackbar import fails (non-UI context), proceed silently
     }
-    try { console.log('[GmailAPI] Diagnostics (manual copy)', text); } catch (_) {}
-    return false; // Not technically copied to clipboard
+    try {
+      console.log('[GmailAPI] Diagnostics (manual copy)', data);
+    } catch (_) {}
+    // Additionally attempt to place a short summary on the clipboard synchronously
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        // Attempt a best-effort short copy of the top-level keys to help debugging in restricted contexts
+        const short = JSON.stringify({ entries: (entries || []).length, outbox: outbox ? { count: outbox.count } : undefined, tokenInfo: tokenInfo ? { scope: tokenInfo.scope, expires_in: tokenInfo.expires_in } : undefined });
+        await navigator.clipboard.writeText(short);
+      }
+    } catch (_) {}
+    return false; // Not technically copied full diagnostics to clipboard
     
   } catch (error) {
     console.error('[GmailAPI] copyGmailDiagnosticsToClipboard failed:', error);
@@ -183,8 +193,13 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export async function listLabels(): Promise<GmailLabel[]> {
-  const data = await api<{ labels: GmailLabel[] }>(`/labels`);
-  return data.labels || [];
+  const data = await api<{ labels?: GmailLabel[] }>(`/labels`);
+  // Defensive: ensure we don't read .labels from undefined response bodies
+  if (!data || !Array.isArray((data as any).labels)) {
+    pushGmailDiag({ type: 'labels_missing_or_invalid', dataSummary: summarizeListData(data) });
+    return [];
+  }
+  return (data.labels as GmailLabel[]) || [];
 }
 
 export async function listInboxMessageIds(maxResults = 25, pageToken?: string): Promise<{ ids: string[]; nextPageToken?: string }> {
@@ -446,9 +461,14 @@ export async function sendMessageRaw(raw: string, threadId?: string): Promise<{ 
 
 // Quick profile ping to gauge account message/thread totals for diagnostics
 export async function getProfile(): Promise<{ emailAddress: string; messagesTotal: number; threadsTotal: number; historyId: string }> {
-  const data = await api<{ emailAddress: string; messagesTotal: number; threadsTotal: number; historyId: string }>(`/profile`);
+  const data = await api<{ emailAddress?: string; messagesTotal?: number; threadsTotal?: number; historyId?: string }>(`/profile`);
+  if (!data || typeof (data as any).emailAddress !== 'string') {
+    pushGmailDiag({ type: 'profile_missing_or_invalid', dataSummary: summarizeListData(data) });
+    // Return a safe default so callers don't crash
+    return { emailAddress: '', messagesTotal: 0, threadsTotal: 0, historyId: '' };
+  }
   pushGmailDiag({ type: 'profile', emailAddress: data.emailAddress, messagesTotal: data.messagesTotal, threadsTotal: data.threadsTotal });
-  return data;
+  return data as { emailAddress: string; messagesTotal: number; threadsTotal: number; historyId: string };
 }
 
 export async function listHistory(startHistoryId: string): Promise<any> {
@@ -472,6 +492,11 @@ export async function getLabel(labelId: string): Promise<GmailLabel & { id: stri
     threadsUnread?: number;
   };
   const data = await api<LabelResponse>(`/labels/${encodeURIComponent(labelId)}`);
+  if (!data || typeof (data as any).id !== 'string') {
+    pushGmailDiag({ type: 'label_missing_or_invalid', id: labelId, dataSummary: summarizeListData(data) });
+    // Return a safe minimal label so callers can continue
+    return { id: labelId, name: '', type: 'user', messageListVisibility: undefined, labelListVisibility: undefined } as GmailLabel & { id: string };
+  }
   pushGmailDiag({ type: 'label', id: data.id, name: (data as any)?.name, messagesTotal: (data as any)?.messagesTotal, threadsTotal: (data as any)?.threadsTotal, messagesUnread: (data as any)?.messagesUnread, threadsUnread: (data as any)?.threadsUnread });
   return data as GmailLabel & { id: string };
 }

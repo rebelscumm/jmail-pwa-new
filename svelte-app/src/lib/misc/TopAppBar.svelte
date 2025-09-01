@@ -36,6 +36,7 @@ import { precomputeStatus } from '$lib/stores/precompute';
   import iconSparkles from '@ktibow/iconset-material-symbols/auto-awesome';
   import iconLogs from '@ktibow/iconset-material-symbols/article';
   import iconNotifications from '@ktibow/iconset-material-symbols/notifications';
+  import iconTerminal from '@ktibow/iconset-material-symbols/terminal';
   import { onMount } from 'svelte';
   import { trailingHolds } from '$lib/stores/holds';
   import { labels as labelsStore } from '$lib/stores/labels';
@@ -171,6 +172,8 @@ import { precomputeStatus } from '$lib/stores/precompute';
   // MD3-compliant summary dialog state
   let precomputeSummaryOpen = $state(false);
   let precomputeSummary: any = $state(null);
+  // Developer tools dialog
+  let devToolsOpen = $state(false);
 
   async function doShowPrecomputeLogs() {
     try {
@@ -826,21 +829,9 @@ import { precomputeStatus } from '$lib/stores/precompute';
         <MenuItem icon="space" disabled={true} onclick={() => {}}>
           <strong style="font-weight:600;">Developer tools</strong>
         </MenuItem>
-        <MenuItem icon={iconCopy} onclick={doCopySwaCommand} aria-label="Copy swa start command">
-          Copy swa start command
-          <div class="menu-desc"><strong>Step 1 —</strong> Run this in your shell to start frontend + Functions locally</div>
-        </MenuItem>
-        <MenuItem icon={iconCopy} onclick={doCopyLocalSettings} aria-label="Copy local.settings.json example">
-          Copy local.settings.json example
-          <div class="menu-desc"><strong>Step 2 —</strong> Paste into <code>api/local.settings.json</code> and update secrets</div>
-        </MenuItem>
-        <MenuItem icon={iconCopy} onclick={doTestApiProxy} aria-label="Test API proxy">
-          Test API proxy
-          <div class="menu-desc"><strong>Step 3 —</strong> Probe <code>/api/gmail/profile</code> to confirm proxying; result copied</div>
-        </MenuItem>
-        <MenuItem icon={iconCopy} onclick={doCopyDiagnostics}>
-          Copy diagnostics
-          <div class="menu-desc">Collect auth, cookies, and recent network probe for troubleshooting</div>
+        <MenuItem icon={iconTerminal} onclick={() => (devToolsOpen = true)} aria-label="Developer tools">
+          Dev tools
+          <div class="menu-desc">Common developer utilities</div>
         </MenuItem>
         <MenuItem icon={iconNotifications} onclick={async () => {
           try {
@@ -903,6 +894,36 @@ import { precomputeStatus } from '$lib/stores/precompute';
       {/snippet}
       {#snippet buttons()}
         <Button variant="text" onclick={() => (precomputeLogsOpen = false)}>Close</Button>
+      {/snippet}
+    </Dialog>
+
+    <!-- Developer tools dialog grouping the previous verbose menu items -->
+    <Dialog icon={iconTerminal} headline="Developer tools" bind:open={devToolsOpen} closeOnClick={false} pushHistory={false}>
+      {#snippet children()}
+        <div style="display:flex; flex-direction:column; gap:0.5rem; min-width:16rem;">
+          <Button variant="text" onclick={async () => { try { await doCopySwaCommand(); showSnackbar({ message: 'swa command copied', closable: true }); devToolsOpen = false; } catch { showSnackbar({ message: 'Failed', closable: true }); } }}>
+            <Icon icon={iconCopy} />
+            <span>Copy swa</span>
+          </Button>
+
+          <Button variant="text" onclick={async () => { try { await doCopyLocalSettings(); showSnackbar({ message: 'local.settings example copied', closable: true }); devToolsOpen = false; } catch { showSnackbar({ message: 'Failed', closable: true }); } }}>
+            <Icon icon={iconCopy} />
+            <span>Copy local settings</span>
+          </Button>
+
+          <Button variant="text" onclick={async () => { try { await doTestApiProxy(); showSnackbar({ message: 'API probe complete', closable: true }); devToolsOpen = false; } catch { showSnackbar({ message: 'Failed', closable: true }); } }}>
+            <Icon icon={iconRefresh} />
+            <span>Test API</span>
+          </Button>
+
+          <Button variant="text" onclick={async () => { try { await doCopyDiagnostics(); devToolsOpen = false; } catch { showSnackbar({ message: 'Failed', closable: true }); } }}>
+            <Icon icon={iconCopy} />
+            <span>Copy diagnostics</span>
+          </Button>
+        </div>
+      {/snippet}
+      {#snippet buttons()}
+        <Button variant="text" onclick={() => (devToolsOpen = false)}>Close</Button>
       {/snippet}
     </Dialog>
 
