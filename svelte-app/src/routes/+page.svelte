@@ -3,7 +3,7 @@
   import { base } from '$app/paths';
   import ListItem from '$lib/containers/ListItem.svelte';
   import Button from '$lib/buttons/Button.svelte';
-  import { initAuth, acquireTokenInteractive, authState, getAuthDiagnostics, resolveGoogleClientId } from '$lib/gmail/auth';
+  import { initAuth, authState, getAuthDiagnostics, resolveGoogleClientId } from '$lib/gmail/auth';
   import { getDB } from '$lib/db/indexeddb';
   import { copyGmailDiagnosticsToClipboard } from '$lib/gmail/api';
   import { show as showSnackbar } from '$lib/containers/snackbar';
@@ -76,36 +76,10 @@
 
   async function connect() {
     try {
-      if (!ready) {
-        CLIENT_ID = CLIENT_ID || resolveGoogleClientId() as string;
-        try { await initAuth(CLIENT_ID); } catch (_) {}
-      }
-      await acquireTokenInteractive('consent', 'connect_click');
-      hasAccount = true;
-      // Navigate immediately; inbox page will hydrate
-      window.location.href = `${base}/inbox`;
+      const returnTo = `${base}/inbox`;
+      window.location.assign(`/api/google/login?return_to=${encodeURIComponent(returnTo)}`);
     } catch (e) {
-      // eslint-disable-next-line no-console
-      console.error('[Auth] Sign-in failed on landing', e);
-      try {
-        const diag = getAuthDiagnostics();
-        const payload = {
-          note: 'Auth landing diagnostics snapshot (sign-in error)',
-          at: new Date().toISOString(),
-          ready,
-          hasAccount,
-          clientIdPresent: !!CLIENT_ID && String(CLIENT_ID).trim().length > 0,
-          clientIdPreview: CLIENT_ID ? String(CLIENT_ID).slice(0, 8) + '…' : undefined,
-          error: e instanceof Error ? e.message : String(e),
-          ...diag,
-          location: typeof window !== 'undefined' ? window.location?.href : undefined,
-          userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : undefined,
-          localStorageKeys: typeof localStorage !== 'undefined' ? Object.keys(localStorage || {}) : undefined
-        };
-        copiedDiagOk = await copyGmailDiagnosticsToClipboard(payload);
-      } catch (_) {
-        copiedDiagOk = false;
-      }
+      console.error('[Auth] Redirect failed', e);
     }
   }
 

@@ -98,25 +98,11 @@ export async function initAuth(clientId: string) {
     if (!window?.google?.accounts?.oauth2) {
       throw new Error('GIS loaded but window.google.accounts.oauth2 is unavailable');
     }
-    tokenClient = window.google.accounts.oauth2.initTokenClient({
-      client_id: clientId,
-      scope: SCOPES,
-      prompt: '',
-      callback: () => {}
-    });
+    // In server-managed auth mode, we don't request tokens in the browser anymore.
+    // We keep a minimal ready state for UI and diagnostics.
+    tokenClient = null as any;
     authState.update((s) => ({ ...s, ready: true }));
-    // Load any persisted, still-valid token to avoid popups between sessions
-    try {
-      const { getDB } = await import('$lib/db/indexeddb');
-      const db = await getDB();
-      const meta = (await db.get('auth', 'me')) as AccountAuthMeta | undefined;
-      if (meta && typeof meta.tokenExpiry === 'number' && meta.tokenExpiry > Date.now() && meta.accessToken) {
-        authState.update((s) => ({ ...s, accessToken: meta.accessToken, expiryMs: meta.tokenExpiry, account: meta }));
-        pushGmailDiag({ type: 'auth_persist_loaded', expiresAt: meta.tokenExpiry });
-      }
-    } catch (_) {
-      // non-fatal
-    }
+    // No local token persistence in server-managed mode.
     lastInitOk = true;
     lastInitError = undefined;
     pushGmailDiag({ type: 'auth_init_success', clientIdPresent: !!clientId, scopes: SCOPES });
