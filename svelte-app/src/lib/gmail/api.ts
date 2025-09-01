@@ -209,13 +209,13 @@ export async function listInboxMessageIds(maxResults = 25, pageToken?: string): 
   const data = await api<{ messages?: { id: string }[]; nextPageToken?: string }>(
     `/messages?${q.toString()}`
   );
-  const ids = (data.messages || []).map((m) => m.id);
+  const ids = (data?.messages || []).map((m) => m.id);
   if (!ids.length) {
     pushGmailDiag({ type: 'inbox_empty', fn: 'listInboxMessageIds', params: { maxResults, pageToken, labelIds: 'INBOX' }, data: summarizeListData(data) });
   } else {
-    pushGmailDiag({ type: 'inbox_page', fn: 'listInboxMessageIds', params: { maxResults, pageToken, labelIds: 'INBOX' }, count: ids.length, nextPageToken: data.nextPageToken });
+    pushGmailDiag({ type: 'inbox_page', fn: 'listInboxMessageIds', params: { maxResults, pageToken, labelIds: 'INBOX' }, count: ids.length, nextPageToken: data?.nextPageToken });
   }
-  return { ids, nextPageToken: data.nextPageToken };
+  return { ids, nextPageToken: data?.nextPageToken };
 }
 
 export async function listMessageIdsByLabelId(labelId: string, maxResults = 25, pageToken?: string): Promise<{ ids: string[]; nextPageToken?: string }> {
@@ -225,7 +225,7 @@ export async function listMessageIdsByLabelId(labelId: string, maxResults = 25, 
   const data = await api<{ messages?: { id: string }[]; nextPageToken?: string }>(
     `/messages?${q.toString()}`
   );
-  return { ids: (data.messages || []).map((m) => m.id), nextPageToken: data.nextPageToken };
+  return { ids: (data?.messages || []).map((m) => m.id), nextPageToken: data?.nextPageToken };
 }
 
 export async function listThreadIdsByLabelId(labelId: string, maxResults = 25, pageToken?: string): Promise<{ ids: string[]; nextPageToken?: string }> {
@@ -235,7 +235,7 @@ export async function listThreadIdsByLabelId(labelId: string, maxResults = 25, p
   const data = await api<{ threads?: { id: string }[]; nextPageToken?: string }>(
     `/threads?${q.toString()}`
   );
-  return { ids: (data.threads || []).map((t) => t.id), nextPageToken: data.nextPageToken };
+  return { ids: (data?.threads || []).map((t) => t.id), nextPageToken: data?.nextPageToken };
 }
 
 export async function getMessageMetadata(id: string): Promise<GmailMessage> {
