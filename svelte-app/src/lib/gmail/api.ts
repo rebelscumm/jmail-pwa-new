@@ -173,6 +173,22 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     const statusText = (body as any)?.error?.status || (body as any)?.status;
     const reason = Array.isArray((body as any)?.error?.errors) ? (body as any).error.errors.map((e: any) => e?.reason).join(',') : undefined;
     pushGmailDiag({ type: 'api_error', path, status: res.status, message, contentType: res.headers.get('content-type') || undefined, details: body, statusText, reason });
+    // If the server proxy reports an unauthenticated session, initiate the
+    // server-managed login flow so the server can set the required cookies.
+    try {
+      const unauth = (body as any)?.error === 'unauthenticated' || (body as any)?.authenticated === false;
+      if (typeof window !== 'undefined' && res.status === 401 && unauth) {
+        pushGmailDiag({ type: 'server_login_redirect', path, reason: 'unauthenticated_proxy' });
+        // Preserve current location so server can return after auth
+        const returnTo = typeof window !== 'undefined' ? window.location.href : '/';
+        const loginUrl = new URL('/api/google-login', window.location.href);
+        loginUrl.searchParams.set('return_to', returnTo);
+        // Perform a full-page navigation to establish server session cookies
+        window.location.href = loginUrl.toString();
+        // Halt further execution — navigation will unload the page.
+        throw new GmailApiError('Redirecting to server login', 401, details);
+      }
+    } catch (_) {}
     throw new GmailApiError(message, res.status, details);
   }
   // Some Gmail endpoints (e.g., batchModify) return 204 No Content.
