@@ -516,6 +516,23 @@ import { precomputeStatus } from '$lib/stores/precompute';
     }
   }
 
+  // Resolve server base for debugging purposes (mirror of client redirect logic)
+  function resolveServerBaseForDebug(): string {
+    try {
+      const w = (window as any) || {};
+      if (w.__ENV__ && w.__ENV__.APP_BASE_URL) return String(w.__ENV__.APP_BASE_URL);
+    } catch (_) {}
+    try {
+      const env = (import.meta as any).env;
+      if (env && env.VITE_APP_BASE_URL) return String(env.VITE_APP_BASE_URL);
+    } catch (_) {}
+    try {
+      const ls = localStorage.getItem('APP_BASE_URL') || localStorage.getItem('VITE_APP_BASE_URL');
+      if (ls) return ls;
+    } catch (_) {}
+    try { return window.location.origin; } catch (_) { return '/'; }
+  }
+
   // Small state for API probe dialog when proxy returns unexpected SPA HTML
   let apiProbeOpen = $state(false);
   let apiProbeResult: any = $state(undefined as any);
@@ -944,6 +961,19 @@ import { precomputeStatus } from '$lib/stores/precompute';
           <Button variant="text" onclick={async () => { try { await doCopyLocalSettings(); showSnackbar({ message: 'local.settings example copied', closable: true }); devToolsOpen = false; } catch { showSnackbar({ message: 'Failed', closable: true }); } }}>
             <Icon icon={iconCopy} />
             <span>Copy local settings</span>
+          </Button>
+
+          <Button variant="text" onclick={async () => {
+            try {
+              const base = resolveServerBaseForDebug();
+              let ok = false;
+              try { await navigator.clipboard.writeText(base); ok = true; } catch (_) { ok = false; }
+              showSnackbar({ message: ok ? `APP_BASE_URL: ${base} (copied)` : `APP_BASE_URL: ${base}`, timeout: 6000, closable: true });
+              devToolsOpen = false;
+            } catch (e) { showSnackbar({ message: `Failed to resolve APP_BASE_URL: ${e instanceof Error ? e.message : String(e)}`, closable: true }); }
+          }}>
+            <Icon icon={iconInfo} />
+            <span>Show APP_BASE_URL</span>
           </Button>
 
           <Button variant="text" onclick={async () => { try { await doTestApiProxy(); showSnackbar({ message: 'API probe complete', closable: true }); devToolsOpen = false; } catch { showSnackbar({ message: 'Failed', closable: true }); } }}>

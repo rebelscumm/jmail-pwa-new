@@ -181,8 +181,53 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
         pushGmailDiag({ type: 'server_login_redirect', path, reason: 'unauthenticated_proxy' });
         // Preserve current location so server can return after auth
         const returnTo = typeof window !== 'undefined' ? window.location.href : '/';
-        const loginUrl = new URL('/api/google-login', window.location.href);
+        // Resolve server base for API endpoints. Prefer explicit runtime config
+        // via `window.__ENV__.APP_BASE_URL` or Vite env `import.meta.env.VITE_APP_BASE_URL`.
+        const resolveServerBase = () => {
+          try {
+            const w = (window as any) || {};
+            if (w.__ENV__ && w.__ENV__.APP_BASE_URL) return String(w.__ENV__.APP_BASE_URL);
+          } catch (_) {}
+          try {
+            const env = (import.meta as any).env;
+            if (env && env.VITE_APP_BASE_URL) return String(env.VITE_APP_BASE_URL);
+          } catch (_) {}
+          try {
+            const ls = localStorage.getItem('APP_BASE_URL') || localStorage.getItem('VITE_APP_BASE_URL');
+            if (ls) return ls;
+          } catch (_) {}
+          try { return window.location.origin; } catch (_) { return '/'; }
+        };
+        const serverBase = resolveServerBase();
+        const loginUrl = new URL('/api/google-login', serverBase);
         loginUrl.searchParams.set('return_to', returnTo);
+        // Before redirecting, perform a short probe to check if the API host is reachable
+        // and not returning the frontend SPA HTML for /api routes. If the probe looks
+        // suspicious, present a user confirm dialog instead of blindly navigating.
+        let proceed = true;
+        try {
+          const probeUrl = new URL('/api/gmail/profile', serverBase).toString();
+          const ctrl = new AbortController();
+          const id = setTimeout(() => ctrl.abort(), 3000);
+          const r2 = await fetch(probeUrl, { method: 'GET', credentials: 'include', signal: ctrl.signal });
+          clearTimeout(id);
+          let bodyText: string | undefined = undefined;
+          try { bodyText = await r2.text(); } catch (_) { bodyText = undefined; }
+          const isSpaHtml404 = r2.status === 404 && typeof bodyText === 'string' && /<!doctype html|<html/i.test(bodyText || '');
+          pushGmailDiag({ type: 'server_probe', probeUrl, status: r2.status, isSpaHtml404 });
+          if (isSpaHtml404) {
+            const ok = window.confirm('API host appears to be serving frontend HTML (404). The API may not be running. Open server login anyway?');
+            if (!ok) proceed = false;
+          } else if (!r2.ok) {
+            const ok = window.confirm(`API probe returned ${r2.status}. Open server login anyway?`);
+            if (!ok) proceed = false;
+          }
+        } catch (probeErr) {
+          pushGmailDiag({ type: 'server_probe_error', error: probeErr instanceof Error ? probeErr.message : String(probeErr) });
+          const ok = window.confirm('Could not reach API host. Open server login anyway?');
+          if (!ok) proceed = false;
+        }
+        if (!proceed) throw new GmailApiError('Server login cancelled by user', 401, details);
         // Perform a full-page navigation to establish server session cookies
         window.location.href = loginUrl.toString();
         // Halt further execution — navigation will unload the page.
