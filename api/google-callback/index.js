@@ -1,5 +1,5 @@
 const fetch = global.fetch;
-const { popPkceVerifier, popStateCookie, setRefreshCookie, setSessionCookie } = require("../_lib/session");
+const { popPkceVerifier, popStateCookie, setRefreshCookie, setSessionCookie, parseCookies } = require("../_lib/session");
 
 module.exports = async function (context, req) {
   if (req.method !== "GET") {
@@ -20,6 +20,15 @@ module.exports = async function (context, req) {
   const pkceVerifier = popPkceVerifier(req, cookies);
 
   const { code = "", state = "" } = req.query || {};
+  // Diagnostic: capture incoming cookies for debugging state mismatches
+  try {
+    const receivedCookies = parseCookies(req);
+    // Best-effort console log; server environments should surface these logs to their log stream
+    console.log('google-callback: incoming query', { code: !!code, state });
+    console.log('google-callback: received cookies', receivedCookies);
+  } catch (e) {
+    console.log('google-callback: cookie parse failed', e instanceof Error ? e.message : String(e));
+  }
   if (!code || !state || !pkceVerifier) {
     context.res = { status: 400, headers: { "Content-Type": "application/json", "Set-Cookie": cookies }, body: JSON.stringify({ error: "invalid_callback_params" }) };
     return;
