@@ -17,6 +17,15 @@ module.exports = async function (context, req) {
 
   const cookies = [];
   const expectedStateCookie = popStateCookie(req, cookies) || "";
+  // Some hosts/clients URL-encode cookie values (e.g. ':' -> '%3A').
+  // Decode for reliable comparison with the `state` query param.
+  let expectedStateCookieDecoded = expectedStateCookie;
+  try {
+    expectedStateCookieDecoded = decodeURIComponent(expectedStateCookie);
+  } catch (_) {
+    // fall back to raw value if decoding fails
+    expectedStateCookieDecoded = expectedStateCookie;
+  }
   const pkceVerifier = popPkceVerifier(req, cookies);
 
   const { code = "", state = "" } = req.query || {};
@@ -48,13 +57,14 @@ module.exports = async function (context, req) {
     return;
   }
 
-  if (!expectedStateCookie.startsWith(state + ":")) {
+  if (!expectedStateCookieDecoded.startsWith(state + ":")) {
     // State mismatch: surface diagnostic details to help trace cookie/redirect issues
     const receivedCookies = parseCookies(req);
     const diag = {
       error: "state_mismatch",
       stateParam: state,
       expectedStateCookie: expectedStateCookie || null,
+      expectedStateCookieDecoded,
       pkceVerifierPresent: !!pkceVerifier,
       receivedCookies,
       redirectUri,
@@ -65,7 +75,8 @@ module.exports = async function (context, req) {
     context.res = { status: 400, headers: { "Content-Type": "application/json", "Set-Cookie": cookies }, body: JSON.stringify(diag) };
     return;
   }
-  const returnTo = decodeURIComponent(expectedStateCookie.slice(state.length + 1));
+  // The cookie format is "<state>:<returnTo>" after decoding.
+  const returnTo = expectedStateCookieDecoded.slice(state.length + 1);
 
   const body = new URLSearchParams({
     code: String(code),
