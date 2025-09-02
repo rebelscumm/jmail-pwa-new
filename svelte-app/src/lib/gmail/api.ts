@@ -214,7 +214,12 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
           let bodyText: string | undefined = undefined;
           try { bodyText = await r2.text(); } catch (_) { bodyText = undefined; }
           const isSpaHtml404 = r2.status === 404 && typeof bodyText === 'string' && /<!doctype html|<html/i.test(bodyText || '');
-          pushGmailDiag({ type: 'server_probe', probeUrl, status: r2.status, isSpaHtml404 });
+          const probeResult = { probeUrl, status: r2.status, isSpaHtml404 };
+          pushGmailDiag({ type: 'server_probe', ...probeResult });
+          // Fire-and-forget: post probe telemetry to server diagnostics endpoint if available
+          try {
+            void fetch(new URL('/api/collect-diagnostics', serverBase).toString(), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'server_probe', probe: probeResult, timestamp: new Date().toISOString(), location: typeof window !== 'undefined' ? window.location.href : undefined }) });
+          } catch (_) {}
           if (isSpaHtml404) {
             const ok = window.confirm('API host appears to be serving frontend HTML (404). The API may not be running. Open server login anyway?');
             if (!ok) proceed = false;
@@ -224,6 +229,9 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
           }
         } catch (probeErr) {
           pushGmailDiag({ type: 'server_probe_error', error: probeErr instanceof Error ? probeErr.message : String(probeErr) });
+          try {
+            void fetch(new URL('/api/collect-diagnostics', serverBase).toString(), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'server_probe_error', error: probeErr instanceof Error ? probeErr.message : String(probeErr), timestamp: new Date().toISOString(), location: typeof window !== 'undefined' ? window.location.href : undefined }) });
+          } catch (_) {}
           const ok = window.confirm('Could not reach API host. Open server login anyway?');
           if (!ok) proceed = false;
         }
