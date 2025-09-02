@@ -29,6 +29,12 @@ let profileResult: Record<string, any> | null = null;
 let serverProbeError: string | null = null;
 let verifying = false;
 
+// Paste/parse diagnostics state
+let pastedText = '';
+let parsedDiag: any = null;
+let parseError: string | null = null;
+let diagSummary: Record<string, any> | null = null;
+
 onMount(() => {
 	console.log = (...args: any[]) => { addLog('log', args); nativeConsole.log.apply(console, args); };
 	console.warn = (...args: any[]) => { addLog('warn', args); nativeConsole.warn.apply(console, args); };
@@ -204,6 +210,74 @@ export async function startServerLogin() {
 	window.location.href = loginUrl.toString();
 }
 
+// Diagnostics parsing and summarization
+function summarizeParsedDiagnostics(d: any) {
+	try {
+		const summary: any = {};
+		if (!d) return { empty: true };
+		if (d.entries && Array.isArray(d.entries)) summary.entries = d.entries.length;
+		if (d.serverProbe) summary.serverProbe = Object.keys(d.serverProbe).length;
+		// detect auth related flags
+		if (d.tokenInfo) summary.tokenScope = (d.tokenInfo.scope || '').slice(0, 200);
+		if (d.profile) summary.profile = { emailAddress: d.profile.emailAddress, messagesTotal: d.profile.messagesTotal };
+		// extract top-level keys
+		summary.keys = Object.keys(d).slice(0, 50);
+		return summary;
+	} catch (_) { return { error: 'summarize_failed' }; }
+}
+
+export function processPastedDiagnostics() {
+	parseError = null;
+	parsedDiag = null;
+	diagSummary = null;
+	try {
+		if (!pastedText || pastedText.trim().length === 0) throw new Error('No diagnostics text');
+		const obj = JSON.parse(pastedText);
+		parsedDiag = obj;
+		diagSummary = summarizeParsedDiagnostics(obj);
+		addLog('info', ['parsed diagnostics', diagSummary]);
+	} catch (e) {
+		parseError = e instanceof Error ? e.message : String(e);
+		addLog('error', ['parse diagnostics failed', parseError]);
+	}
+}
+
+export async function copyParsedDiagnostics() {
+	if (!parsedDiag) return false;
+	try {
+		await navigator.clipboard.writeText(JSON.stringify(parsedDiag, null, 2));
+		addLog('info', ['copied parsed diagnostics']);
+		return true;
+	} catch (e) {
+		addLog('error', ['copy parsed diagnostics failed', e]);
+		return false;
+	}
+}
+
+export async function submitParsedDiagnostics() {
+	if (!parsedDiag) {
+		alert('No parsed diagnostics to submit.');
+		return;
+	}
+	try {
+		const r = await fetch('/api/collect-diagnostics', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(parsedDiag)
+		});
+		if (r.ok) {
+			addLog('info', ['Submitted parsed diagnostics to server']);
+			alert('Parsed diagnostics submitted successfully!');
+		} else {
+			addLog('error', [`Failed to submit parsed diagnostics: ${r.status} ${r.statusText}`]);
+			alert(`Failed to submit parsed diagnostics: ${r.status} ${r.statusText}`);
+		}
+	} catch (e) {
+		addLog('error', ['Error submitting parsed diagnostics', e]);
+		alert('Error submitting parsed diagnostics: ' + String(e));
+	}
+}
+
 </script>
 
 <style>
@@ -211,6 +285,8 @@ pre.diag { max-height: 40vh; overflow: auto; background: #111; color: #eee; padd
 .controls { display:flex; gap:8px; margin-bottom:8px }
 .wizard { margin: 0.5rem 0 1rem 0; padding: 0.5rem; border: 1px solid rgba(0,0,0,0.06); border-radius: 6px; }
 .step { margin-bottom: 0.5rem; }
+.pastebox { width:100%; min-height: 8rem; font-family: monospace; }
+.summary { background: #fafafa; padding: 0.5rem; border-radius: 6px; margin-top: 0.5rem; }
 </style>
 
 <div>
@@ -252,6 +328,34 @@ pre.diag { max-height: 40vh; overflow: auto; background: #111; color: #eee; padd
 				{#if profileResult}
 					<pre class="diag">{JSON.stringify(profileResult, null, 2)}</pre>
 				{/if}
+			</div>
+		{/if}
+	</div>
+
+	<div class="wizard">
+		<h2>Paste diagnostics</h2>
+		<p>Paste diagnostics JSON (from the "Copy diagnostics to clipboard" button or saved diagnostics) then click "Process" to summarize and surface auth-related findings.</p>
+		<textarea class="pastebox" bind:value={pastedText} placeholder='Paste diagnostics JSON here'></textarea>
+		<div style="display:flex; gap:0.5rem; margin-top:0.5rem">
+			<button on:click={processPastedDiagnostics}>Process pasted diagnostics</button>
+			<button on:click={async ()=>{ const ok = await copyParsedDiagnostics(); if(ok) alert('Parsed diagnostics copied'); else alert('Failed to copy parsed diagnostics'); }}>Copy parsed diagnostics</button>
+			<button on:click={submitParsedDiagnostics} disabled={!parsedDiag}>Submit parsed diagnostics</button>
+		</div>
+		{#if parseError}
+			<div class="warn">Parse error: {parseError}</div>
+		{/if}
+		{#if diagSummary}
+			<div class="summary">
+				<strong>Summary</strong>
+				<pre style="white-space:pre-wrap">{JSON.stringify(diagSummary, null, 2)}</pre>
+			</div>
+		{/if}
+		{#if parsedDiag}
+			<div style="margin-top:0.5rem">
+				<details>
+					<summary>Show parsed diagnostics</summary>
+					<pre class="diag">{JSON.stringify(parsedDiag, null, 2)}</pre>
+				</details>
 			</div>
 		{/if}
 	</div>
