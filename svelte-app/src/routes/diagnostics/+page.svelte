@@ -73,10 +73,13 @@ async function probeServer() {
 
     for (const ep of endpoints) {
         try {
-            const res = await fetch(ep, { method: 'GET' });
+            const res = await fetch(ep, { method: 'GET', credentials: 'include' });
             let body: any = null;
             try { body = await res.text(); body = tryParseJson(body); } catch (e) { body = `<<unreadable: ${e}>>`; }
-            results[ep] = { status: res.status, ok: res.ok, body };
+            // capture response headers and status
+            const headers: Record<string,string> = {};
+            try { for (const k of Array.from(res.headers.keys())) headers[k] = res.headers.get(k) as string; } catch (_) {}
+            results[ep] = { status: res.status, ok: res.ok, headers, body };
             addLog('info', [`probe ${ep}`, results[ep]]);
         } catch (e) {
             results[ep] = { error: String(e) };

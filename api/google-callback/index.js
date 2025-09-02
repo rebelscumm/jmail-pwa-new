@@ -30,12 +30,39 @@ module.exports = async function (context, req) {
     console.log('google-callback: cookie parse failed', e instanceof Error ? e.message : String(e));
   }
   if (!code || !state || !pkceVerifier) {
-    context.res = { status: 400, headers: { "Content-Type": "application/json", "Set-Cookie": cookies }, body: JSON.stringify({ error: "invalid_callback_params" }) };
+    // Provide extended diagnostics to help debug missing params or cookies
+    const receivedCookies = parseCookies(req);
+    const diag = {
+      error: "invalid_callback_params",
+      codePresent: !!code,
+      stateParam: state || null,
+      pkceVerifierPresent: !!pkceVerifier,
+      expectedStateCookie: expectedStateCookie || null,
+      receivedCookies,
+      redirectUri,
+      clientIdPresent: !!clientId,
+      appBase: process.env.APP_BASE_URL || null,
+      requestHeaders: req.headers || {}
+    };
+    context.res = { status: 400, headers: { "Content-Type": "application/json", "Set-Cookie": cookies }, body: JSON.stringify(diag) };
     return;
   }
 
   if (!expectedStateCookie.startsWith(state + ":")) {
-    context.res = { status: 400, headers: { "Content-Type": "application/json", "Set-Cookie": cookies }, body: JSON.stringify({ error: "state_mismatch" }) };
+    // State mismatch: surface diagnostic details to help trace cookie/redirect issues
+    const receivedCookies = parseCookies(req);
+    const diag = {
+      error: "state_mismatch",
+      stateParam: state,
+      expectedStateCookie: expectedStateCookie || null,
+      pkceVerifierPresent: !!pkceVerifier,
+      receivedCookies,
+      redirectUri,
+      clientIdPresent: !!clientId,
+      appBase: process.env.APP_BASE_URL || null,
+      requestHeaders: req.headers || {}
+    };
+    context.res = { status: 400, headers: { "Content-Type": "application/json", "Set-Cookie": cookies }, body: JSON.stringify(diag) };
     return;
   }
   const returnTo = decodeURIComponent(expectedStateCookie.slice(state.length + 1));
