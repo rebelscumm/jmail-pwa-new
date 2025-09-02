@@ -12,7 +12,8 @@
       "/sitemap.xml",
       "/assets/*",
       "/build/*.js",
-      "/build/*.css"
+      "/build/*.css",
+      "/api/*"
     ]
   }
 }
