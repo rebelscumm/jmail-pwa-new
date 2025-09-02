@@ -278,6 +278,71 @@ export async function submitParsedDiagnostics() {
 	}
 }
 
+// Guided actions: per-user interactive checks
+let apiBaseOverride = '';
+let endpointResults: Record<string, any> = {};
+
+function loadApiBaseOverride() {
+	try { apiBaseOverride = localStorage.getItem('VITE_APP_BASE_URL') || localStorage.getItem('APP_BASE_URL') || ''; } catch (_) { apiBaseOverride = ''; }
+}
+
+function saveApiBaseOverride() {
+	try {
+		if (apiBaseOverride && apiBaseOverride.trim()) {
+			localStorage.setItem('APP_BASE_URL', apiBaseOverride.trim());
+		} else {
+			localStorage.removeItem('APP_BASE_URL');
+		}
+		addLog('info', ['Saved APP_BASE_URL override', apiBaseOverride]);
+		alert('Saved APP_BASE_URL override. Re-run environment checks to apply.');
+	} catch (e) {
+		addLog('error', ['Failed to save APP_BASE_URL override', e]);
+		alert('Failed to save override: ' + String(e));
+	}
+}
+
+async function checkEndpoint(path: string) {
+	const serverBase = resolveServerBase();
+	const url = new URL(path, serverBase).toString();
+	try {
+		const r = await fetch(url, { method: 'GET', credentials: 'include' });
+		let body: any = null;
+		try { body = await r.text(); body = tryParseJson(body); } catch (_) { body = '<<unreadable>>'; }
+		endpointResults[path] = { status: r.status, ok: r.ok, headers: (() => { const o: any = {}; try { for (const k of Array.from(r.headers.keys())) o[k] = r.headers.get(k); } catch (_) {} return o; })(), body };
+		addLog('info', ['endpoint check', path, endpointResults[path]]);
+	} catch (e) {
+		endpointResults[path] = { error: String(e) };
+		addLog('error', ['endpoint check failed', path, e]);
+	}
+}
+
+function listClientCookies() {
+	try {
+		const raw = document.cookie || '';
+		const out: Record<string,string> = {};
+		raw.split(';').forEach((p) => { const i = p.indexOf('='); if (i === -1) return; const k = p.slice(0,i).trim(); const v = p.slice(i+1).trim(); out[k]=v; });
+		addLog('info', ['client cookies', out]);
+		endpointResults['__cookies'] = out;
+	} catch (e) {
+		addLog('error', ['listClientCookies failed', e]);
+	}
+}
+
+function clearClientCookies() {
+	try {
+ 		const raw = document.cookie || '';
+ 		raw.split(';').forEach((p) => {
+ 			const i = p.indexOf('='); if (i === -1) return;
+ 			const k = p.slice(0,i).trim();
+ 			document.cookie = k + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/';
+ 		});
+ 		addLog('info', ['cleared non-httpOnly client cookies']);
+ 		alert('Cleared non-httpOnly cookies. httpOnly cookies (server-set) cannot be removed from JS; clear them in browser settings.');
+ 	} catch (e) { addLog('error', ['clearClientCookies failed', e]); }
+}
+
+loadApiBaseOverride();
+
 </script>
 
 <style>
@@ -357,6 +422,29 @@ pre.diag { max-height: 40vh; overflow: auto; background: #111; color: #eee; padd
 					<pre class="diag">{JSON.stringify(parsedDiag, null, 2)}</pre>
 				</details>
 			</div>
+		{/if}
+	</div>
+
+	<div class="wizard">
+		<h2>Guided actions</h2>
+		<p>Use these quick actions to validate API base, endpoints, and client cookies.</p>
+		<div style="display:flex; gap:0.5rem; align-items:center; margin-bottom:0.5rem">
+			<input placeholder="optional APP_BASE_URL override" bind:value={apiBaseOverride} style="width:60%" />
+			<button on:click={saveApiBaseOverride}>Save override</button>
+			<button on:click={() => { loadApiBaseOverride(); alert('Loaded override: ' + (apiBaseOverride || '(none)')); }}>Reload</button>
+		</div>
+		<div style="display:flex; gap:0.5rem; margin-bottom:0.5rem">
+			<button on:click={() => checkEndpoint('/api/google-login')}>Check /api/google-login</button>
+			<button on:click={() => checkEndpoint('/api/google-callback')}>Check /api/google-callback</button>
+			<button on:click={() => checkEndpoint('/api/google-me')}>Check /api/google-me</button>
+			<button on:click={() => checkEndpoint('/api/gmail/profile')}>Check /api/gmail/profile</button>
+		</div>
+		<div style="display:flex; gap:0.5rem; margin-bottom:0.5rem">
+			<button on:click={listClientCookies}>List client cookies</button>
+			<button on:click={clearClientCookies}>Clear client cookies (non-httpOnly)</button>
+		</div>
+		{#if Object.keys(endpointResults).length}
+			<pre class="diag">{JSON.stringify(endpointResults, null, 2)}</pre>
 		{/if}
 	</div>
 
