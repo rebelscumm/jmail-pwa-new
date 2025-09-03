@@ -34,6 +34,23 @@ jobs:
           output_location: "build" # Built app content directory - optional
           ###### End of Repository/Build Configurations ######
 
+      - name: Register prod/dev hostnames (optional)
+        if: always()
+        uses: azure/CLI@v1
+        env:
+          AZURE_STATIC_WEBAPP_NAME: ${{ secrets.AZURE_STATIC_WEBAPP_NAME }}
+          AZURE_RG: ${{ secrets.AZURE_RG }}
+        with:
+          azcliversion: '2.0.77'
+          inlineScript: |
+            # Only run when AZURE_STATIC_WEBAPP_NAME and AZURE_RG are set as secrets
+            if [ -z "$AZURE_STATIC_WEBAPP_NAME" ] || [ -z "$AZURE_RG" ]; then
+              echo "AZURE_STATIC_WEBAPP_NAME or AZURE_RG not set; skipping hostname registration"
+            else
+              ./scripts/register_hostnames.sh --name "$AZURE_STATIC_WEBAPP_NAME" --resource-group "$AZURE_RG" \
+                --prod-hostname "jmail-pwa-new-api.scm.azurewebsites.net" --dev-hostname "dev.jmail-pwa-new-api.scm.azurewebsites.net"
+            fi
+
   close_pull_request_job:
     if: github.event_name == 'pull_request' && github.event.action == 'closed'
     runs-on: ubuntu-latest
