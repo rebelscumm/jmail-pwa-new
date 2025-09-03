@@ -68,6 +68,13 @@
     window.addEventListener('jmail:listLock', handler as EventListener);
     return () => window.removeEventListener('jmail:listLock', handler as EventListener);
   });
+
+  // Clear transient API errors when a successful API request occurs
+  if (typeof window !== 'undefined') {
+    window.addEventListener('jmail:api_ok', () => {
+      try { apiErrorMessage = null; apiErrorStatus = undefined; apiErrorStack = undefined; } catch (_) {}
+    });
+  }
   // Lightweight remote change detection state
   let lastRemoteCheckAtMs: number | null = $state(null);
   let remoteCheckInFlight = $state(false);

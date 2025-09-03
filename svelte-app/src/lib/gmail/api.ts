@@ -234,6 +234,8 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     const text = await res.text();
     pushGmailDiag({ type: 'api_response', path, status: res.status, contentType: res.headers.get('content-type') || undefined, bodyLength: (text || '').length });
+    // Notify app that an API request succeeded so UI can clear transient error banners
+    try { if (typeof window !== 'undefined' && window && typeof window.dispatchEvent === 'function') window.dispatchEvent(new CustomEvent('jmail:api_ok', { detail: { path, status: res.status } })); } catch (_) {}
     if (!text) return undefined as unknown as T;
     try {
       return JSON.parse(text) as T;
