@@ -79,10 +79,41 @@ module.exports = async function (context, req) {
   const now = Math.floor(Date.now() / 1000);
   setSessionCookie(cookies, { sub, email, scope, iat: now, exp: now + 3600 });
 
+  // Return a minimal HTML page that notifies the opener (popup flow) and
+  // then closes itself. If there's no opener, navigate to returnTo.
+  const returnToEsc = JSON.stringify(returnTo || "/");
+  const html = `<!doctype html>
+<html>
+  <head><meta charset="utf-8"><title>Authentication complete</title></head>
+  <body>
+    <script>
+      (function(){
+        var returnTo = ${returnToEsc};
+        try {
+          if (window.opener && !window.opener.closed) {
+            try {
+              // Prefer sending origin derived from returnTo so receiver can verify
+              var targetOrigin = (function(){ try { return new URL(returnTo, window.location.origin).origin; } catch(e) { return window.location.origin; } })();
+              window.opener.postMessage({ type: 'google_auth_complete', returnTo: returnTo }, targetOrigin);
+            } catch (e) {
+              try { window.opener.postMessage({ type: 'google_auth_complete', returnTo: returnTo }, window.location.origin); } catch(e){}
+            }
+            window.close();
+            // Fallback navigation in case the popup wasn't allowed to close
+            setTimeout(function(){ window.location.href = returnTo || '/'; }, 200);
+          } else {
+            window.location.href = returnTo || '/';
+          }
+        } catch (e) { window.location.href = returnTo || '/'; }
+      })();
+    </script>
+  </body>
+</html>`;
+
   context.res = {
-    status: 302,
-    headers: { Location: returnTo || "/", "Set-Cookie": cookies },
-    body: ""
+    status: 200,
+    headers: { "Content-Type": "text/html", "Set-Cookie": cookies },
+    body: html
   };
 };
 

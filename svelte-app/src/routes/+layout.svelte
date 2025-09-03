@@ -1,3 +1,11 @@
+<script lang="ts" module>
+  // Temporarily disable client hydration and router to prevent
+  // client-side hydration crashes while debugging.
+  // Re-enable after root cause is fixed.
+  export const hydrate = false;
+  export const router = false;
+</script>
+
 <script lang="ts">
   import type { Snippet } from "svelte";
   // Sidebar icons removed because sidebar tabs are hidden
@@ -367,7 +375,12 @@
       <TopAppBar onSyncNow={() => refreshSyncState()} {backHref} backLabel="Back to inbox" />
       <div id="offline-banner" class="offline" class:visible={isOffline}>You are offline. Actions will be queued.</div>
     {/if}
-    {@render children()}
+    {#if children}
+      {@render children()}
+    {:else}
+      <!-- Fallback to avoid hydration crash when children is unexpectedly undefined -->
+      <div></div>
+    {/if}
     {#if normalizePath(base || "/") !== normalizePath(page.url.pathname) && !isSettings}
       <div class="fab-holder">
         <FAB color="primary" icon={iconCompose} onclick={() => (showCompose = true)} />

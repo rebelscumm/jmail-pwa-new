@@ -1,4 +1,4 @@
-import { fetchTokenInfo } from '$lib/gmail/auth';
+import { fetchTokenInfo, getAuthState, setAccount } from '$lib/gmail/auth';
 import { pushGmailDiag, getAndClearGmailDiagnostics } from '$lib/gmail/diag';
 import type { GmailLabel, GmailMessage, GmailAttachment } from '$lib/types';
 
@@ -141,14 +141,68 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   let tokenInfoAtRequest: { scope?: string; expires_in?: string; aud?: string } | undefined;
   try { tokenInfoAtRequest = await fetchTokenInfo(); } catch (_) {}
   pushGmailDiag({ type: 'api_request', path, method: (init && 'method' in (init as any) && (init as any).method) ? (init as any).method : 'GET', tokenInfo: tokenInfoAtRequest });
-  let res = await fetch(`${GMAIL_PROXY_BASE}${path}`, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(init?.headers || {})
-    },
-    credentials: 'include'
-  });
+  let res: Response;
+  // If we have a client-side access token, call Gmail REST directly from the browser.
+  try {
+    let state = getAuthState();
+    let token = state.accessToken;
+    // If authState isn't populated yet (hydration timing), attempt to read persisted auth from IndexedDB
+    if (!token) {
+      try {
+        const { getDB } = await import('$lib/db/indexeddb');
+        const db = await getDB();
+        const me = await db.get('auth', 'me');
+        if (me && me.accessToken) {
+          token = me.accessToken as string;
+          try {
+            // Update in-memory auth snapshot for downstream callers
+            setAccount(me as any);
+            state = getAuthState();
+          } catch (_) {}
+          try { pushGmailDiag({ type: 'api_loaded_token_from_idb', fingerprint: fingerprintToken(token) }); } catch (_) {}
+        }
+      } catch (_) {}
+    }
+    if (token) {
+      const base = 'https://gmail.googleapis.com/gmail/v1/users/me';
+      const cleanPath = path ? `/${path.replace(/^\/+/, '')}` : '';
+      const fullUrl = `${base}${cleanPath}`;
+      try { pushGmailDiag({ type: 'api_request_direct', path, fullUrl, method: (init && 'method' in (init as any) && (init as any).method) ? (init as any).method : 'GET', tokenFingerprint: fingerprintToken(token) }); } catch (_) {}
+      const headers = {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}` as string,
+        ...(init?.headers || {})
+      } as Record<string, string>;
+      res = await fetch(fullUrl, {
+        ...init,
+        headers
+      } as RequestInit);
+    } else {
+      // No client token available; fall back to proxy
+      res = await fetch(`${GMAIL_PROXY_BASE}${path}`, {
+        ...init,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(init?.headers || {})
+        },
+        credentials: 'include'
+      } as RequestInit);
+    }
+  } catch (fetchErr) {
+    // If direct fetch failed unexpectedly, attempt proxy as a fallback
+    try {
+      res = await fetch(`${GMAIL_PROXY_BASE}${path}`, {
+        ...init,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(init?.headers || {})
+        },
+        credentials: 'include'
+      } as RequestInit);
+    } catch (e) {
+      throw e;
+    }
+  }
   if (!res.ok) {
     let message = `Gmail API error ${res.status}`;
     let details: unknown;

@@ -1,9 +1,16 @@
+<script lang="ts" module>
+  // Disable hydration for this landing page to avoid client-side hydration
+  // errors while debugging. This makes the page purely server-rendered.
+  export const hydrate = false;
+  export const router = false;
+</script>
+
 <script lang="ts">
   import { onMount } from 'svelte';
   import { base } from '$app/paths';
   import ListItem from '$lib/containers/ListItem.svelte';
   import Button from '$lib/buttons/Button.svelte';
-  import { initAuth, authState, getAuthDiagnostics, resolveGoogleClientId } from '$lib/gmail/auth';
+  import { initAuth, acquireTokenInteractive, authState, getAuthDiagnostics, resolveGoogleClientId } from '$lib/gmail/auth';
   import { getDB } from '$lib/db/indexeddb';
   import { copyGmailDiagnosticsToClipboard } from '$lib/gmail/api';
   import { show as showSnackbar } from '$lib/containers/snackbar';
@@ -76,8 +83,34 @@
 
   async function connect() {
     try {
+      // Prefer client-side GIS flow for a fully client-managed login.
+      try {
+        CLIENT_ID = CLIENT_ID || resolveGoogleClientId() as string;
+        try { await initAuth(CLIENT_ID); } catch (_) {}
+        await acquireTokenInteractive('consent', 'landing_connect');
+        // On success, navigate to inbox where the client-side state will be hydrated
+        window.location.href = `${base}/inbox`;
+        return;
+      } catch (e: unknown) {
+        // If client-side auth isn't available or fails, fall back to server popup flow.
+        const msg = e instanceof Error ? e.message : String(e);
+        console.warn('[Auth] Client-side auth failed, falling back to server flow', msg);
+      }
+
+      // Server fallback: open the login endpoint in a popup (or full redirect if blocked)
       const returnTo = `${base}/inbox`;
-      window.location.assign(`/api/google/login?return_to=${encodeURIComponent(returnTo)}`);
+      const url = `/api/google-login?return_to=${encodeURIComponent(returnTo)}`;
+      const popup = window.open(url, 'google_login', 'width=500,height=700');
+      // Mark that we opened a popup so message handler ignores unrelated messages
+      try {
+        (window as any).__googlePopupOpened = Date.now();
+        setTimeout(() => { try { (window as any).__googlePopupOpened = 0; } catch(_){} }, 120000);
+      } catch (_) {}
+      if (!popup) {
+        // Popup blocked — fall back to full redirect
+        console.warn('[Auth] Popup blocked, falling back to full navigation');
+        window.location.assign(url);
+      }
     } catch (e) {
       console.error('[Auth] Redirect failed', e);
     }
@@ -128,6 +161,38 @@
   if (typeof window !== 'undefined') {
     (window as any).__copyPageDiagnostics = async () => { await copyDiagnostics(); };
     (window as any).__copyRuntimeChecks = async () => { await copyRuntimeChecks(); };
+
+    // Listen for popup completion message from `api/google/callback`.
+    window.addEventListener('message', (ev: MessageEvent) => {
+      try {
+        // DEBUG: log incoming message for diagnosis
+        try { console.debug('[Auth] message event', { origin: ev.origin, data: ev.data, time: Date.now() }); } catch (_) {}
+        // Only accept messages from same origin
+        if (ev.origin !== window.location.origin) return;
+        // Only accept messages if we recently opened a popup
+        const openedAt = (window as any).__googlePopupOpened || 0;
+        if (!openedAt || Date.now() - openedAt > 120000) return;
+        const data = ev.data || {};
+        if (!data || data.type !== 'google_auth_complete') return;
+        // Defensive: ensure returnTo is a string and either absolute same-origin or a path
+        const rt = typeof data.returnTo === 'string' ? data.returnTo : `${base}/inbox`;
+        try {
+          const parsed = new URL(rt, window.location.origin);
+          if (parsed.origin !== window.location.origin) {
+            console.warn('[Auth] Ignoring returnTo with different origin', parsed.origin);
+            return;
+          }
+        } catch (err) {
+          // If URL parsing fails, ignore but log for debugging
+          console.warn('[Auth] Ignoring invalid returnTo', rt, err);
+          return;
+        }
+        console.debug('[Auth] Received google_auth_complete, navigating to', rt, { data });
+        try { window.location.href = rt; } catch (err) { console.warn('[Auth] Failed navigation', err); }
+      } catch (e) {
+        console.warn('[Auth] message handler error', e);
+      }
+    });
   }
 
   async function copyRuntimeChecks() {
