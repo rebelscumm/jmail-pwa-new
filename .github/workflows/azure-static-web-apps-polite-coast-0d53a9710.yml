@@ -44,3 +44,7 @@ jobs:
         with:
           azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN_POLITE_COAST_0D53A9710 }}
           action: "close"
+          app_location: "/svelte-app"
+          api_location: "api"
+          output_location: "build"
+

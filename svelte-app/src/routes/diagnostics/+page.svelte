@@ -279,7 +279,7 @@ export async function submitParsedDiagnostics() {
 }
 
 // Guided actions: per-user interactive checks
-let apiBaseOverride = '';
+let apiBaseOverride = 'https://jmail-pwa-new-api.azurewebsites.net';
 let endpointResults: Record<string, any> = {};
 
 function loadApiBaseOverride() {
@@ -444,6 +444,10 @@ pre.diag { max-height: 40vh; overflow: auto; background: #111; color: #eee; padd
 			<button on:click={clearClientCookies}>Clear client cookies (non-httpOnly)</button>
 		</div>
 		{#if Object.keys(endpointResults).length}
+			<div style="display:flex; gap:0.5rem; margin-bottom:0.5rem">
+				<button on:click={async ()=>{ try { await navigator.clipboard.writeText(JSON.stringify(endpointResults, null, 2)); alert('Copied endpoint results'); addLog('info',['copied endpointResults']); } catch(e){ alert('Copy failed: '+String(e)); } }}>Copy endpoint results</button>
+				<button on:click={async ()=>{ const full = { endpointResults, profileResult, parsedDiag, logs: logs.slice(-200) }; try { await navigator.clipboard.writeText(JSON.stringify(full, null, 2)); alert('Copied full guided report'); addLog('info',['copied full guided report']); } catch(e){ alert('Copy failed: '+String(e)); } }}>Copy full guided report</button>
+			</div>
 			<pre class="diag">{JSON.stringify(endpointResults, null, 2)}</pre>
 		{/if}
 	</div>
