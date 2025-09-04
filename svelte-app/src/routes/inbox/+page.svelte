@@ -13,10 +13,9 @@
   import LoadingIndicator from '$lib/forms/LoadingIndicator.svelte';
   
   import Checkbox from '$lib/forms/Checkbox.svelte';
-  
+
   import { archiveThread, trashThread, undoLast, queueThreadModify } from '$lib/queue/intents';
-  import { enqueueBatchModify } from '$lib/queue/ops';
-  import { snoozeThreadByRule } from '$lib/snooze/actions';
+  import { snoozeThreadByRule, manualUnsnoozeThread } from '$lib/snooze/actions';
   import { settings, updateAppSettings } from '$lib/stores/settings';
   import { show as showSnackbar } from '$lib/containers/snackbar';
   
@@ -69,6 +68,56 @@
     window.addEventListener('jmail:listLock', handler as EventListener);
     return () => window.removeEventListener('jmail:listLock', handler as EventListener);
   });
+
+  // Guard to avoid repeated auto-fill within a single session
+  let autoFilledInboxOnce = $state(false);
+
+  async function autoFillInboxFrom1h(): Promise<number> {
+    try {
+      const s = get(settings);
+      const labelId = (s && s.labelMapping && s.labelMapping['1h']) ? s.labelMapping['1h'] : '';
+      if (!labelId) return 0;
+      const page = await listThreadIdsByLabelId(labelId, 10);
+      const ids = (page?.ids || []).slice(0, 3);
+      if (!ids.length) return 0;
+
+      const db = await getDB();
+      // For each thread, fetch full summary from server so we have message ids locally
+      for (const threadId of ids) {
+        try {
+          const summary = await getThreadSummary(threadId);
+          // Persist messages and thread into local DB so optimistic local updates can take effect
+          const txMsgs = db.transaction('messages', 'readwrite');
+          for (const m of summary.messages) {
+            try { await txMsgs.store.put(m); } catch (_) {}
+          }
+          await txMsgs.done;
+          try { await db.put('threads', summary.thread); } catch (_) {}
+
+          // Now request a local optimistic unsnooze: add INBOX and optionally UNREAD, remove snooze label
+          const add = ['INBOX'];
+          if (s.unreadOnUnsnooze) add.push('UNREAD');
+          try { await queueThreadModify(threadId, add, [labelId], { optimisticLocal: true }); } catch (_) {}
+        } catch (_) {
+          // ignore per-thread failures
+        }
+      }
+      // Refresh in-memory stores from DB so UI reflects changes immediately
+      try {
+        const allThreads = await db.getAll('threads');
+        threadsStore.set(allThreads as any);
+      } catch (_) {}
+      try {
+        const allMessages = await db.getAll('messages');
+        const dict: Record<string, import('$lib/types').GmailMessage> = {};
+        for (const m of allMessages) { try { dict[m.id] = m; } catch (_) {} }
+        messagesStore.set(dict);
+      } catch (_) {}
+      return ids.length;
+    } catch (_) {
+      return 0;
+    }
+  }
 
   // Clear transient API errors when a successful API request occurs
   if (typeof window !== 'undefined') {
@@ -697,15 +746,17 @@
       inboxLabelStats = null;
     }
 
-    // If inbox appears empty after hydrate, attempt an automatic replenish
-    try {
-      const inboxNow = (await listInboxMessageIds(1)).ids || [];
-      if (!inboxNow.length) {
-        try { await tryReplenishFrom1h(3); } catch (_) {}
-      }
-    } catch (_) {}
+    // (auto-fill handled later when paginated page is empty to reuse same logic)
     const pageSize = Number($settings.inboxPageSize || 25);
     const page = await listInboxMessageIds(pageSize);
+    if (!autoFilledInboxOnce && (!page.ids || page.ids.length === 0)) {
+      const moved = await autoFillInboxFrom1h();
+      autoFilledInboxOnce = true;
+      if (moved > 0) {
+        // Re-run hydrate to reflect newly unsnoozed threads in INBOX
+        return await hydrate();
+      }
+    }
     nextPageToken = page.nextPageToken;
     const msgs = await mapWithConcurrency(page.ids, 4, (id) => getMessageMetadata(id));
     const threadMap: Record<string, { messageIds: string[]; labelIds: Record<string, true>; last: { from?: string; subject?: string; date?: number } }> = {};
@@ -1030,35 +1081,8 @@
     }
   }
 
-  // Try to move up to `count` threads from the configured '1h' snooze label back to INBOX
-  async function tryReplenishFrom1h(count = 3) {
-    try {
-      const s = get(settings);
-      const labelId = s.labelMapping && s.labelMapping['1h'];
-      if (!labelId) return; // no mapping configured
-      // List thread ids under the snooze label
-      const page = await listThreadIdsByLabelId(labelId, count);
-      const ids = page.ids || [];
-      if (!ids.length) return;
-      // For each thread, fetch summary to obtain message ids, then unsnooze (add INBOX, optionally UNREAD)
-      const db = await getDB();
-      for (const tid of ids.slice(0, count)) {
-        try {
-          const summary = await getThreadSummary(tid);
-          const msgIds = summary.messages.map((m) => m.id);
-          const add = ['INBOX'];
-          if (s.unreadOnUnsnooze) add.push('UNREAD');
-          // enqueue batch modify by message ids
-          await enqueueBatchModify('me', msgIds, add, [labelId], tid);
-          // Optimistically update local DB/stores via queueThreadModify helper
-          try { await queueThreadModify(tid, add, [labelId], { optimisticLocal: true }); } catch (_) {}
-        } catch (_) {}
-      }
-      try { showSnackbar({ message: `Replenished ${Math.min(ids.length, count)} thread(s) from 1h` }); } catch (_) {}
-    } catch (e) {
-      // ignore
-    }
-  }
+  // (deprecated) explicit replenish implementation removed in favor of
+  // `autoFillInboxFrom1h` / `manualUnsnoozeThread` which are higher-level.
 
   function getLastMessageId(thread: import('$lib/types').GmailThread): string | null {
     try {
@@ -1288,7 +1312,7 @@
         {#if debouncedQuery}
           <Button variant="outlined" onclick={() => { import('$lib/stores/search').then(m=>m.searchQuery.set('')); }}>Clear search</Button>
         {/if}
-        <Button variant="text" onclick={async () => { try { await tryReplenishFrom1h(3); } catch (e) { try { showSnackbar({ message: `Replenish failed: ${e instanceof Error ? e.message : String(e)}`, closable: true }); } catch {} } }}>Replenish 1h (3)</Button>
+        <Button variant="text" onclick={async () => { try { const moved = await autoFillInboxFrom1h(); if (moved > 0) { try { await hydrateFromCache(); await maybeRemoteRefresh(); showSnackbar({ message: `Replenished ${moved} thread(s) from 1h` }); } catch {} } else { try { showSnackbar({ message: 'No threads available in 1h' }); } catch {} } } catch (e) { try { showSnackbar({ message: `Replenish failed: ${e instanceof Error ? e.message : String(e)}`, closable: true }); } catch {} } }}>Replenish 1h (3)</Button>
       </div>
     </Card>
   {/if}

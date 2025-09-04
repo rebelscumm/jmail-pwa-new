@@ -192,12 +192,14 @@
     try {
       const ct = currentThread;
       if (!ct) return;
-      if (ct.summary && ct.summaryStatus === 'ready') {
+      // Restore: show any cached summary/aiSubject if present regardless of precompute status.
+      // This ensures previously-computed summaries remain visible in the viewer even
+      // if the precompute status field isn't strictly 'ready'.
+      if (ct.summary) {
         aiBodySummary = ct.summary;
       }
       const subj = (ct as any).aiSubject as string | undefined;
-      const subjStatus = (ct as any).aiSubjectStatus as ('none'|'pending'|'ready'|'error') | undefined;
-      if (subj && subjStatus === 'ready') {
+      if (subj) {
         aiSubjectSummary = subj;
       }
     } catch (_) {}
