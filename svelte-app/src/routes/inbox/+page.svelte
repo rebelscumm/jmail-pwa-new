@@ -15,7 +15,7 @@
   import Checkbox from '$lib/forms/Checkbox.svelte';
   
   import { archiveThread, trashThread, undoLast } from '$lib/queue/intents';
-  import { snoozeThreadByRule } from '$lib/snooze/actions';
+  import { snoozeThreadByRule, manualUnsnoozeThread } from '$lib/snooze/actions';
   import { settings, updateAppSettings } from '$lib/stores/settings';
   import { show as showSnackbar } from '$lib/containers/snackbar';
   
@@ -68,6 +68,26 @@
     window.addEventListener('jmail:listLock', handler as EventListener);
     return () => window.removeEventListener('jmail:listLock', handler as EventListener);
   });
+
+  // Guard to avoid repeated auto-fill within a single session
+  let autoFilledInboxOnce = $state(false);
+
+  async function autoFillInboxFrom1h(): Promise<number> {
+    try {
+      const s = get(settings);
+      const labelId = (s && s.labelMapping && s.labelMapping['1h']) ? s.labelMapping['1h'] : '';
+      if (!labelId) return 0;
+      const page = await listThreadIdsByLabelId(labelId, 10);
+      const ids = (page?.ids || []).slice(0, 3);
+      if (!ids.length) return 0;
+      for (const threadId of ids) {
+        await manualUnsnoozeThread(threadId, { optimisticLocal: true });
+      }
+      return ids.length;
+    } catch (_) {
+      return 0;
+    }
+  }
 
   // Clear transient API errors when a successful API request occurs
   if (typeof window !== 'undefined') {
@@ -697,6 +717,14 @@
     }
     const pageSize = Number($settings.inboxPageSize || 25);
     const page = await listInboxMessageIds(pageSize);
+    if (!autoFilledInboxOnce && (!page.ids || page.ids.length === 0)) {
+      const moved = await autoFillInboxFrom1h();
+      autoFilledInboxOnce = true;
+      if (moved > 0) {
+        // Re-run hydrate to reflect newly unsnoozed threads in INBOX
+        return await hydrate();
+      }
+    }
     nextPageToken = page.nextPageToken;
     const msgs = await mapWithConcurrency(page.ids, 4, (id) => getMessageMetadata(id));
     const threadMap: Record<string, { messageIds: string[]; labelIds: Record<string, true>; last: { from?: string; subject?: string; date?: number } }> = {};
