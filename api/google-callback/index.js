@@ -2,14 +2,23 @@ const fetch = global.fetch;
 const { popPkceVerifier, popStateCookie, setRefreshCookie, setSessionCookie, parseCookies } = require("../_lib/session");
 
 module.exports = async function (context, req) {
-  if (req.method !== "GET") {
-    context.res = { status: 405, headers: { "Allow": "GET" }, body: "" };
-    return;
-  }
+  try {
+    if (req.method !== "GET") {
+      context.res = { status: 405, headers: { "Allow": "GET" }, body: "" };
+      return;
+    }
 
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
   const redirectUri = (process.env.APP_BASE_URL || "") + "/api/google/callback";
+  
+  console.log('google-callback: env check', {
+    clientIdPresent: !!clientId,
+    clientSecretPresent: !!clientSecret,
+    appBaseUrl: process.env.APP_BASE_URL,
+    redirectUri
+  });
+  
   if (!clientId || !clientSecret || !redirectUri) {
     context.res = { status: 500, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ error: "Missing GOOGLE_* envs or APP_BASE_URL" }) };
     return;
@@ -26,7 +35,17 @@ module.exports = async function (context, req) {
     // fall back to raw value if decoding fails
     expectedStateCookieDecoded = expectedStateCookie;
   }
+  
+  console.log('google-callback: cookie parsing', {
+    expectedStateCookie: expectedStateCookie ? 'present' : 'missing',
+    expectedStateCookieDecoded: expectedStateCookieDecoded ? 'present' : 'missing'
+  });
+  
   const pkceVerifier = popPkceVerifier(req, cookies);
+  
+  console.log('google-callback: pkce verifier', {
+    pkceVerifierPresent: !!pkceVerifier
+  });
 
   const { code = "", state = "" } = req.query || {};
   // Diagnostic: capture incoming cookies for debugging state mismatches
@@ -87,6 +106,13 @@ module.exports = async function (context, req) {
     code_verifier: pkceVerifier
   });
 
+  console.log('google-callback: exchanging token', {
+    redirectUri,
+    clientIdPresent: !!clientId,
+    codePresent: !!code,
+    pkceVerifierPresent: !!pkceVerifier
+  });
+
   const r = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -94,6 +120,12 @@ module.exports = async function (context, req) {
   });
 
   const text = await r.text();
+  console.log('google-callback: token response', {
+    status: r.status,
+    ok: r.ok,
+    responseLength: text.length
+  });
+  
   if (!r.ok) {
     context.res = { status: 400, headers: { "Set-Cookie": cookies, "Content-Type": "application/json" }, body: JSON.stringify({ error: "token_exchange_failed", details: text.slice(0, 512) }) };
     return;
@@ -122,14 +154,49 @@ module.exports = async function (context, req) {
   }
 
   // Issue cookies
-  setRefreshCookie(cookies, { refresh_token, sub, email, scope });
-  const now = Math.floor(Date.now() / 1000);
-  setSessionCookie(cookies, { sub, email, scope, iat: now, exp: now + 3600 });
+  console.log('google-callback: setting cookies', {
+    refreshTokenPresent: !!refresh_token,
+    sub,
+    email,
+    scope
+  });
+  
+  try {
+    setRefreshCookie(cookies, { refresh_token, sub, email, scope });
+    const now = Math.floor(Date.now() / 1000);
+    setSessionCookie(cookies, { sub, email, scope, iat: now, exp: now + 3600 });
+    console.log('google-callback: cookies set successfully', {
+      cookieCount: cookies.length
+    });
+  } catch (cookieError) {
+    console.error('google-callback: cookie setting failed', {
+      error: cookieError.message,
+      stack: cookieError.stack
+    });
+    throw cookieError;
+  }
 
   context.res = {
     status: 302,
     headers: { Location: returnTo || "/", "Set-Cookie": cookies },
     body: ""
   };
+  } catch (error) {
+    console.error('google-callback: unhandled error', {
+      error: error.message,
+      stack: error.stack,
+      query: req.query,
+      headers: req.headers
+    });
+    context.res = {
+      status: 500,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ 
+        error: "internal_server_error", 
+        message: error.message,
+        timestamp: new Date().toISOString()
+      })
+    };
+  }
 };
 
