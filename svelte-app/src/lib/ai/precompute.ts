@@ -480,7 +480,7 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
     precomputeStatus.updateProgress(0, 'Preparing email content...');
 
     // Prepare texts
-    const prepared = await mapWithConcurrency(batch, 3, async (t) => {
+    let prepared = await mapWithConcurrency(batch, 3, async (t) => {
       const lastId = getLastMessageId(t);
       let bodyText: string | undefined;
       let bodyHtml: string | undefined;

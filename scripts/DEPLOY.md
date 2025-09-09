@@ -30,3 +30,5 @@ The script uploads a zip to the Function App's kudu zipdeploy endpoint and polls
 If you prefer using an automated CI later, keep the publish profile secret safe; it can be stored in the CI's secret store.
 
 
+
+
