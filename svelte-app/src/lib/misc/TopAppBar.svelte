@@ -554,7 +554,15 @@ import { precomputeStatus } from '$lib/stores/precompute';
       const isSpaHtml404 = r.status === 404 && typeof bodyText === 'string' && /<!doctype html|<html/i.test(bodyText || '');
       apiProbeResult = { ...probe, isSpaHtml404 };
 
-      if (isSpaHtml404) {
+      if (r.status === 401) {
+        showSnackbar({
+          message: 'API proxy is working (401 = authentication required). This is expected when not logged in.',
+          timeout: 5000,
+          closable: true
+        });
+        try { await navigator.clipboard.writeText(JSON.stringify(probe, null, 2)); showSnackbar({ message: 'API probe result copied', closable: true }); } catch (_) { showSnackbar({ message: 'API probe complete (could not copy)', closable: true }); }
+        return;
+      } else if (isSpaHtml404) {
         showSnackbar({
           message: 'API proxy appears to be routing to the frontend (404 HTML). API host may not be running.',
           timeout: 8000,

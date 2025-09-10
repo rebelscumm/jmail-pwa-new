@@ -224,8 +224,13 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
             const ok = window.confirm('API host appears to be serving frontend HTML (404). The API may not be running. Open server login anyway?');
             if (!ok) proceed = false;
           } else if (!r2.ok) {
-            const ok = window.confirm(`API probe returned ${r2.status}. Open server login anyway?`);
-            if (!ok) proceed = false;
+            // For 401 (unauthenticated), proceed automatically without confirmation
+            if (r2.status === 401) {
+              proceed = true;
+            } else {
+              const ok = window.confirm(`API probe returned ${r2.status}. Open server login anyway?`);
+              if (!ok) proceed = false;
+            }
           }
         } catch (probeErr) {
           pushGmailDiag({ type: 'server_probe_error', error: probeErr instanceof Error ? probeErr.message : String(probeErr) });
