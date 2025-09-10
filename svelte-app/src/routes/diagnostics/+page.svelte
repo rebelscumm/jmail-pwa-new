@@ -478,9 +478,154 @@ export async function submitParsedDiagnostics() {
 	}
 }
 
+// Action queue diagnostics
+let queueDiagnostics: Record<string, any> | null = null;
+
 // Guided actions: per-user interactive checks
 let apiBaseOverride = 'https://jmail-pwa-new-api.azurewebsites.net';
 let endpointResults: Record<string, any> = {};
+
+async function checkActionQueue() {
+	try {
+		const { getDB } = await import('$lib/db/indexeddb');
+		const db = await getDB();
+		
+		// Get all queued operations
+		const ops = await db.getAll('ops');
+		const journal = await db.getAll('journal');
+		
+		// Analyze the queue
+		const now = Date.now();
+		const pending = ops.filter(o => o.nextAttemptAt <= now);
+		const failed = ops.filter(o => o.attempts > 0);
+		const recentJournal = journal.slice(-20);
+		
+		// Group operations by type
+		const opsByType = ops.reduce((acc, op) => {
+			const type = op.op?.type || 'unknown';
+			acc[type] = (acc[type] || 0) + 1;
+			return acc;
+		}, {} as Record<string, number>);
+		
+		queueDiagnostics = {
+			timestamp: new Date().toISOString(),
+			totalOps: ops.length,
+			pendingOps: pending.length,
+			failedOps: failed.length,
+			opsByType,
+			recentJournal: recentJournal.map(entry => ({
+				id: entry.id,
+				type: entry.intent?.type,
+				threadId: entry.threadId,
+				createdAt: new Date(entry.createdAt).toISOString(),
+				ruleKey: entry.intent?.ruleKey
+			})),
+			sampleFailedOps: failed.slice(0, 5).map(op => ({
+				id: op.id,
+				type: op.op?.type,
+				attempts: op.attempts,
+				lastError: op.lastError,
+				nextAttemptAt: new Date(op.nextAttemptAt).toISOString(),
+				scopeKey: op.scopeKey
+			}))
+		};
+		
+		addLog('info', ['Queue diagnostics collected', queueDiagnostics]);
+	} catch (e) {
+		addLog('error', ['Failed to check action queue', e]);
+		alert('Failed to check action queue: ' + String(e));
+	}
+}
+
+async function checkJournal() {
+	try {
+		const { getDB } = await import('$lib/db/indexeddb');
+		const db = await getDB();
+		
+		const journal = await db.getAll('journal');
+		const recent = journal.slice(-50).reverse(); // Most recent first
+		
+		const summary = {
+			totalEntries: journal.length,
+			recentEntries: recent.map(entry => ({
+				id: entry.id,
+				type: entry.intent?.type,
+				threadId: entry.threadId,
+				createdAt: new Date(entry.createdAt).toISOString(),
+				addLabels: entry.intent?.addLabelIds,
+				removeLabels: entry.intent?.removeLabelIds,
+				ruleKey: entry.intent?.ruleKey
+			}))
+		};
+		
+		addLog('info', ['Journal check completed', summary]);
+		alert(`Journal contains ${journal.length} entries. Check logs for details.`);
+	} catch (e) {
+		addLog('error', ['Failed to check journal', e]);
+		alert('Failed to check journal: ' + String(e));
+	}
+}
+
+async function forceFlushQueue() {
+	try {
+		const { flushOnce } = await import('$lib/queue/flush');
+		addLog('info', ['Starting forced queue flush']);
+		await flushOnce();
+		addLog('info', ['Queue flush completed']);
+		
+		// Refresh queue status
+		await checkActionQueue();
+		alert('Queue flush completed. Check the queue status for results.');
+	} catch (e) {
+		addLog('error', ['Failed to flush queue', e]);
+		alert('Failed to flush queue: ' + String(e));
+	}
+}
+
+async function clearFailedOps() {
+	try {
+		const { getDB } = await import('$lib/db/indexeddb');
+		const db = await getDB();
+		
+		const ops = await db.getAll('ops');
+		const failed = ops.filter(o => o.attempts > 3); // Operations with multiple failures
+		
+		if (failed.length === 0) {
+			alert('No failed operations to clear.');
+			return;
+		}
+		
+		const confirmed = confirm(`Clear ${failed.length} failed operations? This action cannot be undone.`);
+		if (!confirmed) return;
+		
+		const tx = db.transaction('ops', 'readwrite');
+		for (const op of failed) {
+			await tx.store.delete(op.id);
+		}
+		await tx.done;
+		
+		addLog('info', [`Cleared ${failed.length} failed operations`]);
+		await checkActionQueue(); // Refresh status
+		alert(`Cleared ${failed.length} failed operations.`);
+	} catch (e) {
+		addLog('error', ['Failed to clear failed operations', e]);
+		alert('Failed to clear failed operations: ' + String(e));
+	}
+}
+
+async function checkFlushLoop() {
+	try {
+		// Start the flush loop if it's not running
+		const { startFlushLoop } = await import('$lib/queue/flush');
+		startFlushLoop();
+		
+		addLog('info', ['Flush loop started/verified']);
+		alert('Flush loop has been started/verified. It runs every 2 seconds to process queued actions.');
+	} catch (e) {
+		addLog('error', ['Failed to check/start flush loop', e]);
+		alert('Failed to check flush loop: ' + String(e));
+	}
+}
 
 function loadApiBaseOverride() {
 	try { apiBaseOverride = localStorage.getItem('VITE_APP_BASE_URL') || localStorage.getItem('APP_BASE_URL') || ''; } catch (_) { apiBaseOverride = ''; }
@@ -662,6 +807,24 @@ pre.diag {
 					<summary>Show parsed diagnostics</summary>
 					<pre class="diag">{JSON.stringify(parsedDiag, null, 2)}</pre>
 				</details>
+			</div>
+		{/if}
+	</div>
+
+	<div class="wizard">
+		<h2>Action Queue Diagnostics</h2>
+		<p>Diagnose issues with deletes, archives, snoozes not being saved properly.</p>
+		<div class="controls">
+			<button on:click={checkActionQueue}>Check action queue status</button>
+			<button on:click={checkJournal}>Check action journal</button>
+			<button on:click={forceFlushQueue}>Force flush queue</button>
+			<button on:click={clearFailedOps}>Clear failed operations</button>
+			<button on:click={checkFlushLoop}>Check flush loop status</button>
+		</div>
+		{#if queueDiagnostics}
+			<div class="summary">
+				<strong>Queue Status</strong>
+				<pre style="white-space:pre-wrap">{JSON.stringify(queueDiagnostics, null, 2)}</pre>
 			</div>
 		{/if}
 	</div>

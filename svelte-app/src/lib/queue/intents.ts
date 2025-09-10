@@ -110,7 +110,15 @@ export async function queueThreadModify(threadId: string, addLabelIds: string[],
     await applyOptimisticCounterAdjustment(threadId, addLabelIds, removeLabelIds);
     await updateLocalThreadAndMessages(threadId, addLabelIds, removeLabelIds);
   }
-  await maybeEnqueue(threadId, thread.messageIds, addLabelIds, removeLabelIds);
+  const queued = await maybeEnqueue(threadId, thread.messageIds, addLabelIds, removeLabelIds);
+  
+  // Refresh sync state to update pending operations count
+  if (queued) {
+    try {
+      const { refreshSyncState } = await import('$lib/stores/queue');
+      await refreshSyncState();
+    } catch (_) {}
+  }
 }
 
 export async function archiveThread(threadId: string, options?: { optimisticLocal?: boolean }) {
@@ -348,5 +356,11 @@ export async function applyRemoteLabels(
 export async function queueSendRaw(rawRfc2822: string, threadId?: string): Promise<void> {
   // No local state to mutate for compose. Just enqueue and let flush handle retries.
   await enqueueSendMessage(ACCOUNT_SUB, rawRfc2822, threadId);
+  
+  // Refresh sync state to update pending operations count
+  try {
+    const { refreshSyncState } = await import('$lib/stores/queue');
+    await refreshSyncState();
+  } catch (_) {}
 }
 
