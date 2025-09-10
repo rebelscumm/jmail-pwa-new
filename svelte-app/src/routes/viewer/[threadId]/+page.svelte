@@ -1154,6 +1154,128 @@ onMount(() => {
     <Divider inset />
     <Divider />
 
+    <!-- Bottom Action Bar - duplicate of top -->
+    <div class="action-bar" role="toolbar" aria-label="Email actions">
+      <!-- Primary Actions Group -->
+      <div class="action-group primary-actions">
+        <Button variant="filled" onclick={() => archiveThread(currentThread.threadId).then(async ()=> { showSnackbar({ message: 'Archived', actions: { Undo: () => undoLast(1) } }); await navigateToInbox(); })} aria-label="Archive conversation">
+          <Icon icon={iconArchive} />
+          Archive
+        </Button>
+        <Button variant="tonal" color="error" onclick={() => trashThread(currentThread.threadId).then(async ()=> { showSnackbar({ message: 'Deleted', actions: { Undo: () => undoLast(1) } }); await navigateToInbox(); })} aria-label="Delete conversation">
+          <Icon icon={iconDelete} />
+          Delete
+        </Button>
+        <Button variant="outlined" onclick={() => spamThread(currentThread.threadId).then(()=> showSnackbar({ message: 'Marked as spam', actions: { Undo: () => undoLast(1) } }))} aria-label="Mark as spam">
+          <Icon icon={iconReportSpam} />
+          Spam
+        </Button>
+      </div>
+
+      <!-- Snooze Actions Group -->
+      {#if isSnoozedThread(currentThread) || Object.keys($settings.labelMapping || {}).some((k)=>['10m','3h','1d'].includes(k) && $settings.labelMapping[k])}
+        <div class="action-group snooze-actions">
+          {#if isSnoozedThread(currentThread)}
+            <Button variant="text" onclick={() => manualUnsnoozeThread(currentThread.threadId).then(()=> showSnackbar({ message: 'Unsnoozed', actions: { Undo: () => undoLast(1) } }))}>
+              <Icon icon={iconUnsnooze} />
+              Unsnooze
+            </Button>
+          {/if}
+          {#if Object.keys($settings.labelMapping || {}).some((k)=>k==='3h' && $settings.labelMapping[k])}
+            <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '3h').then(()=> { showSnackbar({ message: 'Snoozed 3h', actions: { Undo: () => undoLast(1) } }); goto('/inbox'); })}>
+              <Icon icon={iconSnooze} />
+              3h
+            </Button>
+          {/if}
+          {#if Object.keys($settings.labelMapping || {}).some((k)=>k==='1d' && $settings.labelMapping[k])}
+            <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '1d').then(()=> { showSnackbar({ message: 'Snoozed 1d', actions: { Undo: () => undoLast(1) } }); goto('/inbox'); })}>
+              <Icon icon={iconSnooze} />
+              1d
+            </Button>
+          {/if}
+        </div>
+      {/if}
+
+      <!-- AI Actions Group -->
+      {#if currentThread.messageIds?.length}
+        {@const mid = currentThread.messageIds[currentThread.messageIds.length-1]}
+        <div class="action-group ai-actions">
+          <Button variant="text" onclick={() => summarize(mid)} disabled={summarizing} aria-label="Generate AI summary">
+            <Icon icon={iconSummarize} />
+            {summarizing ? 'Summarizing…' : 'AI Summary'}
+          </Button>
+          <Button variant="text" onclick={() => replyDraft(mid)} disabled={replying} aria-label="Generate AI reply">
+            <Icon icon={iconReply} />
+            {replying ? 'Generating…' : 'Reply (AI)'}
+          </Button>
+          <Button variant="text" onclick={() => unsubscribe(mid)} disabled={extractingUnsub} aria-label="Find unsubscribe link">
+            <Icon icon={iconUnsubscribe} />
+            {extractingUnsub ? 'Finding…' : 'Unsubscribe'}
+          </Button>
+        </div>
+      {/if}
+
+      <!-- Secondary Actions Menu -->
+      <div class="action-group secondary-actions">
+        <details class="more-menu">
+          <summary>
+            <Button variant="text" iconType="full" aria-label="More actions">
+              <Icon icon={iconMore} />
+            </Button>
+          </summary>
+          <div class="menu-container">
+            <Menu>
+              <MenuItem onclick={() => copyText(currentThread.lastMsgMeta.subject || '')}>
+                <Icon icon={iconSubject} />
+                Copy Subject
+              </MenuItem>
+              {#if currentThread.messageIds?.length}
+                {@const mid = currentThread.messageIds[currentThread.messageIds.length-1]}
+                <MenuItem onclick={() => createTask(mid)}>
+                  <Icon icon={iconTask} />
+                  Create Task
+                </MenuItem>
+              {/if}
+              <MenuItem onclick={() => { filterPopupOpen = true; }}>
+                <Icon icon={iconFilter} />
+                Filter Options
+              </MenuItem>
+              {#if Object.keys($settings.labelMapping || {}).some((k)=>k==='10m' && $settings.labelMapping[k])}
+                <MenuItem onclick={() => snoozeThreadByRule(currentThread.threadId, '10m').then(()=> { showSnackbar({ message: 'Snoozed 10m', actions: { Undo: () => undoLast(1) } }); goto('/inbox'); })}>
+                  <Icon icon={iconSnooze} />
+                  Snooze 10m
+                </MenuItem>
+              {/if}
+              <MenuItem onclick={() => relogin(currentThread.messageIds?.[0])}>
+                <Icon icon={iconLogin} />
+                Re-login
+              </MenuItem>
+              <MenuItem onclick={scrollToBottom}>
+                <Icon icon={iconScrollDown} />
+                Scroll to Bottom
+              </MenuItem>
+            </Menu>
+          </div>
+        </details>
+      </div>
+
+      <!-- Navigation Controls -->
+      <div class="action-group navigation-controls">
+        <Button variant="text" iconType="left" disabled={!prevThreadId} onclick={gotoPrev} aria-label="Previous conversation">
+          {#snippet children()}
+            <Icon icon={iconBack} />
+            <span class="label">Previous</span>
+          {/snippet}
+        </Button>
+        <Button variant="text" iconType="left" disabled={!nextThreadId} onclick={gotoNext} aria-label="Next conversation">
+          {#snippet children()}
+            <Icon icon={iconForward} />
+            <span class="label">Next</span>
+          {/snippet}
+        </Button>
+      </div>
+    </div>
+
     <!-- Bottom Navigation Bar -->
     <div class="bottom-navigation" role="navigation" aria-label="Page navigation">
       <Button variant="text" iconType="left" onclick={navigateToInbox} aria-label="Back to inbox">
