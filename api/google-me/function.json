@@ -5,8 +5,7 @@
       "type": "httpTrigger",
       "direction": "in",
       "name": "req",
-      "methods": ["get"],
-      "route": "google/me"
+      "methods": ["get"]
     },
     {
       "type": "http",

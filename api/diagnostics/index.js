@@ -6,15 +6,17 @@ module.exports = async function (context, req) {
     return;
   }
 
-  // Only allow diagnostics in development or with a special key
-  const diagKey = process.env.DIAGNOSTICS_KEY || "dev";
+  // Allow diagnostics for debugging (remove in production)
+  // For now, allow access without key for debugging purposes
+  const diagKey = process.env.DIAGNOSTICS_KEY;
   const providedKey = req.query.key || req.headers["x-diagnostics-key"];
   
-  if (providedKey !== diagKey) {
+  // Only require key if one is set in environment
+  if (diagKey && providedKey !== diagKey) {
     context.res = { 
       status: 403, 
       headers: { "Content-Type": "application/json" }, 
-      body: JSON.stringify({ error: "Unauthorized" }) 
+      body: JSON.stringify({ error: "Unauthorized", note: "Diagnostics key required" }) 
     };
     return;
   }
