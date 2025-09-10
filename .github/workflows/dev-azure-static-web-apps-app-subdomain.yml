@@ -21,7 +21,7 @@ jobs:
         with:
           submodules: true
           lfs: false
-      - name: Build And Deploy to dev subdomain
+      - name: Build And Deploy to dev environment
         id: builddeploy_app_subdomain
         uses: Azure/static-web-apps-deploy@v1
         with:
@@ -29,41 +29,23 @@ jobs:
           azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN_POLITE_COAST_0D53A9710 }}
           repo_token: ${{ secrets.GITHUB_TOKEN }} # Used for Github integrations (i.e. PR comments)
           action: "upload"
+          deployment_environment: "staging"
           ###### Repository/Build Configurations - These values can be configured to match your app requirements. ######
           app_location: "/svelte-app" # App source code path
           api_location: "api" # Api source code path - optional
           output_location: "build" # Built app content directory - optional
           ###### End of Repository/Build Configurations ######
 
-      - name: Register dev hostname (optional)
-        if: always()
-        uses: azure/CLI@v1
-        env:
-          AZURE_STATIC_WEBAPP_NAME: ${{ secrets.AZURE_STATIC_WEBAPP_NAME }}
-          AZURE_RG: ${{ secrets.AZURE_RG }}
-        with:
-          azcliversion: 'latest'
-          inlineScript: |
-            if [ -z "$AZURE_STATIC_WEBAPP_NAME" ] || [ -z "$AZURE_RG" ]; then
-              echo "AZURE_STATIC_WEBAPP_NAME or AZURE_RG not set; skipping hostname registration"
-              echo "Note: Azure Static Web Apps automatically provides SSL certificates for *.azurestaticapps.net domains"
-            else
-              echo "Configuring dev subdomain for Static Web App: $AZURE_STATIC_WEBAPP_NAME"
-              echo "Setting up dev subdomain: dev.polite-coast-0d53a9710.1.azurestaticapps.net"
-              echo "SSL certificate will be automatically provisioned by Azure Static Web Apps"
-              ./scripts/register_hostnames.sh --name "$AZURE_STATIC_WEBAPP_NAME" --resource-group "$AZURE_RG" \
-                --prod-hostname "jmail-pwa-new-api.scm.azurewebsites.net" --dev-hostname "dev.jmail-pwa-new-api.scm.azurewebsites.net"
-            fi
-
       # Display deployment URLs
       - name: Display Deployment Information
         if: always()
         run: |
           echo "🚀 Development Deployment Summary:"
-          echo "Development URL: https://dev.polite-coast-0d53a9710.1.azurestaticapps.net"
+          echo "Staging URL: https://staging.polite-coast-0d53a9710.1.azurestaticapps.net"
+          echo "Note: Azure Static Web Apps creates staging environments automatically"
           echo ""
           echo "🔒 SSL Certificate Information:"
-          echo "URL is secured with SSL certificates automatically provided by Azure Static Web Apps"
-          echo "No browser warnings should occur as Azure manages the certificates for *.azurestaticapps.net domains"
+          echo "Staging environment is secured with SSL certificates automatically provided by Azure Static Web Apps"
+          echo "No browser warnings should occur as Azure manages certificates for staging environments"
 
 

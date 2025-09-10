@@ -82,17 +82,49 @@
 
   async function copyDiagnosticsToClipboard() {
     try {
-      const diagText = JSON.stringify({
-        diagnostics: $diagnostics,
-        serverAuthResult,
-        refreshTestResult,
-        tokenComparisonResult,
-        logs: $logs
-      }, null, 2);
+      // Create comprehensive diagnostic results
+      const allResults = [];
+      
+      if ($diagnostics.environment) {
+        allResults.push($diagnostics.environment);
+      }
+      
+      if (serverAuthResult) {
+        allResults.push(serverAuthResult);
+      }
+      
+      if (refreshTestResult) {
+        allResults.push(refreshTestResult);
+      }
+      
+      if (tokenComparisonResult) {
+        allResults.push(tokenComparisonResult);
+      }
+      
+      if ($diagnostics.analysis) {
+        allResults.push({
+          analysis: $diagnostics.analysis,
+          logs: $logs
+        });
+      }
+      
+      // Convert each result to formatted JSON and join with separators
+      const diagText = allResults.map(result => JSON.stringify(result, null, 2)).join('\n\n' + '='.repeat(50) + '\n\n');
+      
       await navigator.clipboard.writeText(diagText);
-      showSnackbar({ message: 'Full diagnostics copied to clipboard!', timeout: 3000 });
+      showSnackbar({ message: 'All diagnostic results copied to clipboard!', timeout: 3000 });
     } catch (err) {
       showSnackbar({ message: 'Failed to copy diagnostics', timeout: 3000 });
+    }
+  }
+
+  async function copySpecificResult(result: any, name: string) {
+    try {
+      const resultText = JSON.stringify(result, null, 2);
+      await navigator.clipboard.writeText(resultText);
+      showSnackbar({ message: `${name} copied to clipboard!`, timeout: 3000 });
+    } catch (err) {
+      showSnackbar({ message: `Failed to copy ${name}`, timeout: 3000 });
     }
   }
 
@@ -732,7 +764,17 @@
     }
     
     addLog('\n🎉 Comprehensive diagnostic completed!', 'success');
-    showSnackbar({ message: 'Diagnostic completed! Check results below.', timeout: 5000 });
+    showSnackbar({ 
+      message: 'Diagnostic completed!', 
+      actions: {
+        'Copy Results': async () => {
+          await copyDiagnosticsToClipboard();
+          showSnackbar({ message: 'All diagnostic results copied to clipboard!', timeout: 3000 });
+        }
+      },
+      timeout: 8000,
+      closable: true 
+    });
   }
 
   function initiateServerLogin() {
@@ -901,14 +943,30 @@
   <!-- Results Panels -->
   {#if $diagnostics.environment}
     <Card variant="elevated">
-      <h2>🌍 Environment Check Results</h2>
+      <div class="result-header">
+        <h2>🌍 Environment Check Results</h2>
+        <Button 
+          variant="outlined" 
+          onclick={() => copySpecificResult($diagnostics.environment, 'Environment Results')}
+        >
+          📋 Copy
+        </Button>
+      </div>
       <pre>{JSON.stringify($diagnostics.environment, null, 2)}</pre>
     </Card>
   {/if}
 
   {#if serverAuthResult}
     <Card variant="elevated">
-      <h2>🖥️ Server Auth Results</h2>
+      <div class="result-header">
+        <h2>🖥️ Server Auth Results</h2>
+        <Button 
+          variant="outlined" 
+          onclick={() => copySpecificResult(serverAuthResult, 'Server Auth Results')}
+        >
+          📋 Copy
+        </Button>
+      </div>
       <pre>{JSON.stringify(serverAuthResult, null, 2)}</pre>
     </Card>
   {/if}
@@ -917,21 +975,45 @@
 
   {#if refreshTestResult}
     <Card variant="elevated">
-      <h2>🔄 Token Refresh Results</h2>
+      <div class="result-header">
+        <h2>🔄 Token Refresh Results</h2>
+        <Button 
+          variant="outlined" 
+          onclick={() => copySpecificResult(refreshTestResult, 'Token Refresh Results')}
+        >
+          📋 Copy
+        </Button>
+      </div>
       <pre>{JSON.stringify(refreshTestResult, null, 2)}</pre>
     </Card>
   {/if}
 
   {#if tokenComparisonResult}
     <Card variant="elevated">
-      <h2>⚖️ Token Comparison Results</h2>
+      <div class="result-header">
+        <h2>⚖️ Token Comparison Results</h2>
+        <Button 
+          variant="outlined" 
+          onclick={() => copySpecificResult(tokenComparisonResult, 'Token Comparison Results')}
+        >
+          📋 Copy
+        </Button>
+      </div>
       <pre>{JSON.stringify(tokenComparisonResult, null, 2)}</pre>
     </Card>
   {/if}
 
   {#if $diagnostics.analysis}
     <Card variant="elevated">
-      <h2>📊 Final Analysis & Recommendations</h2>
+      <div class="result-header">
+        <h2>📊 Final Analysis & Recommendations</h2>
+        <Button 
+          variant="outlined" 
+          onclick={() => copySpecificResult({ analysis: $diagnostics.analysis, logs: $logs }, 'Analysis & Logs')}
+        >
+          📋 Copy
+        </Button>
+      </div>
       <div class="analysis">
         <div class="summary">
           <h3>Summary</h3>
@@ -1235,6 +1317,17 @@ async function makeGmailApiCall(endpoint) {
   .analysis li.info {
     border-left-color: #2196f3;
     color: #1976d2;
+  }
+
+  .result-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+  }
+
+  .result-header h2 {
+    margin: 0;
   }
 
   .implementation-guide {
