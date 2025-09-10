@@ -23,11 +23,8 @@
   $: authState = $hybridAuthState as HybridAuthState;
 
   onMount(async () => {
-    try {
-      await initHybridAuth();
-    } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
-    }
+    // Don't auto-initialize - let user manually test different flows
+    console.log('HybridAuthExample loaded - ready for manual testing');
   });
 
   async function handleServerLogin() {
@@ -183,6 +180,10 @@
     <div class="actions">
       <h3>Authentication Actions</h3>
       <div class="button-grid">
+        <Button onclick={async () => { try { await initHybridAuth(); } catch (e) { error = e instanceof Error ? e.message : String(e); } }} disabled={isLoading} variant="filled">
+          🚀 Initialize Hybrid Auth
+        </Button>
+        
         <Button onclick={handleServerLogin} disabled={isLoading}>
           🖥️ Server Login (Long-lasting)
         </Button>

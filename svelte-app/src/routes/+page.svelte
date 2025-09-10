@@ -4,6 +4,8 @@
   import ListItem from '$lib/containers/ListItem.svelte';
   import Button from '$lib/buttons/Button.svelte';
   import { initAuth, authState, getAuthDiagnostics, resolveGoogleClientId } from '$lib/gmail/auth';
+  import { checkServerSession } from '$lib/gmail/server-session-check';
+  import { pushGmailDiag } from '$lib/gmail/diag';
   import { getDB } from '$lib/db/indexeddb';
   import { copyGmailDiagnosticsToClipboard } from '$lib/gmail/api';
   import { show as showSnackbar } from '$lib/containers/snackbar';
@@ -31,7 +33,20 @@
     
     (async () => {
       try {
-        // Ensure auth is initialized before attempting API calls
+        // Check for server session first (long-lasting auth)
+        try {
+          const serverSession = await checkServerSession();
+          if (serverSession.authenticated) {
+            // Server session found - go directly to inbox
+            pushGmailDiag({ type: 'home_page_server_session_redirect', email: serverSession.email });
+            window.location.href = `${base}/inbox`;
+            return;
+          }
+        } catch (e) {
+          console.warn('[ServerAuth] Server session check failed:', e);
+        }
+
+        // Fall back to client-side auth initialization
         try {
           CLIENT_ID = CLIENT_ID || resolveGoogleClientId() as string;
           // Add timeout to prevent hanging
@@ -41,11 +56,11 @@
           );
           await Promise.race([authPromise, timeoutPromise]);
         } catch (e) {
-          console.warn('[Auth] Initialization failed:', e);
+          console.warn('[Auth] Client initialization failed:', e);
         }
         
         try {
-          // Add timeout to prevent hanging
+          // Check local database for existing account
           const dbPromise = getDB();
           const timeoutPromise = new Promise<never>((_, reject) => 
             setTimeout(() => reject(new Error('Database initialization timeout')), 5000)

@@ -210,6 +210,8 @@
         const currentPath = location.pathname;
         const isDebugPath = debugPaths.some(path => currentPath.startsWith(path));
         
+        console.log('[Layout] Auth check - Current path:', currentPath, 'Is debug path:', isDebugPath);
+        
         if (isDebugPath) {
           return; // Skip authentication check for debug pages
         }

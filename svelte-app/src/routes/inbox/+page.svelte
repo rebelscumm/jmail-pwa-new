@@ -428,9 +428,43 @@
     (async () => {
       let hadCache = false;
       try {
+        // Check for server session first (long-lasting auth)
+        try {
+          const { checkServerSession } = await import('$lib/gmail/server-session-check');
+          const serverSession = await checkServerSession();
+          if (serverSession.authenticated) {
+            console.log('[Inbox] Using server-side session for', serverSession.email);
+            ready = true;
+            // Continue with inbox loading using server session
+            try {
+              const { loadSettings } = await import('$lib/stores/settings');
+              await loadSettings();
+              await loadFilters();
+              hadCache = await hydrateFromCache();
+              if (hadCache) loading = false;
+              // Use server APIs for data loading
+              try {
+                syncing = true;
+                await hydrate(); // This will use server APIs automatically
+              } catch (e) {
+                setApiError(e);
+              } finally {
+                syncing = false;
+              }
+              return; // Skip client auth initialization
+            } catch (e) {
+              console.warn('[Inbox] Server session hydration failed:', e);
+              // Continue to client auth fallback
+            }
+          }
+        } catch (e) {
+          console.warn('[Inbox] Server session check failed:', e);
+        }
+
+        // Fall back to client-side auth
         CLIENT_ID = CLIENT_ID || resolveGoogleClientId() as string;
         await initAuth(CLIENT_ID);
-        // Load settings first for snooze defaults
+        // Load settings first for snooze defaults  
         const { loadSettings } = await import('$lib/stores/settings');
         await loadSettings();
         await loadFilters();
