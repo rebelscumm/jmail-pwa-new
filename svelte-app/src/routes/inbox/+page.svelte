@@ -664,6 +664,8 @@
       const pageSize = 500; // reasonably large page for manual full sync
       let pageToken: string | undefined = undefined;
       const seenThreadIds = new Set<string>();
+      let consecutiveEmptyPages = 0;
+      let totalThreadsProcessed = 0;
       authoritativeSyncProgress = { running: true, pagesCompleted: 0, pagesTotal: 0 };
 
       // Stream thread ids (preferred) rather than messages to avoid missing
@@ -686,14 +688,26 @@
           }
         }
         if (!page) break; // defensive
-        // Update progress info
-        authoritativeSyncProgress = { ...authoritativeSyncProgress, pagesCompleted: authoritativeSyncProgress.pagesCompleted + 1 };
+        
         const pageResolved = page as { ids: string[]; nextPageToken?: string };
         pageToken = pageResolved.nextPageToken;
+        
+        // Check if this page is empty
         if (!pageResolved.ids || !pageResolved.ids.length) {
-          if (!pageToken) break; else continue;
+          consecutiveEmptyPages++;
+          // Break if we get too many consecutive empty pages to prevent infinite loops
+          if (consecutiveEmptyPages >= 5 || !pageToken) {
+            break;
+          }
+          continue; // Don't increment page counter for empty pages
         }
+        
+        // Reset empty page counter and increment progress only for non-empty pages
+        consecutiveEmptyPages = 0;
+        authoritativeSyncProgress = { ...authoritativeSyncProgress, pagesCompleted: authoritativeSyncProgress.pagesCompleted + 1 };
+        
         const ids = pageResolved.ids;
+        totalThreadsProcessed += ids.length;
         // For threads on this page, fetch summaries only for those missing or
         // needing update in local DB to keep network usage reasonable.
         const toFetch: string[] = [];
@@ -739,12 +753,23 @@
       await txThreads.done;
       authoritativeSyncProgress = { ...authoritativeSyncProgress, running: false };
 
+      // Clear trailing holds to prevent stale display after authoritative sync
+      try {
+        const { trailingHolds } = await import('$lib/stores/holds');
+        trailingHolds.set({});
+      } catch (_) {}
+
       // Refresh in-memory store from authoritative DB state
       try {
         const refreshed = await db.getAll('threads');
         const { setThreadsWithReset } = await import('$lib/stores/optimistic-counters');
         setThreadsWithReset(refreshed as any);
       } catch (_) {}
+      
+      // Log sync completion with stats
+      if (import.meta.env.DEV) {
+        console.log(`[AuthSync] Completed: ${totalThreadsProcessed} threads processed, ${authoritativeSyncProgress.pagesCompleted} pages fetched`);
+      }
     } catch (e) {
       // Surface a subtle telemetry snackbar so user can retry if needed
       try { showSnackbar({ message: 'Full sync failed', timeout: 5000, actions: { 'Retry': () => { void performAuthoritativeInboxSync(); } } }); } catch (_) {}
@@ -1380,7 +1405,13 @@
       </Button>
       {#if authoritativeSyncProgress.running}
         <Card variant="outlined" style="display:flex; align-items:center; gap:0.5rem; padding:0.25rem 0.5rem;">
-          <span class="m3-font-body-small">Syncing inbox: {authoritativeSyncProgress.pagesCompleted} pages</span>
+          <span class="m3-font-body-small">
+            {#if authoritativeSyncProgress.pagesCompleted === 0}
+              Syncing inbox...
+            {:else}
+              Syncing inbox: {authoritativeSyncProgress.pagesCompleted} pages
+            {/if}
+          </span>
         </Card>
       {/if}
     </div>
