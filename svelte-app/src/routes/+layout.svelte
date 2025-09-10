@@ -202,8 +202,18 @@
     onKeyDownRef = onKeyDown;
 
     // Ensure first-run shows connect wizard at root
+    // Skip redirect for debug and test pages
     (async () => {
       try {
+        // Allow access to debug and test pages without authentication
+        const debugPaths = ['/auth-debug', '/auth-test'];
+        const currentPath = location.pathname;
+        const isDebugPath = debugPaths.some(path => currentPath.startsWith(path));
+        
+        if (isDebugPath) {
+          return; // Skip authentication check for debug pages
+        }
+
         const { getDB } = await import('$lib/db/indexeddb');
         const db = await getDB();
         const account = await db.get('auth', 'me');

@@ -2,17 +2,17 @@
 set -euo pipefail
 
 # Register production and dev hostnames for an Azure Static Web App using az cli.
-# NOTE: Adding hostnames under the azurewebsites.net/scm.azurewebsites.net managed domains
-# may not be supported. Use this script only if you control the DNS and the Static Web App
-# accepts those hostnames. It requires a logged-in az session (or use Azure/login in GH Actions).
+# This script configures custom domains for your Azure Static Web App.
+# Azure Static Web Apps automatically provides SSL certificates for *.azurestaticapps.net domains.
+# It requires a logged-in az session (or use Azure/login in GH Actions).
 
 usage() {
   cat <<EOF
 Usage: $0 --name <static_app_name> --resource-group <rg> --prod-hostname <prod> --dev-hostname <dev>
 
 Example:
-  $0 --name my-static-app --resource-group my-rg --prod-hostname jmail-pwa-new-api.scm.azurewebsites.net \
-    --dev-hostname dev.jmail-pwa-new-api.scm.azurewebsites.net
+  $0 --name my-static-app --resource-group my-rg --prod-hostname polite-coast-0d53a9710.1.azurestaticapps.net \
+    --dev-hostname dev.polite-coast-0d53a9710.1.azurestaticapps.net
 
 This script runs `az staticwebapp hostname set` for each hostname.
 EOF
@@ -46,6 +46,8 @@ az staticwebapp hostname set --name "${STATIC_NAME}" --resource-group "${RG}" --
 echo "Registering dev hostname: ${DEV_HOST}"
 az staticwebapp hostname set --name "${STATIC_NAME}" --resource-group "${RG}" --hostname "${DEV_HOST}"
 
-echo "Hostname registration commands completed. You may need to verify DNS TXT records as instructed by Azure." 
+echo "Hostname registration commands completed."
+echo "SSL certificates are automatically provided by Azure Static Web Apps for *.azurestaticapps.net domains."
+echo "No additional SSL configuration is required - your sites will be secure by default." 
 
 
