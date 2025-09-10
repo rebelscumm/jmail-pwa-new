@@ -41,6 +41,12 @@
       "allowedRoles": ["anonymous"]
     },
     {
+      "route": "/api/google/callback",
+      "rewrite": "/api/google-callback",
+      "methods": ["GET"],
+      "allowedRoles": ["anonymous"]
+    },
+    {
       "route": "/api/google-refresh",
       "methods": ["POST"],
       "allowedRoles": ["anonymous"]

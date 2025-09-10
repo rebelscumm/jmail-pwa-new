@@ -10,7 +10,7 @@ module.exports = async function (context, req) {
 
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-  const redirectUri = (process.env.APP_BASE_URL || "") + "/api/google/callback";
+  const redirectUri = (process.env.APP_BASE_URL || "") + "/api/google-callback";
   
   console.log('google-callback: env check', {
     clientIdPresent: !!clientId,

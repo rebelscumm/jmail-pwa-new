@@ -45,7 +45,7 @@ module.exports = async function (context, req) {
       query: req.query || {}
     },
     cookies: parseCookies(req),
-    redirectUri: (process.env.APP_BASE_URL || "") + "/api/google/callback"
+    redirectUri: (process.env.APP_BASE_URL || "") + "/api/google-callback"
   };
 
   context.res = {

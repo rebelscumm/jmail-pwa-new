@@ -8,7 +8,7 @@ module.exports = async function (context, req) {
   }
 
   const clientId = process.env.GOOGLE_CLIENT_ID;
-  const redirectUri = (process.env.APP_BASE_URL || "") + "/api/google/callback";
+  const redirectUri = (process.env.APP_BASE_URL || "") + "/api/google-callback";
   const scope = process.env.GOOGLE_SCOPES || [
     "https://www.googleapis.com/auth/gmail.modify",
     "https://www.googleapis.com/auth/gmail.labels",
