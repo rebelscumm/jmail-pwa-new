@@ -25,8 +25,17 @@ async function getGoogleAccessToken(payload) {
 
 module.exports = async function (context, req) {
   const method = (req.method || "GET").toUpperCase();
-  const rawPath = req.params && req.params["*" ] ? String(req.params["*"]) : "";
+  // Extract path from Azure Functions route parameters
+  const rawPath = req.params && req.params.segments ? String(req.params.segments) : "";
   const path = rawPath.replace(/^\/+/, "");
+  
+  console.log('gmail-proxy: path extraction', {
+    originalUrl: req.url,
+    rawPath,
+    extractedPath: path,
+    method,
+    params: req.params
+  });
   const resHeaders = [];
 
   const session = getSession(req);

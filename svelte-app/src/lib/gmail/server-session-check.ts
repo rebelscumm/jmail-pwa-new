@@ -64,8 +64,11 @@ export async function storeServerSessionInDB(sessionInfo: ServerSessionInfo): Pr
       accessToken: 'server-managed', // Placeholder since server manages the actual token
       tokenExpiry: sessionInfo.exp ? sessionInfo.exp * 1000 : Date.now() + 3600000, // 1 hour default
       lastConnectedAt: Date.now(),
-      lastConnectedOrigin: window.location.origin,
-      lastConnectedUrl: window.location.href,
+      lastConnectedOrigin: typeof window !== 'undefined' ? window.location.origin : undefined,
+      lastConnectedUrl: typeof window !== 'undefined' ? window.location.href : undefined,
+      firstConnectedAt: Date.now(),
+      firstConnectedOrigin: typeof window !== 'undefined' ? window.location.origin : undefined,
+      firstConnectedUrl: typeof window !== 'undefined' ? window.location.href : undefined,
       email: sessionInfo.email,
       serverManaged: true // Flag to indicate this is a server-managed session
     };

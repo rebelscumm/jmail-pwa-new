@@ -430,10 +430,14 @@
       try {
         // Check for server session first (long-lasting auth)
         try {
-          const { checkServerSession } = await import('$lib/gmail/server-session-check');
+          const { checkServerSession, storeServerSessionInDB } = await import('$lib/gmail/server-session-check');
           const serverSession = await checkServerSession();
           if (serverSession.authenticated) {
             console.log('[Inbox] Using server-side session for', serverSession.email);
+            
+            // Store server session in DB so the app recognizes the user
+            await storeServerSessionInDB(serverSession);
+            
             ready = true;
             // Continue with inbox loading using server session
             try {
@@ -447,6 +451,7 @@
                 syncing = true;
                 await hydrate(); // This will use server APIs automatically
               } catch (e) {
+                console.error('[Inbox] Server session API call failed:', e);
                 setApiError(e);
               } finally {
                 syncing = false;
@@ -456,6 +461,8 @@
               console.warn('[Inbox] Server session hydration failed:', e);
               // Continue to client auth fallback
             }
+          } else {
+            console.log('[Inbox] No server session found, falling back to client auth');
           }
         } catch (e) {
           console.warn('[Inbox] Server session check failed:', e);
