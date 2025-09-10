@@ -346,12 +346,38 @@ loadApiBaseOverride();
 </script>
 
 <style>
-pre.diag { max-height: 40vh; overflow: auto; background: #111; color: #eee; padding: 8px; }
+pre.diag { 
+  max-height: 40vh; 
+  overflow: auto; 
+  background: rgb(var(--m3-scheme-surface-variant)); 
+  color: rgb(var(--m3-scheme-on-surface-variant)); 
+  padding: 8px; 
+  border-radius: 6px;
+}
 .controls { display:flex; gap:8px; margin-bottom:8px }
-.wizard { margin: 0.5rem 0 1rem 0; padding: 0.5rem; border: 1px solid rgba(0,0,0,0.06); border-radius: 6px; }
+.wizard { 
+  margin: 0.5rem 0 1rem 0; 
+  padding: 0.5rem; 
+  border: 1px solid rgb(var(--m3-scheme-outline-variant)); 
+  border-radius: 6px; 
+  background: rgb(var(--m3-scheme-surface));
+}
 .step { margin-bottom: 0.5rem; }
-.pastebox { width:100%; min-height: 8rem; font-family: monospace; }
-.summary { background: #fafafa; padding: 0.5rem; border-radius: 6px; margin-top: 0.5rem; }
+.pastebox { 
+  width:100%; 
+  min-height: 8rem; 
+  font-family: monospace; 
+  background: rgb(var(--m3-scheme-surface)); 
+  color: rgb(var(--m3-scheme-on-surface)); 
+  border: 1px solid rgb(var(--m3-scheme-outline));
+}
+.summary { 
+  background: rgb(var(--m3-scheme-surface-variant)); 
+  color: rgb(var(--m3-scheme-on-surface-variant)); 
+  padding: 0.5rem; 
+  border-radius: 6px; 
+  margin-top: 0.5rem; 
+}
 </style>
 
 <div>

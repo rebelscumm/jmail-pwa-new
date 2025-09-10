@@ -1,0 +1,22 @@
+{
+  "navigationFallback": {
+    "rewrite": "/index.html",
+    "exclude": [
+      "/favicon.ico",
+      "/favicon.png", 
+      "/manifest.webmanifest",
+      "/og.png",
+      "/og.svg",
+      "/icon-maskable.svg",
+      "/robots.txt",
+      "/sitemap.xml",
+      "/assets/*",
+      "/build/*.js",
+      "/build/*.css",
+      "/api/*"
+    ]
+  },
+  "platform": {
+    "apiRuntime": "node:18"
+  }
+}

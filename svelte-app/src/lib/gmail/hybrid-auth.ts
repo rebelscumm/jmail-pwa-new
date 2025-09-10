@@ -39,7 +39,24 @@ const SERVER_BASE_URL = typeof window !== 'undefined' ?
 const GOOGLE_CLIENT_ID = typeof window !== 'undefined' ?
   (window as any).__ENV__?.GOOGLE_CLIENT_ID ||
   import.meta.env.VITE_GOOGLE_CLIENT_ID ||
+  getLocalDevClientId() ||
   '49551890193-e6n262ccj95229ftp2dh6k9s2boo1kip.apps.googleusercontent.com' : '';
+
+// Helper to get appropriate client ID for local development
+function getLocalDevClientId(): string | null {
+  if (typeof window === 'undefined') return null;
+  
+  const hostname = window.location.hostname;
+  const isLocalDev = hostname === 'localhost' || hostname === '127.0.0.1' || hostname.startsWith('192.168.') || hostname.endsWith('.local');
+  
+  if (isLocalDev) {
+    // For local development, we need a client ID that allows localhost/local IPs
+    // You'll need to create a separate OAuth client for development
+    return localStorage.getItem('DEV_GOOGLE_CLIENT_ID') || null;
+  }
+  
+  return null;
+}
 
 const GMAIL_SCOPES = [
   'https://www.googleapis.com/auth/gmail.modify',

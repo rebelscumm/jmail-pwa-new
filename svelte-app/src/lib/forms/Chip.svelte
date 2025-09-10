@@ -34,7 +34,7 @@
   {#if icon}
     <Icon {icon} class="leading" />
   {/if}
-  <span class="m3-font-label-large" style="color: rgb(var(--m3-scheme-on-surface)); color: #222;">
+  <span class="m3-font-label-large" style="color: rgb(var(--m3-scheme-on-surface))">
     {#if typeof children === 'function'}
       {@render children()}
     {:else}

@@ -22,28 +22,6 @@ jobs:
           submodules: true
           lfs: false
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20.19.0'
-          cache: 'pnpm'
-          cache-dependency-path: 'svelte-app/pnpm-lock.yaml'
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v2
-        with:
-          version: '10.14.0'
-
-      - name: Install dependencies
-        run: |
-          cd svelte-app
-          pnpm install --frozen-lockfile
-
-      - name: Build application
-        run: |
-          cd svelte-app
-          pnpm run build
-
       # Deploy to production environment (main Azure Static Web App)
       - name: Deploy to Production
         id: deploy_prod
@@ -57,6 +35,9 @@ jobs:
           api_location: "api"
           output_location: "build"
           production_branch: "master"
+          # Specify Node.js version for Azure build system
+          skip_app_build: false
+          skip_api_build: false
 
       # Deploy to dev environment (staging slot)
       - name: Deploy to Development
@@ -71,6 +52,9 @@ jobs:
           api_location: "api"
           output_location: "build"
           deployment_environment: "dev"
+          # Specify Node.js version for Azure build system
+          skip_app_build: false
+          skip_api_build: false
 
       # Configure custom domains and SSL certificates
       - name: Configure Custom Domains and SSL

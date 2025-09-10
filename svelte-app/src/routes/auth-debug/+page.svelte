@@ -6,6 +6,8 @@
   import TextField from '$lib/forms/TextField.svelte';
   import CircularProgressIndeterminate from '$lib/forms/CircularProgressIndeterminate.svelte';
   import { show as showSnackbar } from '$lib/containers/snackbar';
+  import { copyGmailDiagnosticsToClipboard } from '$lib/gmail/api';
+  import { getFriendlyAIErrorMessage } from '$lib/ai/providers';
 
   // Diagnostic state
   const diagnostics = writable<any>({});
@@ -45,14 +47,12 @@
 
   // Results storage
   let serverAuthResult: any = null;
-  let clientAuthResult: any = null;
   let refreshTestResult: any = null;
   let tokenComparisonResult: any = null;
 
   const steps = [
     'Environment Check',
     'Server Auth Flow',
-    'Client Auth Flow', 
     'Token Refresh Test',
     'Token Comparison',
     'Final Analysis'
@@ -83,7 +83,6 @@
       const diagText = JSON.stringify({
         diagnostics: $diagnostics,
         serverAuthResult,
-        clientAuthResult,
         refreshTestResult,
         tokenComparisonResult,
         logs: $logs
@@ -119,29 +118,64 @@
     };
 
     // Auto-detect configuration
-    clientId = clientId || import.meta.env.VITE_GOOGLE_CLIENT_ID || '49551890193-e6n262ccj95229ftp2dh6k9s2boo1kip.apps.googleusercontent.com';
+    const hostname = window.location.hostname;
+    const isLocalDev = hostname === 'localhost' || hostname === '127.0.0.1' || hostname.startsWith('192.168.') || hostname.endsWith('.local');
+    
+    clientId = clientId || 
+      import.meta.env.VITE_GOOGLE_CLIENT_ID || 
+      '49551890193-e6n262ccj95229ftp2dh6k9s2boo1kip.apps.googleusercontent.com';
+      
     serverBaseUrl = serverBaseUrl || import.meta.env.VITE_APP_BASE_URL || window.location.origin;
 
     // Test server connectivity
     let serverConnectivity = null;
     try {
       addLog('Testing server connectivity...');
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      
       const response = await fetch(`${serverBaseUrl}/api/diagnostics`, {
         method: 'GET',
-        credentials: 'include'
+        credentials: 'include',
+        signal: controller.signal
       });
+      
+      clearTimeout(timeoutId);
+      
+      let responseText = '';
+      try {
+        responseText = await response.text();
+      } catch (textErr) {
+        responseText = `Failed to read response: ${textErr instanceof Error ? textErr.message : String(textErr)}`;
+      }
+      
       serverConnectivity = {
         status: response.status,
+        statusText: response.statusText,
         ok: response.ok,
-        headers: Object.fromEntries(response.headers.entries())
+        headers: Object.fromEntries(response.headers.entries()),
+        responseText: responseText.slice(0, 500),
+        responseLength: responseText.length,
+        contentType: response.headers.get('content-type'),
+        url: response.url,
+        redirected: response.redirected,
+        type: response.type,
+        requestUrl: `${serverBaseUrl}/api/diagnostics`
       };
+      
       if (response.ok) {
         addLog('Server connectivity: OK', 'success');
       } else {
         addLog(`Server connectivity: ${response.status} ${response.statusText}`, 'warning');
       }
     } catch (err) {
-      serverConnectivity = { error: err instanceof Error ? err.message : String(err) };
+      serverConnectivity = { 
+        error: err instanceof Error ? err.message : String(err),
+        name: err instanceof Error ? err.name : undefined,
+        stack: err instanceof Error ? err.stack : undefined,
+        requestUrl: `${serverBaseUrl}/api/diagnostics`,
+        isTimeout: err instanceof Error && err.name === 'AbortError'
+      };
       addLog(`Server connectivity failed: ${serverConnectivity.error}`, 'error');
     }
 
@@ -163,15 +197,22 @@
     }
 
     const result = {
-      environment: env,
-      configuration: {
-        clientId: clientId ? 'present' : 'missing',
-        serverBaseUrl,
-        testScopes
-      },
-      serverConnectivity,
-      googleConnectivity,
-      timestamp: new Date().toISOString()
+        environment: env,
+        configuration: {
+          clientId: clientId ? 'present' : 'missing',
+          clientIdLength: clientId ? clientId.length : 0,
+          serverBaseUrl,
+          testScopes,
+          isDev: isLocalDev,
+          hostname: window.location.hostname,
+          port: window.location.port,
+          protocol: window.location.protocol
+        },
+        serverConnectivity,
+        googleConnectivity,
+        timestamp: new Date().toISOString(),
+        userAgent: navigator.userAgent,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
     };
 
     diagnostics.update(d => ({ ...d, environment: result }));
@@ -192,19 +233,54 @@
       // Test if login endpoint is reachable
       let loginEndpointTest = null;
       try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+        
         const response = await fetch(loginUrl, {
           method: 'GET',
           credentials: 'include',
-          redirect: 'manual'
+          redirect: 'manual',
+          signal: controller.signal
         });
+        
+        clearTimeout(timeoutId);
+        
+        const responseHeaders = Object.fromEntries(response.headers.entries());
+        let responseText = '';
+        try {
+          responseText = await response.text();
+        } catch (textErr) {
+          responseText = `Failed to read response: ${textErr instanceof Error ? textErr.message : String(textErr)}`;
+        }
+        
         loginEndpointTest = {
           status: response.status,
-          headers: Object.fromEntries(response.headers.entries()),
-          redirected: response.type === 'opaqueredirect'
+          statusText: response.statusText,
+          ok: response.ok,
+          headers: responseHeaders,
+          redirected: response.type === 'opaqueredirect',
+          type: response.type,
+          url: response.url,
+          responseText: responseText.slice(0, 500),
+          responseLength: responseText.length,
+          contentType: response.headers.get('content-type'),
+          location: response.headers.get('location'),
+          requestUrl: loginUrl
         };
-        addLog(`Login endpoint status: ${response.status}`, response.status < 400 ? 'success' : 'warning');
+        
+        if (response.status === 302 || response.status === 301) {
+          addLog(`Login endpoint: redirect to ${responseHeaders.location || 'unknown'}`, 'success');
+        } else {
+          addLog(`Login endpoint status: ${response.status} ${response.statusText}`, response.status < 400 ? 'success' : 'warning');
+        }
       } catch (err) {
-        loginEndpointTest = { error: err instanceof Error ? err.message : String(err) };
+        loginEndpointTest = { 
+          error: err instanceof Error ? err.message : String(err),
+          name: err instanceof Error ? err.name : undefined,
+          stack: err instanceof Error ? err.stack : undefined,
+          requestUrl: loginUrl,
+          isTimeout: err instanceof Error && err.name === 'AbortError'
+        };
         addLog(`Login endpoint test failed: ${loginEndpointTest.error}`, 'error');
       }
 
@@ -216,19 +292,55 @@
           method: 'GET',
           credentials: 'include'
         });
-        const data = await response.json();
+        
+        // Enhanced diagnostics for response
+        const responseHeaders = Object.fromEntries(response.headers.entries());
+        const contentType = response.headers.get('content-type');
+        
+        let responseText = '';
+        try {
+          responseText = await response.text();
+        } catch (textErr) {
+          responseText = `Failed to read response text: ${textErr instanceof Error ? textErr.message : String(textErr)}`;
+        }
+        
+        let data = null;
+        let parseError = null;
+        if (responseText) {
+          try {
+            data = JSON.parse(responseText);
+          } catch (jsonErr) {
+            parseError = jsonErr instanceof Error ? jsonErr.message : String(jsonErr);
+          }
+        }
+        
         sessionCheck = {
           status: response.status,
-          authenticated: response.ok,
-          data: response.ok ? data : { error: data }
+          statusText: response.statusText,
+          ok: response.ok,
+          authenticated: response.ok && data,
+          headers: responseHeaders,
+          contentType,
+          responseText: responseText.slice(0, 500), // Limit size
+          responseLength: responseText.length,
+          data: response.ok ? data : null,
+          parseError,
+          url: response.url,
+          redirected: response.redirected,
+          type: response.type
         };
-        if (response.ok) {
+        
+        if (response.ok && data) {
           addLog(`Current session: authenticated as ${data.email || 'unknown'}`, 'success');
         } else {
-          addLog(`Current session: not authenticated (${response.status})`, 'info');
+          addLog(`Current session: not authenticated (${response.status}) - ${parseError || 'No JSON data'}`, 'info');
         }
       } catch (err) {
-        sessionCheck = { error: err instanceof Error ? err.message : String(err) };
+        sessionCheck = { 
+          error: err instanceof Error ? err.message : String(err),
+          stack: err instanceof Error ? err.stack : undefined,
+          name: err instanceof Error ? err.name : undefined
+        };
         addLog(`Session check failed: ${sessionCheck.error}`, 'error');
       }
 
@@ -301,133 +413,9 @@
     isLoading.set(false);
   }
 
-  // Step 3: Client Auth Flow  
-  async function testClientAuth() {
-    isLoading.set(true);
-    addLog('Starting client auth flow test...');
+  // Step 3: Token Refresh Test (formerly step 4)
+  // Moved up since we removed client auth flow
 
-    try {
-      // Load Google Identity Services if not already loaded
-      if (!document.getElementById('gis-script')) {
-        addLog('Loading Google Identity Services...');
-        await new Promise<void>((resolve, reject) => {
-          const script = document.createElement('script');
-          script.id = 'gis-script';
-          script.src = 'https://accounts.google.com/gsi/client';
-          script.async = true;
-          script.defer = true;
-          script.onload = () => {
-            addLog('Google Identity Services loaded', 'success');
-            resolve();
-          };
-          script.onerror = () => {
-            addLog('Failed to load Google Identity Services', 'error');
-            reject(new Error('Failed to load GIS'));
-          };
-          document.head.appendChild(script);
-        });
-      }
-
-      // Wait for Google APIs to be available
-      let retries = 0;
-      while (!(window as any).google?.accounts?.oauth2 && retries < 50) {
-        await new Promise(resolve => setTimeout(resolve, 100));
-        retries++;
-      }
-
-      if (!(window as any).google?.accounts?.oauth2) {
-        throw new Error('Google APIs not available after loading');
-      }
-
-      addLog('Google APIs available', 'success');
-
-      // Initialize token client
-      addLog('Initializing token client...');
-      const tokenClient = (window as any).google.accounts.oauth2.initTokenClient({
-        client_id: clientId,
-        scope: testScopes,
-        callback: () => {}
-      });
-
-      addLog('Token client initialized', 'success');
-
-      // Test silent token request
-      addLog('Testing silent token request...');
-      let silentResult = null;
-      try {
-        const token = await new Promise<any>((resolve, reject) => {
-          const timeout = setTimeout(() => reject(new Error('Silent token request timeout')), 10000);
-          tokenClient.callback = (response: any) => {
-            clearTimeout(timeout);
-            if (response.error) {
-              reject(new Error(response.error));
-            } else {
-              resolve(response);
-            }
-          };
-          tokenClient.requestAccessToken({ prompt: 'none' });
-        });
-
-        silentResult = {
-          success: true,
-          token: {
-            access_token: token.access_token ? 'present' : 'missing',
-            expires_in: token.expires_in,
-            token_type: token.token_type,
-            scope: token.scope
-          }
-        };
-        addLog('Silent token request: successful', 'success');
-      } catch (err) {
-        silentResult = {
-          success: false,
-          error: err instanceof Error ? err.message : String(err)
-        };
-        addLog(`Silent token request failed: ${silentResult.error}`, 'info');
-      }
-
-      // Test token info if we got a token
-      let tokenInfoResult = null;
-      if (silentResult?.success && silentResult.token?.access_token) {
-        addLog('Testing token info...');
-        try {
-          // This would normally use the actual token, but for security we'll just test the endpoint
-          const response = await fetch('https://oauth2.googleapis.com/tokeninfo?access_token=test');
-          tokenInfoResult = {
-            endpointReachable: true,
-            status: response.status
-          };
-          addLog('Token info endpoint reachable', 'success');
-        } catch (err) {
-          tokenInfoResult = {
-            endpointReachable: false,
-            error: err instanceof Error ? err.message : String(err)
-          };
-          addLog(`Token info endpoint failed: ${tokenInfoResult.error}`, 'warning');
-        }
-      }
-
-      clientAuthResult = {
-        gisLoaded: true,
-        tokenClientInitialized: true,
-        silentResult,
-        tokenInfoResult,
-        timestamp: new Date().toISOString()
-      };
-
-      addLog('Client auth flow test completed', 'success');
-    } catch (err) {
-      clientAuthResult = {
-        error: err instanceof Error ? err.message : String(err),
-        timestamp: new Date().toISOString()
-      };
-      addLog(`Client auth flow test failed: ${clientAuthResult.error}`, 'error');
-    }
-
-    isLoading.set(false);
-  }
-
-  // Step 4: Token Refresh Test
   async function testTokenRefresh() {
     isLoading.set(true);
     addLog('Starting token refresh test...');
@@ -537,7 +525,7 @@
     isLoading.set(false);
   }
 
-  // Step 5: Token Comparison
+  // Step 4: Token Comparison (formerly step 5)
   async function compareTokens() {
     isLoading.set(true);
     addLog('Starting token comparison...');
@@ -564,22 +552,9 @@
         addLog(`Server token info error: ${serverTokenInfo.error}`, 'error');
       }
 
-      // Get client token info (if we have a client token)
-      let clientTokenInfo = null;
-      if (clientAuthResult?.silentResult?.success) {
-        addLog('Getting client token information...');
-        // For security, we won't actually expose the client token
-        clientTokenInfo = {
-          hasToken: true,
-          scope: clientAuthResult.silentResult.token.scope,
-          expires_in: clientAuthResult.silentResult.token.expires_in,
-          token_type: clientAuthResult.silentResult.token.token_type
-        };
-        addLog('Client token info retrieved', 'success');
-      } else {
-        clientTokenInfo = { hasToken: false };
-        addLog('No client token available for comparison', 'info');
-      }
+      // Note: Client auth removed - focusing on server-side only
+      let clientTokenInfo = { hasToken: false, note: 'Client auth flow removed - server-side only' };
+      addLog('Client auth flow skipped - focusing on server-side auth', 'info');
 
       // Compare scopes
       let scopeComparison = null;
@@ -655,7 +630,7 @@
     isLoading.set(false);
   }
 
-  // Step 6: Final Analysis
+  // Step 5: Final Analysis (formerly step 6)
   function generateAnalysis() {
     addLog('Generating final analysis...');
 
@@ -665,7 +640,6 @@
         serverReachable: $diagnostics.environment?.serverConnectivity?.ok,
         googleReachable: $diagnostics.environment?.googleConnectivity?.reachable,
         serverAuthWorking: serverAuthResult?.sessionCheck?.authenticated,
-        clientAuthWorking: clientAuthResult?.silentResult?.success,
         refreshTokenWorking: refreshTestResult?.refreshTokenTest?.success,
         overallHealth: 'unknown'
       },
@@ -696,19 +670,15 @@
       analysis.recommendations.push('Complete the server-side OAuth flow first');
     }
 
-    if (analysis.summary.clientAuthWorking) {
-      analysis.strengths.push('Client-side authentication is working');
-    } else {
-      analysis.issues.push('Client-side authentication not working');
-      analysis.recommendations.push('Check Google Client ID and GIS configuration');
-    }
+    // Client auth removed - focusing on server-side for long-lasting tokens
+    analysis.strengths.push('Focusing on server-side auth for long-lasting token persistence');
 
     // Determine overall health
     const healthScore = [
       analysis.summary.environmentOk,
       analysis.summary.serverReachable,
       analysis.summary.googleReachable,
-      analysis.summary.serverAuthWorking || analysis.summary.clientAuthWorking
+      analysis.summary.serverAuthWorking
     ].filter(Boolean).length;
 
     if (healthScore >= 3) {
@@ -747,15 +717,12 @@
         await testServerAuth();
         break;
       case 2:
-        await testClientAuth();
-        break;
-      case 3:
         await testTokenRefresh();
         break;
-      case 4:
+      case 3:
         await compareTokens();
         break;
-      case 5:
+      case 4:
         generateAnalysis();
         break;
     }
@@ -783,12 +750,54 @@
 
   onMount(() => {
     // Auto-detect configuration
+    const hostname = window.location.hostname;
+    isLocalDev = hostname === 'localhost' || hostname === '127.0.0.1' || hostname.startsWith('192.168.') || hostname.endsWith('.local');
+    
     clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID || '49551890193-e6n262ccj95229ftp2dh6k9s2boo1kip.apps.googleusercontent.com';
     serverBaseUrl = import.meta.env.VITE_APP_BASE_URL || window.location.origin;
     
     addLog('Auth Debug Wizard loaded', 'info');
     addLog(`Client ID: ${clientId ? 'configured' : 'missing'}`, clientId ? 'success' : 'warning');
     addLog(`Server Base URL: ${serverBaseUrl}`, 'info');
+    
+    if (isLocalDev) {
+      addLog('Local development environment detected', 'info');
+      addLog('Using server-side auth flow (recommended for long-lasting tokens)', 'info');
+    }
+
+    // Global error reporting to snackbar with Copy action
+    try {
+      window.addEventListener('error', (e: ErrorEvent) => {
+        const message = e?.message || 'An unexpected error occurred';
+        showSnackbar({
+          message,
+          actions: {
+            Copy: async () => {
+              await copyDiagnosticsToClipboard();
+              showSnackbar({ message: 'Full diagnostics copied to clipboard', closable: true });
+            }
+          },
+          closable: true,
+          timeout: 6000
+        });
+      });
+      
+      window.addEventListener('unhandledrejection', (e: PromiseRejectionEvent) => {
+        const reason: unknown = (e && 'reason' in e) ? (e as any).reason : undefined;
+        const message = reason instanceof Error ? reason.message : String(reason || 'Unhandled promise rejection');
+        showSnackbar({
+          message,
+          actions: {
+            Copy: async () => {
+              await copyDiagnosticsToClipboard();
+              showSnackbar({ message: 'Full diagnostics copied to clipboard', closable: true });
+            }
+          },
+          closable: true,
+          timeout: 6000
+        });
+      });
+    } catch (_) {}
   });
 </script>
 
@@ -801,6 +810,15 @@
   <!-- Configuration Panel -->
   <Card variant="elevated">
     <h2>⚙️ Configuration</h2>
+    
+    {#if isLocalDev}
+      <div class="local-dev-notice">
+        <h3>ℹ️ Local Development Detected</h3>
+        <p>You're running on <code>{window.location.hostname}</code>. This wizard focuses on server-side authentication which works properly in both development and production environments.</p>
+        <p><strong>Note:</strong> Client-side auth flow has been removed from this wizard since server-side auth provides the long-lasting tokens you need.</p>
+      </div>
+    {/if}
+    
     <div class="config-grid">
       <TextField 
         bind:value={clientId} 
@@ -902,12 +920,7 @@
     </Card>
   {/if}
 
-  {#if clientAuthResult}
-    <Card variant="elevated">
-      <h2>💻 Client Auth Results</h2>
-      <pre>{JSON.stringify(clientAuthResult, null, 2)}</pre>
-    </Card>
-  {/if}
+  <!-- Client Auth Results removed - focusing on server-side auth -->
 
   {#if refreshTestResult}
     <Card variant="elevated">
@@ -944,6 +957,9 @@
             </li>
             <li class:success={$diagnostics.analysis.summary.refreshTokenWorking} class:error={!$diagnostics.analysis.summary.refreshTokenWorking}>
               Refresh Token: {$diagnostics.analysis.summary.refreshTokenWorking ? '✅ Working' : '❌ Not Working'}
+            </li>
+            <li class="info">
+              Client Auth: ⏭️ Skipped (focusing on server-side for long-lasting tokens)
             </li>
           </ul>
         </div>
@@ -1223,6 +1239,11 @@ async function makeGmailApiCall(endpoint) {
     color: #c62828;
   }
 
+  .analysis li.info {
+    border-left-color: #2196f3;
+    color: #1976d2;
+  }
+
   .implementation-guide {
     line-height: 1.6;
   }
@@ -1246,6 +1267,45 @@ async function makeGmailApiCall(endpoint) {
 
   .implementation-guide pre {
     margin-top: 10px;
+  }
+
+  .local-dev-notice {
+    background-color: #fff3cd;
+    border: 1px solid #ffeaa7;
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 20px;
+    color: #856404;
+  }
+
+  .local-dev-notice h3 {
+    color: #856404;
+    margin-top: 0;
+  }
+
+  .local-dev-notice code {
+    background-color: #f8f9fa;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-family: 'Courier New', monospace;
+  }
+
+  .local-dev-notice a {
+    color: #0066cc;
+    text-decoration: underline;
+  }
+
+  .dev-setup-steps ol {
+    margin-left: 0;
+    padding-left: 20px;
+  }
+
+  .dev-setup-steps li {
+    margin-bottom: 15px;
+  }
+
+  .dev-setup-steps ul {
+    margin-top: 8px;
   }
 
   /* Responsive design */
