@@ -17,7 +17,7 @@
     <h1>🧪 Google Authentication Test</h1>
     <p>Test the new hybrid authentication system that provides long-lasting Google authorization</p>
     <div class="nav-buttons">
-      <Button variant="outlined" on:click={goToDebugPage}>
+      <Button variant="outlined" onclick={goToDebugPage}>
         🔍 Go to Debug Wizard
       </Button>
     </div>

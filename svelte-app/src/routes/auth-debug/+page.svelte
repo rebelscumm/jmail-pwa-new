@@ -27,7 +27,6 @@
       serverReachable: boolean;
       googleReachable: boolean;
       serverAuthWorking: boolean;
-      clientAuthWorking: boolean;
       refreshTokenWorking: boolean;
       overallHealth: string;
     };
@@ -49,6 +48,9 @@
   let serverAuthResult: any = null;
   let refreshTestResult: any = null;
   let tokenComparisonResult: any = null;
+  
+  // Check if running in local development
+  let isLocalDev = false;
 
   const steps = [
     'Environment Check',
@@ -556,26 +558,17 @@
       let clientTokenInfo = { hasToken: false, note: 'Client auth flow removed - server-side only' };
       addLog('Client auth flow skipped - focusing on server-side auth', 'info');
 
-      // Compare scopes
-      let scopeComparison = null;
-      if (serverTokenInfo?.scope && clientTokenInfo?.scope) {
-        const serverScopes = serverTokenInfo.scope.split(' ').sort();
-        const clientScopes = clientTokenInfo.scope.split(' ').sort();
+      // Compare scopes - skip since client auth is removed
+      let scopeComparison = {
+        note: 'Client auth removed - server-side only',
+        serverScopes: serverTokenInfo?.scope ? serverTokenInfo.scope.split(' ').sort() : [],
+        clientScopes: [],
+        identical: false,
+        serverOnly: serverTokenInfo?.scope ? serverTokenInfo.scope.split(' ') : [],
+        clientOnly: []
+      };
         
-        scopeComparison = {
-          serverScopes,
-          clientScopes,
-          identical: JSON.stringify(serverScopes) === JSON.stringify(clientScopes),
-          serverOnly: serverScopes.filter(s => !clientScopes.includes(s)),
-          clientOnly: clientScopes.filter(s => !serverScopes.includes(s))
-        };
-        
-        if (scopeComparison.identical) {
-          addLog('Token scopes: identical', 'success');
-        } else {
-          addLog('Token scopes: different', 'warning');
-        }
-      }
+      addLog('Token scopes: server-side only (client auth removed)', 'info');
 
       // Test server vs client API calls
       addLog('Comparing API call results...');
@@ -1290,23 +1283,6 @@ async function makeGmailApiCall(endpoint) {
     font-family: 'Courier New', monospace;
   }
 
-  .local-dev-notice a {
-    color: #0066cc;
-    text-decoration: underline;
-  }
-
-  .dev-setup-steps ol {
-    margin-left: 0;
-    padding-left: 20px;
-  }
-
-  .dev-setup-steps li {
-    margin-bottom: 15px;
-  }
-
-  .dev-setup-steps ul {
-    margin-top: 8px;
-  }
 
   /* Responsive design */
   @media (max-width: 768px) {

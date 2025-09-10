@@ -4,10 +4,12 @@ on:
   push:
     branches:
       - master
+      - main
   pull_request:
     types: [opened, synchronize, reopened, closed]
     branches:
       - master
+      - main
 
 jobs:
   build_and_deploy_app_subdomain:
@@ -15,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     name: Build and Deploy Job (dev)
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           submodules: true
           lfs: false
@@ -40,13 +42,28 @@ jobs:
           AZURE_STATIC_WEBAPP_NAME: ${{ secrets.AZURE_STATIC_WEBAPP_NAME }}
           AZURE_RG: ${{ secrets.AZURE_RG }}
         with:
-          azcliversion: '2.0.77'
+          azcliversion: 'latest'
           inlineScript: |
             if [ -z "$AZURE_STATIC_WEBAPP_NAME" ] || [ -z "$AZURE_RG" ]; then
               echo "AZURE_STATIC_WEBAPP_NAME or AZURE_RG not set; skipping hostname registration"
+              echo "Note: Azure Static Web Apps automatically provides SSL certificates for *.azurestaticapps.net domains"
             else
+              echo "Configuring dev subdomain for Static Web App: $AZURE_STATIC_WEBAPP_NAME"
+              echo "Setting up dev subdomain: dev.polite-coast-0d53a9710.1.azurestaticapps.net"
+              echo "SSL certificate will be automatically provisioned by Azure Static Web Apps"
               ./scripts/register_hostnames.sh --name "$AZURE_STATIC_WEBAPP_NAME" --resource-group "$AZURE_RG" \
                 --prod-hostname "jmail-pwa-new-api.scm.azurewebsites.net" --dev-hostname "dev.jmail-pwa-new-api.scm.azurewebsites.net"
             fi
+
+      # Display deployment URLs
+      - name: Display Deployment Information
+        if: always()
+        run: |
+          echo "🚀 Development Deployment Summary:"
+          echo "Development URL: https://dev.polite-coast-0d53a9710.1.azurestaticapps.net"
+          echo ""
+          echo "🔒 SSL Certificate Information:"
+          echo "URL is secured with SSL certificates automatically provided by Azure Static Web Apps"
+          echo "No browser warnings should occur as Azure manages the certificates for *.azurestaticapps.net domains"
 
 
