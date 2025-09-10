@@ -141,6 +141,46 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   let tokenInfoAtRequest: { scope?: string; expires_in?: string; aud?: string } | undefined;
   try { tokenInfoAtRequest = await fetchTokenInfo(); } catch (_) {}
   pushGmailDiag({ type: 'api_request', path, method: (init && 'method' in (init as any) && (init as any).method) ? (init as any).method : 'GET', tokenInfo: tokenInfoAtRequest });
+  
+  // Check if localhost and if we have a stored GIS token
+  const isLocalhost = typeof window !== 'undefined' && 
+    (window.location.hostname === 'localhost' || 
+     window.location.hostname === '127.0.0.1' || 
+     window.location.hostname.startsWith('192.168.'));
+  
+  if (isLocalhost) {
+    const localhostToken = localStorage.getItem('LOCALHOST_ACCESS_TOKEN');
+    const tokenExpiry = localStorage.getItem('LOCALHOST_TOKEN_EXPIRY');
+    
+    if (localhostToken && tokenExpiry && Date.now() < parseInt(tokenExpiry)) {
+      // Use direct Gmail API with localhost token
+      pushGmailDiag({ type: 'using_localhost_direct_api', path });
+      const directUrl = `https://gmail.googleapis.com/gmail/v1/users/me${path}`;
+      let res = await fetch(directUrl, {
+        ...init,
+        headers: {
+          'Authorization': `Bearer ${localhostToken}`,
+          'Content-Type': 'application/json',
+          ...(init?.headers || {})
+        }
+      });
+      
+      if (res.ok) {
+        const text = await res.text();
+        pushGmailDiag({ type: 'localhost_direct_api_success', path, status: res.status });
+        try {
+          return JSON.parse(text) as T;
+        } catch (_) {
+          return undefined as unknown as T;
+        }
+      } else {
+        pushGmailDiag({ type: 'localhost_direct_api_failed', path, status: res.status });
+        // Fall through to proxy attempt
+      }
+    }
+  }
+  
+  // Default: use server proxy
   let res = await fetch(`${GMAIL_PROXY_BASE}${path}`, {
     ...init,
     headers: {
@@ -175,9 +215,18 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     pushGmailDiag({ type: 'api_error', path, status: res.status, message, contentType: res.headers.get('content-type') || undefined, details: body, statusText, reason });
     // If the server proxy reports an unauthenticated session, initiate the
     // server-managed login flow so the server can set the required cookies.
+    // However, rate limit these redirects to avoid excessive popups.
     try {
       const unauth = (body as any)?.error === 'unauthenticated' || (body as any)?.authenticated === false;
       if (typeof window !== 'undefined' && res.status === 401 && unauth) {
+        // Rate limit server login redirects
+        const lastServerRedirect = Number(localStorage.getItem('jmail_last_server_redirect') || '0');
+        const minIntervalMs = 60000; // 1 minute minimum between server redirects
+        const now = Date.now();
+        if (lastServerRedirect && (now - lastServerRedirect) < minIntervalMs) {
+          pushGmailDiag({ type: 'server_redirect_rate_limited', path, lastRedirect: lastServerRedirect, minInterval: minIntervalMs });
+          throw new GmailApiError(`Server authentication rate limited. Please wait ${Math.ceil((minIntervalMs - (now - lastServerRedirect)) / 1000)} seconds before trying again.`, res.status, details);
+        }
         pushGmailDiag({ type: 'server_login_redirect', path, reason: 'unauthenticated_proxy' });
         // Preserve current location so server can return after auth
         const returnTo = typeof window !== 'undefined' ? window.location.href : '/';
@@ -241,6 +290,10 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
           if (!ok) proceed = false;
         }
         if (!proceed) throw new GmailApiError('Server login cancelled by user', 401, details);
+        
+        // Record that we're redirecting to server login to enforce rate limiting
+        localStorage.setItem('jmail_last_server_redirect', String(Date.now()));
+        
         // Perform a full-page navigation to establish server session cookies
         window.location.href = loginUrl.toString();
         // Halt further execution — navigation will unload the page.
@@ -322,7 +375,7 @@ export async function getMessageMetadata(id: string): Promise<GmailMessage> {
     payload?: { headers?: { name: string; value: string }[] };
   };
   const data = await api<GmailMessageApiResponse>(
-    `/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date`
+    `/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date&metadataHeaders=To&metadataHeaders=Cc&metadataHeaders=Bcc`
   );
   const headers: Record<string, string> = {};
   for (const h of data.payload?.headers || []) headers[h.name] = h.value;
@@ -377,7 +430,23 @@ export async function getMessageFull(id: string): Promise<GmailMessage> {
   for (const h of data.payload?.headers || []) headers[h.name] = h.value;
   function decode(b64?: string): string | undefined {
     if (!b64) return undefined;
-    try { return decodeURIComponent(escape(atob(b64.replace(/-/g, '+').replace(/_/g, '/')))); } catch { return undefined; }
+    try {
+      // Normalize URL-safe base64 and fix padding
+      let base64 = b64.replace(/-/g, '+').replace(/_/g, '/');
+      const pad = base64.length % 4;
+      if (pad) base64 = base64 + '='.repeat(4 - pad);
+      // Decode to binary string
+      const binary = atob(base64);
+      // Convert binary string to UTF-8 string reliably
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      return new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+    } catch (_) {
+      try {
+        // Fallback to legacy escape/unescape path
+        return decodeURIComponent(escape(atob(b64.replace(/-/g, '+').replace(/_/g, '/'))));
+      } catch { return undefined; }
+    }
   }
   function toStandardBase64(b64url?: string): string | undefined {
     if (!b64url) return undefined;
@@ -492,6 +561,13 @@ export async function getMessageFull(id: string): Promise<GmailMessage> {
       }
       if (Array.isArray(p.parts)) for (const c of p.parts) stack.push(c);
     }
+    
+    // Post-process: if we have both text and html from multipart/alternative, prefer HTML
+    if (out.text && out.html && payload?.mimeType === 'multipart/alternative') {
+      pushGmailDiag({ type: 'multipart_alternative_detected', id, preferringHtml: true, textLen: out.text.length, htmlLen: out.html.length });
+      out.text = undefined; // Remove text to avoid duplication, keep HTML
+    }
+    
     return { ...out, attachments, diag: diagnostics };
   }
   const body = await extractText(data.payload);
@@ -506,6 +582,7 @@ export async function getMessageFull(id: string): Promise<GmailMessage> {
     htmlLen: body.html?.length,
     attachmentFetches: (body as any)?.diag?.attachmentFetches,
     visitedParts: (body as any)?.diag?.visited,
+    alternativeParts: (body as any)?.diag?.alternativeParts,
     structure: (body as any)?.diag?.structure,
     attachmentsLen: Array.isArray((body as any)?.attachments) ? (body as any).attachments.length : 0
   });

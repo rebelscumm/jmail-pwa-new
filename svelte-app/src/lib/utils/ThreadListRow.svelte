@@ -25,7 +25,11 @@
   import { queueThreadModify, recordIntent } from '$lib/queue/intents';
   import iconSparkles from '@ktibow/iconset-material-symbols/auto-awesome';
   import iconInfo from '@ktibow/iconset-material-symbols/info';
+  import iconOpenInNew from '@ktibow/iconset-material-symbols/open-in-new';
   import { getPrecomputeSummary } from '$lib/ai/precompute';
+  import RecipientBadges from '$lib/utils/RecipientBadges.svelte';
+  import { messages as messagesStore } from '$lib/stores/threads';
+  import { openGmailPopup } from '$lib/utils/gmail-links';
 
   // Lazy import to avoid circular or route coupling; fallback no-op if route not mounted
   async function scheduleReload() {
@@ -424,6 +428,12 @@
   // User label chips for inline removal
   const labelById = $derived(Object.fromEntries(($labelsStore || []).filter((l) => l && l.type === 'user').map((l) => [l.id, l])) as Record<string, import('$lib/types').GmailLabel>);
   const userLabelsForThread = $derived((thread.labelIds || []).map((id) => labelById[id]).filter(Boolean) as import('$lib/types').GmailLabel[]);
+  
+  // Get the first message for recipient info
+  const firstMessage = $derived((() => {
+    const firstId = thread.messageIds?.[0];
+    return firstId ? $messagesStore[firstId] : null;
+  })());
 
   async function removeLabelInline(labelId: string, labelName?: string): Promise<void> {
     try {
@@ -834,6 +844,15 @@
         {/each}
       </div>
     {/if}
+    {#if firstMessage?.headers}
+      <RecipientBadges 
+        to={firstMessage.headers.To || firstMessage.headers.to || ''} 
+        cc={firstMessage.headers.Cc || firstMessage.headers.cc || ''} 
+        bcc={firstMessage.headers.Bcc || firstMessage.headers.bcc || ''} 
+        maxDisplayCount={3}
+        compact={true} 
+      />
+    {/if}
     {#if thread.lastMsgMeta?.date}
       <span class="badge m3-font-label-small">{formatDateTime(thread.lastMsgMeta.date)}</span>
     {/if}
@@ -842,6 +861,9 @@
 
 {#snippet trailing()}
   <div class="actions" style={`opacity:${dx === 0 ? 1 : 0}; pointer-events:${dx === 0 ? 'auto' : 'none'};`}>
+    <Button variant="text" iconType="full" aria-label="Open in Gmail" onclick={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); openGmailPopup(thread.threadId); }}>
+      <img src="/gmail-favicon.svg" alt="Gmail" style="width: 1rem; height: 1rem; color: inherit;" />
+    </Button>
     {#if isSnoozedThread(thread)}
       <Button variant="text" onclick={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); animateAndUnsnooze(); }}>Unsnooze</Button>
     {/if}

@@ -783,6 +783,137 @@
     window.location.href = loginUrl;
   }
 
+  async function enableGISFallback() {
+    try {
+      isLoading.set(true);
+      addLog('Enabling GIS client auth for localhost...', 'info');
+      
+      // Load Google Identity Services
+      if (!document.getElementById('gis-script')) {
+        addLog('Loading Google Identity Services...', 'info');
+        await new Promise<void>((resolve, reject) => {
+          const script = document.createElement('script');
+          script.id = 'gis-script';
+          script.src = 'https://accounts.google.com/gsi/client';
+          script.async = true;
+          script.defer = true;
+          script.onload = () => {
+            addLog('Google Identity Services loaded successfully', 'success');
+            resolve();
+          };
+          script.onerror = () => {
+            addLog('Failed to load Google Identity Services', 'error');
+            reject(new Error('Failed to load GIS'));
+          };
+          document.head.appendChild(script);
+        });
+      }
+
+      // Wait for Google APIs to be available
+      let retries = 0;
+      while (!(window as any).google?.accounts?.oauth2 && retries < 50) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        retries++;
+      }
+
+      if (!(window as any).google?.accounts?.oauth2) {
+        throw new Error('Google APIs not available after loading');
+      }
+
+      addLog('Google APIs available', 'success');
+
+      // Try to get a development client ID
+      let devClientId = localStorage.getItem('LOCALHOST_GOOGLE_CLIENT_ID') || 
+                       localStorage.getItem('DEV_GOOGLE_CLIENT_ID') ||
+                       import.meta.env.VITE_GOOGLE_CLIENT_ID;
+
+      if (!devClientId) {
+        // Prompt user for client ID
+        devClientId = prompt(
+          'Enter a Google Client ID configured for localhost:\n\n' +
+          '1. Go to: https://console.cloud.google.com/apis/credentials\n' +
+          '2. Create OAuth 2.0 Client ID\n' +
+          '3. Add authorized origin: http://localhost:5173\n' +
+          '4. Paste the Client ID here:',
+          clientId
+        );
+        
+        if (!devClientId) {
+          throw new Error('Client ID required for localhost auth');
+        }
+        
+        localStorage.setItem('LOCALHOST_GOOGLE_CLIENT_ID', devClientId);
+        addLog(`Client ID saved to localStorage`, 'success');
+      }
+
+      // Initialize token client
+      addLog('Initializing GIS token client...', 'info');
+      const tokenClient = (window as any).google.accounts.oauth2.initTokenClient({
+        client_id: devClientId,
+        scope: testScopes,
+        callback: () => {}
+      });
+
+      addLog('Attempting interactive authentication...', 'info');
+      
+      // Request token interactively
+      const token = await new Promise<any>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('Authentication timeout')), 60000);
+        tokenClient.callback = (response: any) => {
+          clearTimeout(timeout);
+          if (response.error) {
+            reject(new Error(response.error));
+          } else {
+            resolve(response);
+          }
+        };
+        tokenClient.requestAccessToken({ prompt: 'consent' });
+      });
+
+      // Store token for localhost use
+      localStorage.setItem('LOCALHOST_ACCESS_TOKEN', token.access_token);
+      localStorage.setItem('LOCALHOST_TOKEN_EXPIRY', String(Date.now() + (token.expires_in - 60) * 1000));
+
+      // Store in DB for app compatibility
+      const { getDB } = await import('$lib/db/indexeddb');
+      const db = await getDB();
+      const account = {
+        sub: 'localhost-gis',
+        accessToken: token.access_token,
+        tokenExpiry: Date.now() + (token.expires_in - 60) * 1000,
+        lastConnectedAt: Date.now(),
+        lastConnectedOrigin: window.location.origin,
+        lastConnectedUrl: window.location.href,
+        firstConnectedAt: Date.now(),
+        firstConnectedOrigin: window.location.origin,
+        firstConnectedUrl: window.location.href,
+        email: 'localhost-gis-user@gmail.com',
+        serverManaged: false,
+        localhostMode: 'gis'
+      };
+      await db.put('auth', account, 'me');
+
+      addLog(`GIS authentication successful! Token expires in ${token.expires_in} seconds`, 'success');
+      addLog('You can now visit the home page - it should work with GIS auth', 'success');
+      
+      showSnackbar({ 
+        message: 'Localhost GIS auth enabled! Visit home page to test.', 
+        actions: {
+          'Go Home': () => window.location.href = '/'
+        },
+        timeout: 10000,
+        closable: true 
+      });
+
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
+      addLog(`GIS setup failed: ${error}`, 'error');
+      showSnackbar({ message: `GIS setup failed: ${error}`, timeout: 5000 });
+    } finally {
+      isLoading.set(false);
+    }
+  }
+
   onMount(() => {
     // Auto-detect configuration
     const hostname = window.location.hostname;
@@ -848,9 +979,33 @@
     
     {#if isLocalDev}
       <div class="local-dev-notice">
-        <h3>ℹ️ Local Development Detected</h3>
-        <p>You're running on <code>{window.location.hostname}</code>. This wizard focuses on server-side authentication which works properly in both development and production environments.</p>
-        <p><strong>Note:</strong> Client-side auth flow has been removed from this wizard since server-side auth provides the long-lasting tokens you need.</p>
+        <h3>🏠 Localhost Development Options</h3>
+        <p>You're running on <code>{window.location.hostname}:{window.location.port}</code>. The API endpoints are returning HTML because no server is running.</p>
+        
+        <div class="localhost-options">
+          <h4>Choose your development approach:</h4>
+          
+          <div class="option-card">
+            <h5>🎯 Option 1: Long-Lasting Auth (Recommended)</h5>
+            <p>Use Azure Static Web Apps CLI to test the same long-lasting tokens as production:</p>
+            <pre><code>npm install -g @azure/static-web-apps-cli
+swa start ./svelte-app --api-location ./api --run "npm run dev --prefix svelte-app"</code></pre>
+            <p>Then visit: <code>http://localhost:5173</code> (APIs will work on port 4280)</p>
+          </div>
+
+          <div class="option-card">
+            <h5>🚀 Option 2: Quick GIS Client Auth</h5>
+            <p>For rapid development, enable client-side Google Identity Services:</p>
+            <Button 
+              variant="filled" 
+              onclick={enableGISFallback}
+              disabled={$isLoading}
+            >
+              Enable GIS Client Auth for Localhost
+            </Button>
+            <p><small>This provides 1-hour tokens for development (not long-lasting)</small></p>
+          </div>
+        </div>
       </div>
     {/if}
     
@@ -1374,6 +1529,32 @@ async function makeGmailApiCall(endpoint) {
     padding: 2px 6px;
     border-radius: 3px;
     font-family: 'Courier New', monospace;
+  }
+
+  .localhost-options {
+    margin-top: 15px;
+  }
+
+  .option-card {
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    padding: 15px;
+    margin-bottom: 15px;
+    background-color: #f9f9f9;
+  }
+
+  .option-card h5 {
+    margin-top: 0;
+    margin-bottom: 10px;
+    color: #1976d2;
+  }
+
+  .option-card pre {
+    background-color: #f8f9fa;
+    padding: 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    margin: 10px 0;
   }
 
 

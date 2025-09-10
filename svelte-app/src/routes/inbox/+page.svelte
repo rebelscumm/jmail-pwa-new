@@ -18,6 +18,7 @@
   import { snoozeThreadByRule } from '$lib/snooze/actions';
   import { settings, updateAppSettings } from '$lib/stores/settings';
   import { show as showSnackbar } from '$lib/containers/snackbar';
+  import { pullForwardSnoozedEmails } from '$lib/snooze/pull-forward';
   
   import { getLabel } from '$lib/gmail/api';
   import { trailingHolds } from '$lib/stores/holds';
@@ -53,6 +54,7 @@
   $effect(() => { const id = setTimeout(() => debouncedQuery = $searchQuery, 300); return () => clearTimeout(id); });
   let now = $state(Date.now());
   onMount(() => { const id = setInterval(() => { now = Date.now(); }, 250); return () => clearInterval(id); });
+  let pullingForward = $state(false);
   // Temporarily lock interactions during coordinated collapses
   let listLocked = $state(false);
   // Restore list lock handler
@@ -174,25 +176,49 @@
       } catch (_) {}
     } catch (_) {}
   }
-  const inboxThreads = $derived(($threadsStore || []).filter((t) => {
-    // Guard against undefined/partial entries
-    if (!t || typeof (t as any).threadId !== 'string') return false;
-    const labels = Array.isArray((t as any).labelIds) ? ((t as any).labelIds as string[]) : [];
-    const inInbox = labels.includes('INBOX');
-    const held = (($trailingHolds || {})[(t as any).threadId] || 0) > now;
-    return inInbox || held;
-  }));
-  const visibleThreads = $derived(
-    !debouncedQuery
-      ? inboxThreads
-      : inboxThreads.filter((t) => {
-          const subj = (t.lastMsgMeta.subject || '').toLowerCase();
-          const from = (t.lastMsgMeta.from || '').toLowerCase();
+  const inboxThreads = $derived.by(() => {
+    try {
+      const store = $threadsStore;
+      if (!store || !Array.isArray(store)) return [];
+      return store.filter((t) => {
+        // Guard against undefined/partial entries
+        if (!t || typeof (t as any).threadId !== 'string') return false;
+        const labels = Array.isArray((t as any).labelIds) ? ((t as any).labelIds as string[]) : [];
+        const inInbox = labels.includes('INBOX');
+        const held = (($trailingHolds || {})[(t as any).threadId] || 0) > now;
+        return inInbox || held;
+      });
+    } catch (e) {
+      console.warn('Error in inboxThreads derived:', e);
+      return [];
+    }
+  });
+  const visibleThreads = $derived.by(() => {
+    try {
+      if (!debouncedQuery) return inboxThreads;
+      return inboxThreads.filter((t) => {
+        try {
+          const subj = (t.lastMsgMeta?.subject || '').toLowerCase();
+          const from = (t.lastMsgMeta?.from || '').toLowerCase();
           const q = debouncedQuery.toLowerCase();
           return subj.includes(q) || from.includes(q);
-        })
-  );
-  const filteredThreads = $derived(applyFilterToThreads(visibleThreads, $messagesStore || {}, $filtersStore.active));
+        } catch (e) {
+          return false;
+        }
+      });
+    } catch (e) {
+      console.warn('Error in visibleThreads derived:', e);
+      return [];
+    }
+  });
+  const filteredThreads = $derived.by(() => {
+    try {
+      return applyFilterToThreads(visibleThreads, $messagesStore || {}, $filtersStore?.active);
+    } catch (e) {
+      console.warn('Error in filteredThreads derived:', e);
+      return visibleThreads || [];
+    }
+  });
   function cmp(a: string, b: string): number { return a.localeCompare(b); }
   function num(n: unknown): number { return typeof n === 'number' && !Number.isNaN(n) ? n : 0; }
   function getSender(a: import('$lib/types').GmailThread): string {
@@ -204,70 +230,90 @@
   function getDate(a: import('$lib/types').GmailThread): number { return num(a.lastMsgMeta.date) || 0; }
   function isUnread(a: import('$lib/types').GmailThread): boolean { return (a.labelIds || []).includes('UNREAD'); }
   const currentSort: InboxSort = $derived(($settings.inboxSort || 'date_desc') as InboxSort);
-  const sortedVisibleThreads = $derived((() => {
-    const arr = [...filteredThreads];
-    switch (currentSort) {
-      case 'date_asc':
-        arr.sort((a, b) => getDate(a) - getDate(b));
-        break;
-      case 'unread_first':
-        arr.sort((a, b) => {
-          const d = (isUnread(b) as any) - (isUnread(a) as any);
-          if (d !== 0) return d;
-          return getDate(b) - getDate(a);
-        });
-        break;
-      case 'sender_az':
-        arr.sort((a, b) => {
-          const s = cmp(getSender(a), getSender(b));
-          if (s !== 0) return s;
-          return getDate(b) - getDate(a);
-        });
-        break;
-      case 'sender_za':
-        arr.sort((a, b) => {
-          const s = cmp(getSender(b), getSender(a));
-          if (s !== 0) return s;
-          return getDate(b) - getDate(a);
-        });
-        break;
-      case 'subject_az':
-        arr.sort((a, b) => {
-          const s = cmp(getSubject(a), getSubject(b));
-          if (s !== 0) return s;
-          return getDate(b) - getDate(a);
-        });
-        break;
-      case 'subject_za':
-        arr.sort((a, b) => {
-          const s = cmp(getSubject(b), getSubject(a));
-          if (s !== 0) return s;
-          return getDate(b) - getDate(a);
-        });
-        break;
-      case 'date_desc':
-      default:
-        arr.sort((a, b) => getDate(b) - getDate(a));
-        break;
-    }
-    // Prioritize threads that already have an AI summary, then others,
-    // and keep threads with pending AI subject at the bottom until ready
+  const sortedVisibleThreads = $derived.by(() => {
     try {
-      const pending = arr.filter((t) => ((t as any).aiSubjectStatus || 'none') === 'pending');
-      const notPending = arr.filter((t) => ((t as any).aiSubjectStatus || 'none') !== 'pending');
-      const withSummary = notPending.filter((t) => (t.summaryStatus === 'ready' && (t.summary || '').trim() !== ''));
-      const withoutSummary = notPending.filter((t) => !(t.summaryStatus === 'ready' && (t.summary || '').trim() !== ''));
-      return [...withSummary, ...withoutSummary, ...pending];
-    } catch (_) {
-      return arr;
+      if (!Array.isArray(filteredThreads)) return [];
+      const arr = [...filteredThreads];
+      
+      switch (currentSort) {
+        case 'date_asc':
+          arr.sort((a, b) => getDate(a) - getDate(b));
+          break;
+        case 'unread_first':
+          arr.sort((a, b) => {
+            const d = (isUnread(b) as any) - (isUnread(a) as any);
+            if (d !== 0) return d;
+            return getDate(b) - getDate(a);
+          });
+          break;
+        case 'sender_az':
+          arr.sort((a, b) => {
+            const s = cmp(getSender(a), getSender(b));
+            if (s !== 0) return s;
+            return getDate(b) - getDate(a);
+          });
+          break;
+        case 'sender_za':
+          arr.sort((a, b) => {
+            const s = cmp(getSender(b), getSender(a));
+            if (s !== 0) return s;
+            return getDate(b) - getDate(a);
+          });
+          break;
+        case 'subject_az':
+          arr.sort((a, b) => {
+            const s = cmp(getSubject(a), getSubject(b));
+            if (s !== 0) return s;
+            return getDate(b) - getDate(a);
+          });
+          break;
+        case 'subject_za':
+          arr.sort((a, b) => {
+            const s = cmp(getSubject(b), getSubject(a));
+            if (s !== 0) return s;
+            return getDate(b) - getDate(a);
+          });
+          break;
+        case 'date_desc':
+        default:
+          arr.sort((a, b) => getDate(b) - getDate(a));
+          break;
+      }
+      
+      // Prioritize threads that already have an AI summary, then others,
+      // and keep threads with pending AI subject at the bottom until ready
+      try {
+        const pending = arr.filter((t) => ((t as any).aiSubjectStatus || 'none') === 'pending');
+        const notPending = arr.filter((t) => ((t as any).aiSubjectStatus || 'none') !== 'pending');
+        const withSummary = notPending.filter((t) => (t.summaryStatus === 'ready' && (t.summary || '').trim() !== ''));
+        const withoutSummary = notPending.filter((t) => !(t.summaryStatus === 'ready' && (t.summary || '').trim() !== ''));
+        return [...withSummary, ...withoutSummary, ...pending];
+      } catch (_) {
+        return arr;
+      }
+    } catch (e) {
+      console.warn('Error in sortedVisibleThreads derived:', e);
+      return [];
     }
-  })());
+  });
   const currentSortLabel = $derived((sortOptions.find(o => o.key === currentSort)?.label) || 'Date (newest first)');
   function setSort(next: InboxSort) { updateAppSettings({ inboxSort: next }); }
   // Selection state keyed by threadId
   let selectedMap = $state<Record<string, true>>({});
-  const selectedCount = $derived(Object.keys(selectedMap).length);
-  const allVisibleSelected = $derived(filteredThreads.length > 0 && filteredThreads.every(t => selectedMap[t.threadId]));
+  const selectedCount = $derived.by(() => {
+    try {
+      return Object.keys(selectedMap || {}).length;
+    } catch (e) {
+      return 0;
+    }
+  });
+  const allVisibleSelected = $derived.by(() => {
+    try {
+      return Array.isArray(filteredThreads) && filteredThreads.length > 0 && filteredThreads.every(t => selectedMap?.[t?.threadId]);
+    } catch (e) {
+      return false;
+    }
+  });
   function toggleSelectThread(threadId: string, next: boolean) {
     if (next) selectedMap = { ...selectedMap, [threadId]: true };
     else { const { [threadId]: _, ...rest } = selectedMap; selectedMap = rest; }
@@ -330,9 +376,21 @@
     selectedMap = {};
     showSnackbar({ message: `Snoozed ${ids.length} • ${ruleKey}`, actions: { Undo: () => undoLast(ids.length) } });
   }
-  const totalThreadsCount = $derived($threadsStore?.length || 0);
+  const totalThreadsCount = $derived.by(() => {
+    try {
+      return $threadsStore?.length || 0;
+    } catch (e) {
+      return 0;
+    }
+  });
   let inboxLabelStats = $state<{ messagesTotal?: number; messagesUnread?: number; threadsTotal?: number; threadsUnread?: number } | null>(null);
-  const visibleThreadsCount = $derived(filteredThreads?.length || 0);
+  const visibleThreadsCount = $derived.by(() => {
+    try {
+      return Array.isArray(filteredThreads) ? filteredThreads.length : 0;
+    } catch (e) {
+      return 0;
+    }
+  });
   $effect(() => {
     // Log UI-level diagnostics in dev builds only
     try {
@@ -388,7 +446,8 @@
           merged.push(t);
         }
       }
-      threadsStore.set(merged);
+      const { setThreadsWithReset } = await import('$lib/stores/optimistic-counters');
+      setThreadsWithReset(merged);
     }
     const cachedMessages = await db.getAll('messages');
     if (cachedMessages?.length) {
@@ -420,6 +479,44 @@
     try { await db.clear('messages'); } catch {}
     threadsStore.set([]);
     messagesStore.set({});
+  }
+
+  async function handlePullForward() {
+    if (pullingForward) return;
+    
+    pullingForward = true;
+    try {
+      const result = await pullForwardSnoozedEmails();
+      
+      if (result.success) {
+        if (result.pulledCount > 0) {
+          showSnackbar({ 
+            message: `Pulled forward ${result.pulledCount} email${result.pulledCount === 1 ? '' : 's'} from snooze`, 
+            timeout: 3000 
+          });
+          // Refresh the inbox to show the newly pulled emails
+          await hydrate();
+        } else {
+          showSnackbar({ 
+            message: 'No snoozed emails found to pull forward', 
+            timeout: 3000 
+          });
+        }
+      } else {
+        showSnackbar({ 
+          message: `Failed to pull forward emails: ${result.error || 'Unknown error'}`, 
+          timeout: 5000 
+        });
+      }
+    } catch (error) {
+      console.error('Error pulling forward emails:', error);
+      showSnackbar({ 
+        message: 'Failed to pull forward emails', 
+        timeout: 5000 
+      });
+    } finally {
+      pullingForward = false;
+    }
   }
 
   onMount(() => {
@@ -466,6 +563,23 @@
           }
         } catch (e) {
           console.warn('[Inbox] Server session check failed:', e);
+        }
+
+        // Check if localhost - use special localhost auth
+        const isLocalhost = typeof window !== 'undefined' && 
+          (window.location.hostname === 'localhost' || 
+           window.location.hostname === '127.0.0.1' || 
+           window.location.hostname.startsWith('192.168.'));
+        
+        if (isLocalhost) {
+          try {
+            const { initLocalhostAuth } = await import('$lib/gmail/localhost-auth');
+            await initLocalhostAuth();
+            console.log('[Inbox] Localhost auth initialized');
+            ready = true;
+          } catch (e) {
+            console.warn('[Inbox] Localhost auth failed, falling back to client auth:', e);
+          }
         }
 
         // Fall back to client-side auth
@@ -628,7 +742,8 @@
       // Refresh in-memory store from authoritative DB state
       try {
         const refreshed = await db.getAll('threads');
-        threadsStore.set(refreshed as any);
+        const { setThreadsWithReset } = await import('$lib/stores/optimistic-counters');
+        setThreadsWithReset(refreshed as any);
       } catch (_) {}
     } catch (e) {
       // Surface a subtle telemetry snackbar so user can retry if needed
@@ -688,7 +803,8 @@
           if (idx >= 0) acc[idx] = t; else acc.push(t);
           return acc;
         }, [] as typeof current);
-        threadsStore.set(merged);
+        const { setThreadsWithReset } = await import('$lib/stores/optimistic-counters');
+        setThreadsWithReset(merged);
       }
       hasCached = true;
     }
@@ -813,7 +929,8 @@
       for (const t of (allThreads || [])) {
         if (!merged.find((m) => m.threadId === t.threadId)) merged.push(t as any);
       }
-      threadsStore.set(merged as any);
+      const { setThreadsWithReset } = await import('$lib/stores/optimistic-counters');
+      setThreadsWithReset(merged as any);
     } catch (e) {
       // Fallback: conservative merge of newly fetched threads into memory
       const current = $threadsStore || [];
@@ -822,7 +939,8 @@
         if (idx >= 0) acc[idx] = { ...acc[idx], ...t } as any; else acc.push(t);
         return acc;
       }, [] as typeof current);
-      threadsStore.set(merged);
+      const { setThreadsWithReset } = await import('$lib/stores/optimistic-counters');
+      setThreadsWithReset(merged);
     }
     const msgDict: Record<string, import('$lib/types').GmailMessage> = { ...$messagesStore };
     for (const m of msgs) msgDict[m.id] = m;
@@ -956,7 +1074,8 @@
         if (idx >= 0) acc[idx] = t; else acc.push(t);
         return acc;
       }, [] as typeof current);
-      threadsStore.set(merged);
+      const { setThreadsWithReset } = await import('$lib/stores/optimistic-counters');
+      setThreadsWithReset(merged);
       const msgDict: Record<string, import('$lib/types').GmailMessage> = { ...$messagesStore };
       for (const m of msgs) msgDict[m.id] = m;
       messagesStore.set(msgDict);
@@ -1147,9 +1266,27 @@
     } catch (_) {}
   }
 
-  const can10m = $derived(Object.keys($settings.labelMapping || {}).some((k)=>k==='10m' && $settings.labelMapping[k]));
-  const can3h = $derived(Object.keys($settings.labelMapping || {}).some((k)=>k==='3h' && $settings.labelMapping[k]));
-  const can1d = $derived(Object.keys($settings.labelMapping || {}).some((k)=>k==='1d' && $settings.labelMapping[k]));
+  const can10m = $derived.by(() => {
+    try {
+      return Object.keys($settings?.labelMapping || {}).some((k)=>k==='10m' && $settings?.labelMapping?.[k]);
+    } catch (e) {
+      return false;
+    }
+  });
+  const can3h = $derived.by(() => {
+    try {
+      return Object.keys($settings?.labelMapping || {}).some((k)=>k==='3h' && $settings?.labelMapping?.[k]);
+    } catch (e) {
+      return false;
+    }
+  });
+  const can1d = $derived.by(() => {
+    try {
+      return Object.keys($settings?.labelMapping || {}).some((k)=>k==='1d' && $settings?.labelMapping?.[k]);
+    } catch (e) {
+      return false;
+    }
+  });
 
   async function bulkApplyActiveFilterAction() {
     const f = $filtersStore.active;
@@ -1277,11 +1414,21 @@
       {#if debouncedQuery}
         <p class="m3-font-body-medium" style="margin:0; color:rgb(var(--m3-scheme-on-surface-variant))">Your search returned no results. Clear the search to see all {totalThreadsCount} threads.</p>
       {:else}
-        <p class="m3-font-body-medium" style="margin:0; color:rgb(var(--m3-scheme-on-surface-variant))">If you just connected your account, try reloading or copying diagnostics to share.</p>
+        <p class="m3-font-body-medium" style="margin:0; color:rgb(var(--m3-scheme-on-surface-variant))">
+          Your inbox is empty! {#if ready && !loading}You can pull forward snoozed emails to get back to work.{:else}If you just connected your account, try reloading or copying diagnostics to share.{/if}
+        </p>
       {/if}
       <div style="display:flex; gap:0.5rem; justify-content:flex-end; margin-top:0.75rem;">
         {#if debouncedQuery}
           <Button variant="outlined" onclick={() => { import('$lib/stores/search').then(m=>m.searchQuery.set('')); }}>Clear search</Button>
+        {:else if ready && !loading}
+          <Button variant="filled" disabled={pullingForward} onclick={handlePullForward}>
+            {#if pullingForward}
+              Pulling forward...
+            {:else}
+              Pull forward {$settings.pullForwardCount || 3} emails
+            {/if}
+          </Button>
         {/if}
       </div>
     </Card>

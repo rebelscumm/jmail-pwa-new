@@ -22,14 +22,36 @@
   import Menu from "$lib/containers/Menu.svelte";
   import MenuItem from "$lib/containers/MenuItem.svelte";
   import Icon from "$lib/misc/_icon.svelte";
-  import iconBack from "@ktibow/iconset-material-symbols/chevron-left";
-  import iconForward from "@ktibow/iconset-material-symbols/chevron-right";
-  import iconArrowDown from "@ktibow/iconset-material-symbols/arrow-downward";
-  import iconArrowUp from "@ktibow/iconset-material-symbols/arrow-upward";
-  import iconSparkles from "@ktibow/iconset-material-symbols/auto-awesome";
-  import iconCopy from "@ktibow/iconset-material-symbols/content-copy-outline";
+import iconBack from "@ktibow/iconset-material-symbols/chevron-left";
+import iconForward from "@ktibow/iconset-material-symbols/chevron-right";
+import iconArrowDown from "@ktibow/iconset-material-symbols/arrow-downward";
+import iconArrowUp from "@ktibow/iconset-material-symbols/arrow-upward";
+import iconSparkles from "@ktibow/iconset-material-symbols/auto-awesome";
+import iconCopy from "@ktibow/iconset-material-symbols/content-copy-outline";
+import iconMore from "@ktibow/iconset-material-symbols/more-vert";
+import iconFilter from "@ktibow/iconset-material-symbols/filter-list";
+import iconArchive from "@ktibow/iconset-material-symbols/archive";
+import iconDelete from "@ktibow/iconset-material-symbols/delete";
+import iconReportSpam from "@ktibow/iconset-material-symbols/report";
+import iconSnooze from "@ktibow/iconset-material-symbols/snooze";
+import iconUnsnooze from "@ktibow/iconset-material-symbols/alarm-off";
+import iconSummarize from "@ktibow/iconset-material-symbols/summarize";
+import iconReply from "@ktibow/iconset-material-symbols/reply";
+import iconUnsubscribe from "@ktibow/iconset-material-symbols/unsubscribe";
+import iconBugReport from "@ktibow/iconset-material-symbols/bug-report";
+import iconKey from "@ktibow/iconset-material-symbols/key";
+import iconLogin from "@ktibow/iconset-material-symbols/login";
+import iconRefresh from "@ktibow/iconset-material-symbols/refresh";
+import iconDownload from "@ktibow/iconset-material-symbols/download";
+import iconClose from "@ktibow/iconset-material-symbols/close";
+import iconTask from "@ktibow/iconset-material-symbols/task-alt";
+import iconSubject from "@ktibow/iconset-material-symbols/subject";
+import iconScrollDown from "@ktibow/iconset-material-symbols/keyboard-arrow-down";
+import iconOpenInNew from "@ktibow/iconset-material-symbols/open-in-new";
   import Dialog from "$lib/containers/Dialog.svelte";
   import { searchQuery } from "$lib/stores/search";
+  import RecipientBadges from "$lib/utils/RecipientBadges.svelte";
+  import { getGmailMessageUrl, getGmailThreadUrl, openGmailPopup, openGmailMessagePopup } from "$lib/utils/gmail-links";
   // Derive threadId defensively in case params are briefly undefined during navigation
   const threadId = $derived((() => {
     try { const id = $page?.params?.threadId; if (id) return id; } catch {}
@@ -76,6 +98,8 @@
   let attDialogTitle: string | null = $state(null);
   let attDialogText: string | null = $state(null);
   let attBusy: Record<string, boolean> = $state({});
+  // Filter popup state
+  let filterPopupOpen: boolean = $state(false);
   // Derive adjacent thread navigation using Inbox context + global search/filter/sort
   const inboxThreads = $derived((allThreads || []).filter((t) => (t.labelIds || []).includes('INBOX')));
   const visibleCandidates = $derived((() => {
@@ -339,7 +363,19 @@
           return acc;
         }, [] as typeof $threads));
         const dict: Record<string, import('$lib/types').GmailMessage> = { ...$messages };
-        for (const m of metas) dict[m.id] = m;
+        for (const m of metas) {
+          try {
+            const existing = dict[m.id];
+            const existingHasBody = !!(existing?.bodyText || existing?.bodyHtml);
+            const incomingHasBody = !!(m as any)?.bodyText || !!(m as any)?.bodyHtml;
+            // Preserve existing full body if incoming is metadata-only
+            if (existingHasBody && !incomingHasBody) continue;
+            // Merge fields to avoid losing any previously loaded properties
+            dict[m.id] = { ...(existing || {}), ...m } as any;
+          } catch (_) {
+            dict[m.id] = m as any;
+          }
+        }
         messages.set(dict);
       } catch (e) {
         threadError = e instanceof Error ? e.message : String(e);
@@ -360,13 +396,8 @@
     if (!m?.bodyText && !m?.bodyHtml && !loadingMap[firstId] && !autoTried[firstId]) {
       autoTried[firstId] = true;
       (async () => {
-        // Check current token scopes; if body scopes aren't present, skip auto-fetch
-        let hasBodyScopes = false;
-        try {
-          const info = await fetchTokenInfo();
-          hasBodyScopes = !!info?.scope && (info.scope.includes('gmail.readonly') || info.scope.includes('gmail.modify'));
-        } catch (_) {}
-        if (!hasBodyScopes) return;
+        // Attempt auto-fetch regardless of tokeninfo availability.
+        // The API layer will surface a clear 403 if scopes are insufficient.
         loadingMap[firstId] = true;
         getMessageFull(firstId)
           .then((full) => { messages.set({ ...$messages, [firstId]: full }); errorMap[firstId] = ''; })
@@ -782,60 +813,142 @@ onMount(() => {
 
     <!-- Real subject (less prominent) -->
     <Card variant="outlined">
-      <h3 class="m3-font-title-small" style="margin:0; display:flex; flex-wrap:wrap; align-items:baseline; gap:0.5rem;">
-        <span style="overflow-wrap:anywhere; word-break:break-word;">{currentThread.lastMsgMeta.subject}</span>
-        {#if currentThread.lastMsgMeta.from}
-          <span class="from">{currentThread.lastMsgMeta.from}</span>
-        {/if}
-        {#if currentThread.lastMsgMeta?.date}
-          <span class="badge m3-font-label-small">{formatDateTime(currentThread.lastMsgMeta.date)}</span>
-        {/if}
-      </h3>
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem;">
+        <h3 class="m3-font-title-small" style="margin:0; display:flex; flex-wrap:wrap; align-items:baseline; gap:0.5rem; flex:1;">
+          <span style="overflow-wrap:anywhere; word-break:break-word;">{currentThread.lastMsgMeta.subject}</span>
+          {#if currentThread.lastMsgMeta.from}
+            <span class="from">{currentThread.lastMsgMeta.from}</span>
+          {/if}
+          {#if currentThread.lastMsgMeta?.date}
+            <span class="badge m3-font-label-small">{formatDateTime(currentThread.lastMsgMeta.date)}</span>
+          {/if}
+        </h3>
+        <Button variant="text" iconType="full" aria-label="Open thread in Gmail" onclick={() => openGmailPopup(currentThread.threadId)}>
+          <img src="/gmail-favicon.svg" alt="Gmail" style="width: 1rem; height: 1rem; color: inherit;" />
+        </Button>
+      </div>
     </Card>
 
-    <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
-      <Button variant="text" onclick={() => relogin(currentThread.messageIds?.[0])}>Re-login</Button>
-      <Button variant="text" onclick={() => archiveThread(currentThread.threadId).then(async ()=> { showSnackbar({ message: 'Archived', actions: { Undo: () => undoLast(1) } }); await navigateToInbox(); })}>Archive</Button>
-      <Button variant="text" color="error" onclick={() => trashThread(currentThread.threadId).then(async ()=> { showSnackbar({ message: 'Deleted', actions: { Undo: () => undoLast(1) } }); await navigateToInbox(); })}>Delete</Button>
-      <Button variant="text" onclick={() => spamThread(currentThread.threadId).then(()=> showSnackbar({ message: 'Marked as spam', actions: { Undo: () => undoLast(1) } }))}>Spam</Button>
-      {#if isSnoozedThread(currentThread)}
-        <Button variant="text" onclick={() => manualUnsnoozeThread(currentThread.threadId).then(()=> showSnackbar({ message: 'Unsnoozed', actions: { Undo: () => undoLast(1) } }))}>Unsnooze</Button>
+    <!-- Primary Action Bar - Material Design 3 compliant -->
+    <div class="action-bar" role="toolbar" aria-label="Email actions">
+      <!-- Primary Actions Group -->
+      <div class="action-group primary-actions">
+        <Button variant="filled" onclick={() => archiveThread(currentThread.threadId).then(async ()=> { showSnackbar({ message: 'Archived', actions: { Undo: () => undoLast(1) } }); await navigateToInbox(); })} aria-label="Archive conversation">
+          <Icon icon={iconArchive} />
+          Archive
+        </Button>
+        <Button variant="tonal" color="error" onclick={() => trashThread(currentThread.threadId).then(async ()=> { showSnackbar({ message: 'Deleted', actions: { Undo: () => undoLast(1) } }); await navigateToInbox(); })} aria-label="Delete conversation">
+          <Icon icon={iconDelete} />
+          Delete
+        </Button>
+        <Button variant="outlined" onclick={() => spamThread(currentThread.threadId).then(()=> showSnackbar({ message: 'Marked as spam', actions: { Undo: () => undoLast(1) } }))} aria-label="Mark as spam">
+          <Icon icon={iconReportSpam} />
+          Spam
+        </Button>
+      </div>
+
+      <!-- Snooze Actions Group -->
+      {#if isSnoozedThread(currentThread) || Object.keys($settings.labelMapping || {}).some((k)=>['10m','3h','1d'].includes(k) && $settings.labelMapping[k])}
+        <div class="action-group snooze-actions">
+          {#if isSnoozedThread(currentThread)}
+            <Button variant="text" onclick={() => manualUnsnoozeThread(currentThread.threadId).then(()=> showSnackbar({ message: 'Unsnoozed', actions: { Undo: () => undoLast(1) } }))}>
+              <Icon icon={iconUnsnooze} />
+              Unsnooze
+            </Button>
+          {/if}
+          {#if Object.keys($settings.labelMapping || {}).some((k)=>k==='3h' && $settings.labelMapping[k])}
+            <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '3h').then(()=> { showSnackbar({ message: 'Snoozed 3h', actions: { Undo: () => undoLast(1) } }); goto('/inbox'); })}>
+              <Icon icon={iconSnooze} />
+              3h
+            </Button>
+          {/if}
+          {#if Object.keys($settings.labelMapping || {}).some((k)=>k==='1d' && $settings.labelMapping[k])}
+            <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '1d').then(()=> { showSnackbar({ message: 'Snoozed 1d', actions: { Undo: () => undoLast(1) } }); goto('/inbox'); })}>
+              <Icon icon={iconSnooze} />
+              1d
+            </Button>
+          {/if}
+        </div>
       {/if}
-      {#if Object.keys($settings.labelMapping || {}).some((k)=>k==='10m' && $settings.labelMapping[k])}
-        <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '10m').then(()=> { showSnackbar({ message: 'Snoozed 10m', actions: { Undo: () => undoLast(1) } }); goto('/inbox'); })}>10m</Button>
-      {/if}
-      {#if Object.keys($settings.labelMapping || {}).some((k)=>k==='3h' && $settings.labelMapping[k])}
-        <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '3h').then(()=> { showSnackbar({ message: 'Snoozed 3h', actions: { Undo: () => undoLast(1) } }); goto('/inbox'); })}>3h</Button>
-      {/if}
-      {#if Object.keys($settings.labelMapping || {}).some((k)=>k==='1d' && $settings.labelMapping[k])}
-        <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '1d').then(()=> { showSnackbar({ message: 'Snoozed 1d', actions: { Undo: () => undoLast(1) } }); goto('/inbox'); })}>1d</Button>
-      {/if}
-      <Button variant="text" onclick={() => copyText(currentThread.lastMsgMeta.subject || '')}>Copy Subject</Button>
+
+      <!-- AI Actions Group -->
       {#if currentThread.messageIds?.length}
         {@const mid = currentThread.messageIds[currentThread.messageIds.length-1]}
-        <Button variant="text" onclick={() => unsubscribe(mid)} disabled={extractingUnsub}>{extractingUnsub ? 'Finding…' : 'Unsubscribe'}</Button>
-        <Button variant="text" onclick={() => summarize(mid)} disabled={summarizing}>{summarizing ? 'Summarizing…' : 'AI Summary'}</Button>
-        <Button variant="text" onclick={() => replyDraft(mid)} disabled={replying}>{replying ? 'Generating…' : 'Reply (AI) → Clipboard'}</Button>
-        <Button variant="text" onclick={() => createTask(mid)}>Create Task</Button>
+        <div class="action-group ai-actions">
+          <Button variant="text" onclick={() => summarize(mid)} disabled={summarizing} aria-label="Generate AI summary">
+            <Icon icon={iconSummarize} />
+            {summarizing ? 'Summarizing…' : 'AI Summary'}
+          </Button>
+          <Button variant="text" onclick={() => replyDraft(mid)} disabled={replying} aria-label="Generate AI reply">
+            <Icon icon={iconReply} />
+            {replying ? 'Generating…' : 'Reply (AI)'}
+          </Button>
+          <Button variant="text" onclick={() => unsubscribe(mid)} disabled={extractingUnsub} aria-label="Find unsubscribe link">
+            <Icon icon={iconUnsubscribe} />
+            {extractingUnsub ? 'Finding…' : 'Unsubscribe'}
+          </Button>
+        </div>
       {/if}
-      <Button variant="text" iconType="left" disabled={!prevThreadId} onclick={gotoPrev} aria-label="Previous conversation" style="margin-left:auto">
-        {#snippet children()}
-          <Icon icon={iconBack} />
-          <span class="label">Previous</span>
-        {/snippet}
-      </Button>
-      <Button variant="text" iconType="left" disabled={!nextThreadId} onclick={gotoNext} aria-label="Next conversation">
-        {#snippet children()}
-          <Icon icon={iconForward} />
-          <span class="label">Next</span>
-        {/snippet}
-      </Button>
-      <Button variant="text" iconType="left" onclick={scrollToBottom} aria-label="Scroll to bottom">
-        {#snippet children()}
-          <Icon icon={iconArrowDown} />
-          <span class="label">Bottom</span>
-        {/snippet}
-      </Button>
+
+      <!-- Secondary Actions Menu -->
+      <div class="action-group secondary-actions">
+        <details class="more-menu">
+          <summary>
+            <Button variant="text" iconType="full" aria-label="More actions">
+              <Icon icon={iconMore} />
+            </Button>
+          </summary>
+          <div class="menu-container">
+            <Menu>
+              <MenuItem onclick={() => copyText(currentThread.lastMsgMeta.subject || '')}>
+                <Icon icon={iconSubject} />
+                Copy Subject
+              </MenuItem>
+              {#if currentThread.messageIds?.length}
+                {@const mid = currentThread.messageIds[currentThread.messageIds.length-1]}
+                <MenuItem onclick={() => createTask(mid)}>
+                  <Icon icon={iconTask} />
+                  Create Task
+                </MenuItem>
+              {/if}
+              <MenuItem onclick={() => { filterPopupOpen = true; }}>
+                <Icon icon={iconFilter} />
+                Filter Options
+              </MenuItem>
+              {#if Object.keys($settings.labelMapping || {}).some((k)=>k==='10m' && $settings.labelMapping[k])}
+                <MenuItem onclick={() => snoozeThreadByRule(currentThread.threadId, '10m').then(()=> { showSnackbar({ message: 'Snoozed 10m', actions: { Undo: () => undoLast(1) } }); goto('/inbox'); })}>
+                  <Icon icon={iconSnooze} />
+                  Snooze 10m
+                </MenuItem>
+              {/if}
+              <MenuItem onclick={() => relogin(currentThread.messageIds?.[0])}>
+                <Icon icon={iconLogin} />
+                Re-login
+              </MenuItem>
+              <MenuItem onclick={scrollToBottom}>
+                <Icon icon={iconScrollDown} />
+                Scroll to Bottom
+              </MenuItem>
+            </Menu>
+          </div>
+        </details>
+      </div>
+
+      <!-- Navigation Controls -->
+      <div class="action-group navigation-controls">
+        <Button variant="text" iconType="left" disabled={!prevThreadId} onclick={gotoPrev} aria-label="Previous conversation">
+          {#snippet children()}
+            <Icon icon={iconBack} />
+            <span class="label">Previous</span>
+          {/snippet}
+        </Button>
+        <Button variant="text" iconType="left" disabled={!nextThreadId} onclick={gotoNext} aria-label="Next conversation">
+          {#snippet children()}
+            <Icon icon={iconForward} />
+            <span class="label">Next</span>
+          {/snippet}
+        </Button>
+      </div>
     </div>
 
     <Divider />
@@ -850,14 +963,40 @@ onMount(() => {
             {:else if errorMap[mid]}
               <p class="m3-font-body-medium" style="margin:0; color:rgb(var(--m3-scheme-error))">Failed to load message: {errorMap[mid]}</p>
               <div style="display:flex; justify-content:flex-end; align-items:center; gap:0.5rem; margin-top:0.5rem;">
-                <Button variant="text" onclick={() => copyDiagnostics('viewer_manual_copy', mid)}>Copy diagnostics</Button>
-                <Button variant="text" onclick={() => grantAccess(mid)}>Grant access</Button>
-                <Button variant="text" onclick={() => relogin(mid)}>Re-login</Button>
-                <Button variant="text" onclick={() => downloadMessage(mid)}>Retry</Button>
+                <Button variant="text" onclick={() => copyDiagnostics('viewer_manual_copy', mid)}>
+                  <Icon icon={iconBugReport} />
+                  Copy diagnostics
+                </Button>
+                <Button variant="text" onclick={() => grantAccess(mid)}>
+                  <Icon icon={iconKey} />
+                  Grant access
+                </Button>
+                <Button variant="text" onclick={() => relogin(mid)}>
+                  <Icon icon={iconLogin} />
+                  Re-login
+                </Button>
+                <Button variant="text" onclick={() => downloadMessage(mid)}>
+                  <Icon icon={iconRefresh} />
+                  Retry
+                </Button>
               </div>
             {:else if m?.bodyHtml}
               {#if m?.internalDate}
-                <p class="m3-font-body-small" style="margin:0.25rem 0; color:rgb(var(--m3-scheme-on-surface-variant))">{formatDateTime(m.internalDate)}</p>
+                <div style="display:flex; align-items:center; justify-content:space-between; margin:0.25rem 0;">
+                  <p class="m3-font-body-small" style="margin:0; color:rgb(var(--m3-scheme-on-surface-variant))">{formatDateTime(m.internalDate)}</p>
+                  <Button variant="text" iconType="full" aria-label="Open message in Gmail" onclick={() => openGmailMessagePopup(threadId, mid)}>
+                    <img src="/gmail-favicon.svg" alt="Gmail" style="width: 1rem; height: 1rem; color: inherit;" />
+                  </Button>
+                </div>
+              {/if}
+              {#if m?.headers}
+                <RecipientBadges 
+                  to={m.headers.To || m.headers.to || ''} 
+                  cc={m.headers.Cc || m.headers.cc || ''} 
+                  bcc={m.headers.Bcc || m.headers.bcc || ''} 
+                  maxDisplayCount={4}
+                  compact={true} 
+                />
               {/if}
               <div class="html-body" style="white-space:normal; overflow-wrap:anywhere;">{@html m.bodyHtml}</div>
               {#if Array.isArray(m?.attachments) && m.attachments.length}
@@ -880,7 +1019,21 @@ onMount(() => {
               {/if}
             {:else if m?.bodyText}
               {#if m?.internalDate}
-                <p class="m3-font-body-small" style="margin:0.25rem 0; color:rgb(var(--m3-scheme-on-surface-variant))">{formatDateTime(m.internalDate)}</p>
+                <div style="display:flex; align-items:center; justify-content:space-between; margin:0.25rem 0;">
+                  <p class="m3-font-body-small" style="margin:0; color:rgb(var(--m3-scheme-on-surface-variant))">{formatDateTime(m.internalDate)}</p>
+                  <Button variant="text" iconType="full" aria-label="Open message in Gmail" onclick={() => openGmailMessagePopup(threadId, mid)}>
+                    <img src="/gmail-favicon.svg" alt="Gmail" style="width: 1rem; height: 1rem; color: inherit;" />
+                  </Button>
+                </div>
+              {/if}
+              {#if m?.headers}
+                <RecipientBadges 
+                  to={m.headers.To || m.headers.to || ''} 
+                  cc={m.headers.Cc || m.headers.cc || ''} 
+                  bcc={m.headers.Bcc || m.headers.bcc || ''} 
+                  maxDisplayCount={4}
+                  compact={true} 
+                />
               {/if}
               <pre style="white-space:pre-wrap">{decodeEntities(m.bodyText)}</pre>
               {#if Array.isArray(m?.attachments) && m.attachments.length}
@@ -906,16 +1059,42 @@ onMount(() => {
                 <p class="m3-font-body-medium" style="margin:0; color:rgb(var(--m3-scheme-on-surface-variant))">{decodeEntities(m.snippet)}</p>
               {/if}
               <div style="display:flex; justify-content:flex-end; align-items:center; gap:0.5rem; margin-top:0.5rem;">
-                <Button variant="text" onclick={() => copyDiagnostics('viewer_manual_copy', mid)}>Copy diagnostics</Button>
-                <Button variant="text" onclick={() => grantAccess(mid)}>Grant access</Button>
-                <Button variant="text" onclick={() => relogin(mid)}>Re-login</Button>
-                <Button variant="text" onclick={() => downloadMessage(mid)}>Download message</Button>
+                <Button variant="text" onclick={() => copyDiagnostics('viewer_manual_copy', mid)}>
+                  <Icon icon={iconBugReport} />
+                  Copy diagnostics
+                </Button>
+                <Button variant="text" onclick={() => grantAccess(mid)}>
+                  <Icon icon={iconKey} />
+                  Grant access
+                </Button>
+                <Button variant="text" onclick={() => relogin(mid)}>
+                  <Icon icon={iconLogin} />
+                  Re-login
+                </Button>
+                <Button variant="text" onclick={() => downloadMessage(mid)}>
+                  <Icon icon={iconDownload} />
+                  Download message
+                </Button>
               </div>
             {/if}
           {:else}
             {#if m?.bodyHtml || m?.bodyText}
               {#if m?.internalDate}
-                <p class="m3-font-body-small" style="margin:0.25rem 0; color:rgb(var(--m3-scheme-on-surface-variant))">{formatDateTime(m.internalDate)}</p>
+                <div style="display:flex; align-items:center; justify-content:space-between; margin:0.25rem 0;">
+                  <p class="m3-font-body-small" style="margin:0; color:rgb(var(--m3-scheme-on-surface-variant))">{formatDateTime(m.internalDate)}</p>
+                  <Button variant="text" iconType="full" aria-label="Open message in Gmail" onclick={() => openGmailMessagePopup(threadId, mid)}>
+                    <img src="/gmail-favicon.svg" alt="Gmail" style="width: 1rem; height: 1rem; color: inherit;" />
+                  </Button>
+                </div>
+              {/if}
+              {#if m?.headers}
+                <RecipientBadges 
+                  to={m.headers.To || m.headers.to || ''} 
+                  cc={m.headers.Cc || m.headers.cc || ''} 
+                  bcc={m.headers.Bcc || m.headers.bcc || ''} 
+                  maxDisplayCount={4}
+                  compact={true} 
+                />
               {/if}
               {#if m?.bodyHtml}
                 <div class="html-body" style="white-space:normal; overflow-wrap:anywhere;">{@html m.bodyHtml}</div>
@@ -948,10 +1127,22 @@ onMount(() => {
                 {#if loadingMap[mid]}
                   <LoadingIndicator size={24} />
                 {:else}
-                  <Button variant="text" onclick={() => copyDiagnostics('viewer_manual_copy', mid)}>Copy diagnostics</Button>
-                  <Button variant="text" onclick={() => grantAccess(mid)}>Grant access</Button>
-                  <Button variant="text" onclick={() => relogin(mid)}>Re-login</Button>
-                  <Button variant="text" onclick={() => downloadMessage(mid)}>Download message</Button>
+                  <Button variant="text" onclick={() => copyDiagnostics('viewer_manual_copy', mid)}>
+                    <Icon icon={iconBugReport} />
+                    Copy diagnostics
+                  </Button>
+                  <Button variant="text" onclick={() => grantAccess(mid)}>
+                    <Icon icon={iconKey} />
+                    Grant access
+                  </Button>
+                  <Button variant="text" onclick={() => relogin(mid)}>
+                    <Icon icon={iconLogin} />
+                    Re-login
+                  </Button>
+                  <Button variant="text" onclick={() => downloadMessage(mid)}>
+                    <Icon icon={iconDownload} />
+                    Download message
+                  </Button>
                 {/if}
               </div>
             {/if}
@@ -961,58 +1152,20 @@ onMount(() => {
     </div>
 
     <Divider inset />
-
-    <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
-      <Button variant="text" onclick={() => relogin(currentThread.messageIds?.[0])}>Re-login</Button>
-      <Button variant="text" onclick={() => archiveThread(currentThread.threadId).then(async ()=> { showSnackbar({ message: 'Archived', actions: { Undo: () => undoLast(1) } }); await navigateToInbox(); })}>Archive</Button>
-      <Button variant="text" color="error" onclick={() => trashThread(currentThread.threadId).then(async ()=> { showSnackbar({ message: 'Deleted', actions: { Undo: () => undoLast(1) } }); await navigateToInbox(); })}>Delete</Button>
-      <Button variant="text" onclick={() => spamThread(currentThread.threadId).then(()=> showSnackbar({ message: 'Marked as spam', actions: { Undo: () => undoLast(1) } }))}>Spam</Button>
-      {#if isSnoozedThread(currentThread)}
-        <Button variant="text" onclick={() => manualUnsnoozeThread(currentThread.threadId).then(()=> showSnackbar({ message: 'Unsnoozed', actions: { Undo: () => undoLast(1) } }))}>Unsnooze</Button>
-      {/if}
-      {#if Object.keys($settings.labelMapping || {}).some((k)=>k==='10m' && $settings.labelMapping[k])}
-        <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '10m').then(()=> { showSnackbar({ message: 'Snoozed 10m', actions: { Undo: () => undoLast(1) } }); goto('/inbox'); })}>10m</Button>
-      {/if}
-      {#if Object.keys($settings.labelMapping || {}).some((k)=>k==='3h' && $settings.labelMapping[k])}
-        <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '3h').then(()=> { showSnackbar({ message: 'Snoozed 3h', actions: { Undo: () => undoLast(1) } }); goto('/inbox'); })}>3h</Button>
-      {/if}
-      {#if Object.keys($settings.labelMapping || {}).some((k)=>k==='1d' && $settings.labelMapping[k])}
-        <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '1d').then(()=> { showSnackbar({ message: 'Snoozed 1d', actions: { Undo: () => undoLast(1) } }); goto('/inbox'); })}>1d</Button>
-      {/if}
-      <Button variant="text" onclick={() => copyText(currentThread.lastMsgMeta.subject || '')}>Copy Subject</Button>
-      {#if currentThread.messageIds?.length}
-        {@const mid = currentThread.messageIds[currentThread.messageIds.length-1]}
-        <Button variant="text" onclick={() => unsubscribe(mid)} disabled={extractingUnsub}>{extractingUnsub ? 'Finding…' : 'Unsubscribe'}</Button>
-        <Button variant="text" onclick={() => summarize(mid)} disabled={summarizing}>{summarizing ? 'Summarizing…' : 'AI Summary'}</Button>
-        <Button variant="text" onclick={() => replyDraft(mid)} disabled={replying}>{replying ? 'Generating…' : 'Reply (AI) → Clipboard'}</Button>
-        <Button variant="text" onclick={() => createTask(mid)}>Create Task</Button>
-      {/if}
-    </div>
     <Divider />
 
-    <h3 class="m3-font-title-medium" style="margin:0.5rem 0 0.25rem;">Create Filter from this Thread</h3>
-    <FilterBar thread={currentThread} />
-
-    <details class="manage-filters">
-      <summary>Manage Saved Filters</summary>
-      <Menu>
-        {#each $filters.saved as f}
-          <MenuItem onclick={() => loadForEdit(f)}>{f.name}</MenuItem>
-          <MenuItem onclick={() => onDeleteSavedFilter(f.id)}>Delete</MenuItem>
-        {/each}
-      </Menu>
-    </details>
-
-    <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.5rem;">
-      <div>
-        <Button variant="text" iconType="left" onclick={navigateToInbox} aria-label="Back to inbox">
-          {#snippet children()}
-            <Icon icon={iconBack} />
-            <span class="label">Back to inbox</span>
-          {/snippet}
-        </Button>
-      </div>
-      <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+    <!-- Bottom Navigation Bar -->
+    <div class="bottom-navigation" role="navigation" aria-label="Page navigation">
+      <Button variant="text" iconType="left" onclick={navigateToInbox} aria-label="Back to inbox">
+        {#snippet children()}
+          <Icon icon={iconBack} />
+          <span class="label">Back to inbox</span>
+        {/snippet}
+      </Button>
+      
+      <div class="navigation-spacer"></div>
+      
+      <div class="thread-navigation">
         <Button variant="text" iconType="left" disabled={!prevThreadId} onclick={gotoPrev} aria-label="Previous conversation">
           {#snippet children()}
             <Icon icon={iconBack} />
@@ -1031,10 +1184,47 @@ onMount(() => {
             <span class="label">Top</span>
           {/snippet}
         </Button>
-        
       </div>
     </div>
   </div>
+
+  <!-- Filter Options Dialog -->
+  <Dialog headline="Filter Options" bind:open={filterPopupOpen} closeOnClick={true}>
+    {#snippet children()}
+      <div class="filter-dialog-content">
+        <h3 class="m3-font-title-medium" style="margin:0 0 1rem;">Create Filter from this Thread</h3>
+        <FilterBar thread={currentThread} />
+        
+        <div style="margin-top:1.5rem;">
+          <h4 class="m3-font-title-small" style="margin:0 0 0.5rem;">Manage Saved Filters</h4>
+          {#if ($filters.saved || []).length === 0}
+            <p class="m3-font-body-medium" style="margin:0; color:rgb(var(--m3-scheme-on-surface-variant))">No saved filters yet.</p>
+          {:else}
+            <div class="saved-filters-list">
+              {#each $filters.saved as f}
+                <div class="filter-item">
+                  <Button variant="text" onclick={() => loadForEdit(f)} style="flex:1; justify-content:flex-start;">
+                    <Icon icon={iconFilter} />
+                    {f.name}{f.autoApply ? ' • Auto' : ''}{f.action && f.action !== 'none' ? ` • ${f.action}` : ''}
+                  </Button>
+                  <Button variant="text" color="error" onclick={() => onDeleteSavedFilter(f.id)}>
+                    <Icon icon={iconDelete} />
+                    Delete
+                  </Button>
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      </div>
+    {/snippet}
+    {#snippet buttons()}
+      <Button variant="text" onclick={() => { filterPopupOpen = false; }}>
+        <Icon icon={iconClose} />
+        Close
+      </Button>
+    {/snippet}
+  </Dialog>
 
   <Dialog headline={attDialogTitle || 'Attachment summary'} bind:open={attDialogOpen} closeOnClick={true}>
     {#snippet children()}
@@ -1047,8 +1237,14 @@ onMount(() => {
       {/if}
     {/snippet}
     {#snippet buttons()}
-      <Button variant="text" onclick={() => { try { if (attDialogText) navigator.clipboard.writeText(attDialogText); showSnackbar({ message: 'Copied', closable: true }); } catch {} }}>Copy</Button>
-      <Button variant="text" onclick={() => { attDialogOpen = false; }}>Close</Button>
+      <Button variant="text" onclick={() => { try { if (attDialogText) navigator.clipboard.writeText(attDialogText); showSnackbar({ message: 'Copied', closable: true }); } catch {} }}>
+        <Icon icon={iconCopy} />
+        Copy
+      </Button>
+      <Button variant="text" onclick={() => { attDialogOpen = false; }}>
+        <Icon icon={iconClose} />
+        Close
+      </Button>
     {/snippet}
   </Dialog>
 {:else}
@@ -1151,6 +1347,152 @@ onMount(() => {
   :global(.html-body table[width]) {
     width: 100% !important;
     max-width: 100% !important;
+  }
+
+  /* Action Bar Styles - Material Design 3 compliant */
+  .action-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    align-items: flex-start;
+    padding: 0.75rem 0;
+    border-radius: var(--m3-util-rounding-medium);
+    background: rgb(var(--m3-scheme-surface-container-lowest));
+    padding: 1rem;
+    margin: 0.5rem 0;
+  }
+
+  .action-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+  }
+
+  .action-group.primary-actions {
+    flex: 0 0 auto;
+  }
+
+  .action-group.navigation-controls {
+    margin-left: auto;
+  }
+
+  .action-group.secondary-actions {
+    margin-left: auto;
+  }
+
+  /* Responsive adjustments */
+  @media (max-width: 768px) {
+    .action-bar {
+      gap: 0.75rem;
+      padding: 0.75rem;
+    }
+    
+    .action-group.navigation-controls {
+      margin-left: 0;
+      order: -1;
+      flex: 1 0 100%;
+      justify-content: space-between;
+    }
+
+    .action-group.secondary-actions {
+      margin-left: 0;
+    }
+  }
+
+  /* Bottom Navigation Styles */
+  .bottom-navigation {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    padding: 1rem 0;
+    border-top: 1px solid rgb(var(--m3-scheme-outline-variant));
+    margin-top: 1rem;
+  }
+
+  .navigation-spacer {
+    flex: 1;
+  }
+
+  .thread-navigation {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  @media (max-width: 640px) {
+    .bottom-navigation {
+      flex-direction: column;
+      align-items: stretch;
+    }
+    
+    .navigation-spacer {
+      display: none;
+    }
+    
+    .thread-navigation {
+      justify-content: space-between;
+    }
+  }
+
+  /* More Menu Styles */
+  .more-menu {
+    position: relative;
+  }
+
+  .more-menu summary {
+    list-style: none;
+    cursor: pointer;
+  }
+
+  .more-menu summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .menu-container {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    z-index: 1000;
+    margin-top: 0.25rem;
+  }
+
+  .more-menu[open] .menu-container {
+    animation: menuFadeIn 150ms cubic-bezier(0.4, 0.0, 0.2, 1);
+  }
+
+  @keyframes menuFadeIn {
+    from {
+      opacity: 0;
+      transform: translateY(-0.5rem);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  /* Filter Dialog Styles */
+  .filter-dialog-content {
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .saved-filters-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .filter-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem;
+    border-radius: var(--m3-util-rounding-small);
+    background: rgb(var(--m3-scheme-surface-container-lowest));
   }
 </style>
 

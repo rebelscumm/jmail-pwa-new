@@ -27,28 +27,37 @@
   import { settings as appSettings } from "$lib/stores/settings";
   import { getFriendlyAIErrorMessage } from "$lib/ai/providers";
   import PrecomputeProgress from "$lib/components/PrecomputeProgress.svelte";
+  import RecipientBadges from "$lib/utils/RecipientBadges.svelte";
+  import { loadUserProfile } from "$lib/stores/user";
   
   let onKeyDownRef: ((e: KeyboardEvent) => void) | null = null;
   
   if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
-
-    navigator.serviceWorker.addEventListener('message', (e) => {
-      const msg = e.data || {};
-      if (msg.type === 'NOTIFICATION_ACTION') {
-        const data = msg.data || {};
-        if (msg.action === 'archive' && data.threadId) {
-          import('$lib/queue/intents').then((m) => m.archiveThread(data.threadId));
+    try {
+      navigator.serviceWorker.addEventListener('message', (e) => {
+        try {
+          const msg = e.data || {};
+          if (msg.type === 'NOTIFICATION_ACTION') {
+            const data = msg.data || {};
+            if (msg.action === 'archive' && data.threadId) {
+              import('$lib/queue/intents').then((m) => m.archiveThread(data.threadId)).catch(() => {});
+            }
+            if (msg.action === 'snooze1h' && data.threadId) {
+              import('$lib/snooze/actions').then((m) => m.snoozeThreadByRule(data.threadId, '1h')).catch(() => {});
+            }
+          }
+          if (msg.type === 'SYNC_TICK') {
+            import('$lib/db/backups').then((m) => m.maybeCreateWeeklySnapshot()).catch(() => {});
+            // Trigger background precompute tick for AI summaries (lightweight)
+            import('$lib/ai/precompute').then((m) => m.tickPrecompute(8)).catch(() => {});
+          }
+        } catch (err) {
+          console.warn('[SW Message] Handler error:', err);
         }
-        if (msg.action === 'snooze1h' && data.threadId) {
-          import('$lib/snooze/actions').then((m) => m.snoozeThreadByRule(data.threadId, '1h'));
-        }
-      }
-      if (msg.type === 'SYNC_TICK') {
-        import('$lib/db/backups').then((m) => m.maybeCreateWeeklySnapshot());
-        // Trigger background precompute tick for AI summaries (lightweight)
-        import('$lib/ai/precompute').then((m) => m.tickPrecompute(8)).catch(() => {});
-      }
-    });
+      });
+    } catch (err) {
+      console.warn('[SW] Event listener setup failed:', err);
+    }
   }
 
   if (typeof window !== 'undefined') {
@@ -110,13 +119,49 @@
       }
     } catch (_) {}
 
-    startFlushLoop();
+    try {
+      startFlushLoop();
+    } catch (err) {
+      console.warn('[Init] startFlushLoop failed:', err);
+    }
+    
     // Load settings at app start
-    import('$lib/stores/settings').then((m)=>m.loadSettings());
-    refreshSyncState();
-    import('$lib/db/backups').then((m) => m.maybeCreateWeeklySnapshot());
+    try {
+      import('$lib/stores/settings').then((m)=>m.loadSettings()).catch(() => {});
+    } catch (err) {
+      console.warn('[Init] settings loading failed:', err);
+    }
+    
+    try {
+      refreshSyncState();
+    } catch (err) {
+      console.warn('[Init] refreshSyncState failed:', err);
+    }
+    
+    // Load user profile for recipient filtering
+    try {
+      loadUserProfile().catch(() => {
+        // Silently handle errors during profile loading
+      });
+    } catch (err) {
+      console.warn('[Init] loadUserProfile failed:', err);
+    }
+    
+    try {
+      import('$lib/db/backups').then((m) => m.maybeCreateWeeklySnapshot()).catch(() => {});
+    } catch (err) {
+      console.warn('[Init] backups failed:', err);
+    }
+    
     // Kick a small precompute tick shortly after startup
-    try { setTimeout(() => { import('$lib/ai/precompute').then((m) => m.tickPrecompute(6)); }, 4000); } catch {}
+    try { 
+      setTimeout(() => { 
+        try {
+          import('$lib/ai/precompute').then((m) => m.tickPrecompute(6)).catch(() => {}); 
+        } catch {}
+      }, 4000); 
+    } catch {}
+    
     // Schedule nightly/initial backfill at user-configured anchorHour if enabled
     (async () => {
       try {
@@ -136,8 +181,13 @@
         }
       } catch (_) {}
     })();
+    
     // Keep optional: legacy local snooze viewer; safe if empty
-    import('$lib/stores/snooze').then((m)=>m.loadSnoozes());
+    try {
+      import('$lib/stores/snooze').then((m)=>m.loadSnoozes()).catch(() => {});
+    } catch (err) {
+      console.warn('[Init] snooze loading failed:', err);
+    }
 
     // Check for newer app version and offer a reload (disabled in dev)
     try {
@@ -216,16 +266,22 @@
           return; // Skip authentication check for debug pages
         }
 
-        const { getDB } = await import('$lib/db/indexeddb');
-        const db = await getDB();
-        const account = await db.get('auth', 'me');
-        if (!account) {
-          const target = (base || '') + '/';
-          if (location.pathname !== target) {
-            location.href = target;
+        try {
+          const { getDB } = await import('$lib/db/indexeddb');
+          const db = await getDB();
+          const account = await db.get('auth', 'me');
+          if (!account) {
+            const target = (base || '') + '/';
+            if (location.pathname !== target) {
+              location.href = target;
+            }
           }
+        } catch (dbErr) {
+          console.warn('[Layout] Database check failed:', dbErr);
         }
-      } catch (_) {}
+      } catch (err) {
+        console.warn('[Layout] Auth check failed:', err);
+      }
     })();
 
     // Global error reporting to snackbar with Copy action
@@ -281,7 +337,13 @@
   // Cleanup global listeners when layout unmounts
   $effect(() => {
     return () => {
-      try { if (onKeyDownRef) window.removeEventListener('keydown', onKeyDownRef as any); } catch {}
+      try { 
+        if (onKeyDownRef && typeof window !== 'undefined') {
+          window.removeEventListener('keydown', onKeyDownRef as any); 
+        }
+      } catch (err) {
+        console.warn('[Layout] Cleanup failed:', err);
+      }
     };
   });
 
@@ -290,11 +352,17 @@
   // Hide sidebar navigation items by default
   const paths: any[] = [];
   const normalizePath = (path: string) => {
-    const u = new URL(path, page.url.href);
-    path = u.pathname;
-    if (path.endsWith("/")) path = path.slice(0, -1);
-    return path || "/";
+    try {
+      const u = new URL(path, page.url.href);
+      path = u.pathname;
+      if (path.endsWith("/")) path = path.slice(0, -1);
+      return path || "/";
+    } catch (err) {
+      console.warn('[Layout] Path normalization failed:', err);
+      return path || "/";
+    }
   };
+
 
   // Compose sheet state
   let showCompose = $state(false);
@@ -306,15 +374,25 @@
   let kbdDialog: ReturnType<typeof KeyboardShortcutsDialog>;
   
   $effect(() => {
-    const percent = (typeof ($appSettings as any)?.fontScalePercent === 'number' ? ($appSettings as any).fontScalePercent : 100);
     try {
-      if (typeof document !== 'undefined') {
+      const percent = (typeof ($appSettings as any)?.fontScalePercent === 'number' ? ($appSettings as any).fontScalePercent : 100);
+      if (typeof document !== 'undefined' && document.documentElement) {
         document.documentElement.style.setProperty('--m3-font-scale', `${percent}%`);
       }
-    } catch {}
+    } catch (err) {
+      console.warn('[Layout] Font scale update failed:', err);
+    }
   });
   
-  $effect(() => { if (snackbar) registerSnackbar(snackbar.show); });
+  $effect(() => { 
+    try {
+      if (snackbar && typeof snackbar.show === 'function') {
+        registerSnackbar(snackbar.show);
+      }
+    } catch (err) {
+      console.warn('[Layout] Snackbar registration failed:', err);
+    }
+  });
 
   function makeRfc2822(): string {
     const boundary = `----Jmail-${Math.random().toString(36).slice(2)}`;
@@ -470,6 +548,13 @@
     <div style="display:grid; gap:0.5rem; padding-bottom:1rem;">
       <h3 class="m3-font-title-medium" style="margin:0.25rem 0 0 0">New message</h3>
       <TextField label="To" bind:value={to} type="email" />
+      {#if to.trim()}
+        <RecipientBadges 
+          to={to} 
+          maxDisplayCount={6} 
+          compact={false} 
+        />
+      {/if}
       <TextField label="Subject" bind:value={subject} />
       <TextFieldMultiline label="Message" bind:value={body} rows={8} />
       <div style="display:flex; gap:0.5rem; justify-content:flex-end;">

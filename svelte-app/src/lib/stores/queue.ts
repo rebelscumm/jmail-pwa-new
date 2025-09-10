@@ -20,6 +20,14 @@ export async function syncNow(): Promise<void> {
   const { flushOnce } = await import('$lib/queue/flush');
   await flushOnce();
   await refreshSyncState();
+  
+  // Reset optimistic counters after sync completes
+  try {
+    const { resetOptimisticCounters } = await import('$lib/stores/optimistic-counters');
+    resetOptimisticCounters();
+  } catch (e) {
+    console.warn('Failed to reset optimistic counters:', e);
+  }
 }
 
 import type { QueuedOp } from '$lib/types';

@@ -3,6 +3,7 @@ import { enqueueBatchModify, enqueueSendMessage, hashIntent } from '$lib/queue/o
 import type { GmailMessage, GmailThread, QueuedOp } from '$lib/types';
 import { get } from 'svelte/store';
 import { messages as messagesStore, threads as threadsStore } from '$lib/stores/threads';
+import { adjustOptimisticCounters } from '$lib/stores/optimistic-counters';
 
 const ACCOUNT_SUB = 'me';
 
@@ -23,6 +24,34 @@ function applyLabels(list: string[], add: string[], remove: string[]): string[] 
   for (const r of remove) set.delete(r);
   for (const a of add) set.add(a);
   return Array.from(set);
+}
+
+/**
+ * Calculate counter impact and apply optimistic adjustment for immediate feedback
+ */
+async function applyOptimisticCounterAdjustment(threadId: string, addLabelIds: string[], removeLabelIds: string[]) {
+  const db = await getDB();
+  const thread = await db.get('threads', threadId);
+  if (!thread) return;
+
+  const currentLabels = new Set(thread.labelIds || []);
+  const wasInInbox = currentLabels.has('INBOX');
+  const wasUnread = currentLabels.has('UNREAD');
+  
+  // Apply the label changes
+  const newLabels = new Set(currentLabels);
+  for (const r of removeLabelIds) newLabels.delete(r);
+  for (const a of addLabelIds) newLabels.add(a);
+  
+  const willBeInInbox = newLabels.has('INBOX');
+  const willBeUnread = newLabels.has('UNREAD');
+  
+  const inboxDelta = (willBeInInbox ? 1 : 0) - (wasInInbox ? 1 : 0);
+  const unreadDelta = (willBeUnread ? 1 : 0) - (wasUnread ? 1 : 0);
+  
+  if (inboxDelta !== 0 || unreadDelta !== 0) {
+    adjustOptimisticCounters(inboxDelta, unreadDelta);
+  }
 }
 
 export async function updateLocalThreadAndMessages(
@@ -75,7 +104,10 @@ export async function queueThreadModify(threadId: string, addLabelIds: string[],
   const db = await getDB();
   const thread = await db.get('threads', threadId);
   if (!thread) return;
+  
+  // Apply optimistic counter adjustment for immediate feedback (only for individual operations)
   if (options?.optimisticLocal !== false) {
+    await applyOptimisticCounterAdjustment(threadId, addLabelIds, removeLabelIds);
     await updateLocalThreadAndMessages(threadId, addLabelIds, removeLabelIds);
   }
   await maybeEnqueue(threadId, thread.messageIds, addLabelIds, removeLabelIds);
@@ -187,7 +219,11 @@ export async function undoLast(n = 1): Promise<void> {
     for (const e of toUndo) {
       // Track in redo stack
       undoneStack.push(e);
-      await queueThreadModify(e.threadId, e.inverse.addLabelIds, e.inverse.removeLabelIds);
+      
+      // Apply optimistic adjustment for undo (reverse of original operation)
+      await applyOptimisticCounterAdjustment(e.threadId, e.inverse.addLabelIds, e.inverse.removeLabelIds);
+      
+      await queueThreadModify(e.threadId, e.inverse.addLabelIds, e.inverse.removeLabelIds, { optimisticLocal: false });
       idsToDelete.push(e.id);
     }
 
@@ -218,7 +254,10 @@ export async function redoLast(n = 1): Promise<void> {
     // Re-apply from the in-memory undone stack
     const toRedo = undoneStack.slice(-n);
     for (const e of toRedo) {
-      await queueThreadModify(e.threadId, e.intent.addLabelIds, e.intent.removeLabelIds);
+      // Apply optimistic adjustment for redo (same as original operation)
+      await applyOptimisticCounterAdjustment(e.threadId, e.intent.addLabelIds, e.intent.removeLabelIds);
+      
+      await queueThreadModify(e.threadId, e.intent.addLabelIds, e.intent.removeLabelIds, { optimisticLocal: false });
       await recordIntent(e.threadId, e.intent, e.inverse, { source: 'redo' });
     }
     // Remove the re-applied entries from the stack

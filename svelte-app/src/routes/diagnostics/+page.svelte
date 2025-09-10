@@ -35,6 +35,206 @@ let parsedDiag: any = null;
 let parseError: string | null = null;
 let diagSummary: Record<string, any> | null = null;
 
+// Authentication management functions
+function clearAuthCache() {
+	try {
+		// Clear localStorage auth-related items
+		const keysToRemove = [
+			'jmail_last_interactive_auth',
+			'jmail_last_scope_auth', 
+			'jmail_last_server_redirect',
+			'LOCALHOST_ACCESS_TOKEN',
+			'LOCALHOST_TOKEN_EXPIRY'
+		];
+		
+		keysToRemove.forEach(key => {
+			try {
+				localStorage.removeItem(key);
+			} catch (_) {}
+		});
+		
+		addLog('info', ['Cleared authentication cache']);
+		alert('Authentication cache cleared. This will allow immediate authentication requests.');
+	} catch (e) {
+		addLog('error', ['clearAuthCache failed', e]);
+		alert('Failed to clear authentication cache: ' + String(e));
+	}
+}
+
+function openAuthSettings() {
+	try {
+		window.location.href = '/settings?tab=auth';
+	} catch (e) {
+		addLog('error', ['openAuthSettings failed', e]);
+		alert('Failed to open authentication settings: ' + String(e));
+	}
+}
+
+function resetAuthRateLimit() {
+	try {
+		localStorage.removeItem('jmail_last_interactive_auth');
+		localStorage.removeItem('jmail_last_scope_auth');
+		localStorage.removeItem('jmail_last_server_redirect');
+		
+		addLog('info', ['Reset authentication rate limits']);
+		alert('Authentication rate limits reset. You can now immediately trigger authentication requests.');
+	} catch (e) {
+		addLog('error', ['resetAuthRateLimit failed', e]);
+		alert('Failed to reset authentication rate limits: ' + String(e));
+	}
+}
+
+// Localhost authentication diagnostic functions
+function configureLocalhostClientId() {
+	try {
+		const currentId = localStorage.getItem('LOCALHOST_GOOGLE_CLIENT_ID') || 
+						 localStorage.getItem('DEV_GOOGLE_CLIENT_ID') || 
+						 import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
+		
+		const instructions = `To fix localhost authentication, you need a Google Client ID configured for localhost:
+
+1. Go to Google Cloud Console: https://console.cloud.google.com/apis/credentials
+2. Create or edit an OAuth 2.0 Client ID
+3. Add these to "Authorized JavaScript origins":
+   - http://localhost:5173
+   - http://127.0.0.1:5173
+4. Copy the Client ID and enter it below
+
+Current Client ID: ${currentId ? currentId.slice(0, 20) + '...' : 'Not set'}`;
+		
+		const newId = prompt(instructions, currentId);
+		if (newId && newId.trim()) {
+			localStorage.setItem('LOCALHOST_GOOGLE_CLIENT_ID', newId.trim());
+			addLog('info', ['Configured localhost Google Client ID', newId.slice(0, 20) + '...']);
+			alert('Localhost Google Client ID saved! Reload the page to use it.');
+		}
+	} catch (e) {
+		addLog('error', ['configureLocalhostClientId failed', e]);
+		alert('Failed to configure client ID: ' + String(e));
+	}
+}
+
+async function checkLocalhostAuthStatus() {
+	try {
+		const hostname = window.location.hostname;
+		const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1' || hostname.startsWith('192.168.');
+		
+		const status = {
+			isLocalhost,
+			hostname,
+			clientIds: {
+				LOCALHOST_GOOGLE_CLIENT_ID: localStorage.getItem('LOCALHOST_GOOGLE_CLIENT_ID'),
+				DEV_GOOGLE_CLIENT_ID: localStorage.getItem('DEV_GOOGLE_CLIENT_ID'),
+				VITE_GOOGLE_CLIENT_ID: import.meta.env.VITE_GOOGLE_CLIENT_ID,
+				fallback: '49551890193-e6n262ccj95229ftp2dh6k9s2boo1kip.apps.googleusercontent.com'
+			},
+			tokens: {
+				LOCALHOST_ACCESS_TOKEN: localStorage.getItem('LOCALHOST_ACCESS_TOKEN') ? 'Present' : 'Not found',
+				LOCALHOST_TOKEN_EXPIRY: localStorage.getItem('LOCALHOST_TOKEN_EXPIRY'),
+				expired: localStorage.getItem('LOCALHOST_TOKEN_EXPIRY') ? 
+					Date.now() >= parseInt(localStorage.getItem('LOCALHOST_TOKEN_EXPIRY') || '0') : 'N/A'
+			},
+			serverPorts: {} as Record<string, string>,
+			authCache: {
+				jmail_last_interactive_auth: localStorage.getItem('jmail_last_interactive_auth'),
+				jmail_last_scope_auth: localStorage.getItem('jmail_last_scope_auth'),
+				jmail_last_server_redirect: localStorage.getItem('jmail_last_server_redirect')
+			}
+		};
+		
+		// Test server ports
+		for (const port of ['4280', '7071']) {
+			const portLabel = port === '4280' ? 'SWA CLI port' : 'Azure Functions port';
+			try {
+				const response = await fetch(`http://localhost:${port}/api/google-me`, {
+					method: 'GET',
+					credentials: 'include'
+				});
+				status.serverPorts[port] = `${portLabel} - ${response.status}`;
+			} catch (e) {
+				const error = e instanceof Error ? e.message : String(e);
+				status.serverPorts[port] = `${portLabel} - Error: ${error}`;
+			}
+		}
+		
+		addLog('info', ['Localhost auth status', status]);
+		await navigator.clipboard.writeText(JSON.stringify(status, null, 2));
+		alert('Localhost auth status copied to clipboard! Check logs for details.');
+	} catch (e) {
+		addLog('error', ['checkLocalhostAuthStatus failed', e]);
+		alert('Failed to check localhost auth status: ' + String(e));
+	}
+}
+
+function setupServerAuth() {
+	try {
+		const instructions = `To set up server authentication (SWA CLI) for long-lasting tokens:
+
+STEP 1: Install tools
+pnpm install -g @azure/static-web-apps-cli azure-functions-core-tools@4
+
+STEP 2: Create api/local.settings.json
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "",
+    "FUNCTIONS_WORKER_RUNTIME": "node",
+    "GOOGLE_CLIENT_ID": "your-client-id",
+    "GOOGLE_CLIENT_SECRET": "your-client-secret",
+    "APP_BASE_URL": "http://localhost:4280",
+    "COOKIE_SECRET": "your-32-char-secret-key-here-123456",
+    "COOKIE_SIGNING_SECRET": "your-other-32-char-secret-here-78901",
+    "COOKIE_SECURE": "false"
+  }
+}
+
+STEP 3: Update Google Cloud Console
+Add redirect URI: http://localhost:4280/api/google-callback
+
+STEP 4: Run SWA CLI
+swa start ./svelte-app --api-location ./api --run "pnpm run dev --prefix svelte-app"
+
+This gives you long-lasting authentication like production!`;
+		
+		addLog('info', ['Server auth setup instructions displayed']);
+		alert(instructions);
+	} catch (e) {
+		addLog('error', ['setupServerAuth failed', e]);
+		alert('Failed to show setup instructions: ' + String(e));
+	}
+}
+
+function showOAuthInstructions() {
+	try {
+		const instructions = `Google OAuth Setup for Localhost Development:
+
+OPTION 1: Quick Client-Side Auth (1 hour tokens)
+1. Go to: https://console.cloud.google.com/apis/credentials
+2. Create OAuth 2.0 Client ID (Web application)
+3. Add Authorized JavaScript origins:
+   - http://localhost:5173
+   - http://127.0.0.1:5173
+4. Copy Client ID and click "Configure localhost Google Client ID" button
+
+OPTION 2: Server Auth Setup (Long-lasting tokens)
+1. Create OAuth 2.0 Client ID (Web application) 
+2. Add Authorized redirect URIs:
+   - http://localhost:4280/api/google-callback
+3. Copy Client ID AND Client Secret
+4. Click "Setup server authentication" button for full instructions
+
+CURRENT ISSUE: Your localhost auth popup is closing because the Client ID doesn't have localhost:5173 as an authorized origin.
+
+Choose Option 1 for quick testing or Option 2 for full server auth.`;
+		
+		addLog('info', ['OAuth instructions displayed']);
+		alert(instructions);
+	} catch (e) {
+		addLog('error', ['showOAuthInstructions failed', e]);
+		alert('Failed to show OAuth instructions: ' + String(e));
+	}
+}
+
 onMount(() => {
 	console.log = (...args: any[]) => { addLog('log', args); nativeConsole.log.apply(console, args); };
 	console.warn = (...args: any[]) => { addLog('warn', args); nativeConsole.warn.apply(console, args); };
@@ -388,6 +588,21 @@ pre.diag {
 		<button on:click={startServerLogin}>Start server login</button>
 		<button on:click={copyDiagnostics}>Copy diagnostics to clipboard</button>
 		<button on:click={clearLogs}>Clear client logs</button>
+	</div>
+
+	<div class="controls">
+		<h3>Authentication Management</h3>
+		<button on:click={clearAuthCache}>Clear authentication cache</button>
+		<button on:click={openAuthSettings}>Open authentication settings</button>
+		<button on:click={resetAuthRateLimit}>Reset authentication rate limits</button>
+	</div>
+
+	<div class="controls">
+		<h3>Localhost Authentication Setup</h3>
+		<button on:click={configureLocalhostClientId}>Configure localhost Google Client ID</button>
+		<button on:click={checkLocalhostAuthStatus}>Check localhost auth status</button>
+		<button on:click={setupServerAuth}>Setup server authentication (SWA CLI)</button>
+		<button on:click={showOAuthInstructions}>Show OAuth setup instructions</button>
 	</div>
 
 	<div class="wizard">

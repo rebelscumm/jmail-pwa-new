@@ -310,6 +310,40 @@ async function getClientAccessToken(): Promise<string> {
       type: 'client_silent_failed', 
       error: error instanceof Error ? error.message : String(error) 
     });
+    
+    // Show diagnostic snackbar for silent auth failure
+    try {
+      const { show } = await import('$lib/containers/snackbar');
+      show({ 
+        message: `Silent auth failed, may trigger popup`, 
+        timeout: 6000, 
+        closable: true,
+        actions: { 
+          'Copy Diagnostics': async () => {
+            try {
+              const diagnostics = {
+                timestamp: new Date().toISOString(),
+                flow: 'hybrid_client_silent_failed',
+                error: error instanceof Error ? error.message : String(error),
+                authState: state,
+                localStorage: {
+                  jmail_last_interactive_auth: localStorage.getItem('jmail_last_interactive_auth'),
+                  jmail_last_scope_auth: localStorage.getItem('jmail_last_scope_auth'),
+                  jmail_last_server_redirect: localStorage.getItem('jmail_last_server_redirect')
+                }
+              };
+              await navigator.clipboard.writeText(JSON.stringify(diagnostics, null, 2));
+              show({ message: 'Silent auth failure diagnostics copied to clipboard', timeout: 3000 });
+            } catch (e) {
+              show({ message: 'Failed to copy diagnostics: ' + String(e), timeout: 5000, closable: true });
+            }
+          }
+        }
+      });
+    } catch (_) {
+      // Snackbar not available, continue silently
+    }
+    
     throw new Error('Interactive authentication required');
   }
 }
@@ -350,6 +384,40 @@ export async function initiateInteractiveAuth(mode: 'server' | 'client' = 'serve
           resolve(response);
         }
       };
+      // Show diagnostic snackbar for hybrid auth popup tracking
+      try {
+        const { show } = await import('$lib/containers/snackbar');
+        show({ 
+          message: `Hybrid auth popup triggered (client-side)`, 
+          timeout: 8000, 
+          closable: true,
+          actions: { 
+            'Copy Diagnostics': async () => {
+              try {
+                const diagnostics = {
+                  timestamp: new Date().toISOString(),
+                  flow: 'hybrid_client_interactive',
+                  mode,
+                  prompt: 'consent',
+                  authState: state,
+                  localStorage: {
+                    jmail_last_interactive_auth: localStorage.getItem('jmail_last_interactive_auth'),
+                    jmail_last_scope_auth: localStorage.getItem('jmail_last_scope_auth'),
+                    jmail_last_server_redirect: localStorage.getItem('jmail_last_server_redirect')
+                  }
+                };
+                await navigator.clipboard.writeText(JSON.stringify(diagnostics, null, 2));
+                show({ message: 'Hybrid auth diagnostics copied to clipboard', timeout: 3000 });
+              } catch (e) {
+                show({ message: 'Failed to copy diagnostics: ' + String(e), timeout: 5000, closable: true });
+              }
+            }
+          }
+        });
+      } catch (_) {
+        // Snackbar not available, continue silently
+      }
+      
       tokenClient.requestAccessToken({ prompt: 'consent' });
     });
 

@@ -22,22 +22,32 @@
   let copiedRuntimeOk = $state(false);
 
   onMount(() => {
-    const unsub = authState.subscribe((s)=> ready = s.ready);
+    let unsub: (() => void) | undefined;
+    let overallTimeout: ReturnType<typeof setTimeout> | undefined;
     
-    // Overall timeout to prevent infinite loading
-    const overallTimeout = setTimeout(() => {
-      console.warn('[Page] Overall initialization timeout reached');
-      loadingTimedOut = true;
+    try {
+      unsub = authState.subscribe((s)=> ready = s.ready);
+      
+      // Overall timeout to prevent infinite loading
+      overallTimeout = setTimeout(() => {
+        console.warn('[Page] Overall initialization timeout reached');
+        loadingTimedOut = true;
+        loading = false;
+      }, 15000);
+    } catch (err) {
+      console.warn('[Page] Mount initialization failed:', err);
       loading = false;
-    }, 15000);
+    }
     
     (async () => {
       try {
         // Check for server session first (long-lasting auth)
         try {
+          const { checkServerSession, storeServerSessionInDB } = await import('$lib/gmail/server-session-check');
           const serverSession = await checkServerSession();
           if (serverSession.authenticated) {
-            // Server session found - go directly to inbox
+            // Store server session in DB and go to inbox
+            await storeServerSessionInDB(serverSession);
             pushGmailDiag({ type: 'home_page_server_session_redirect', email: serverSession.email });
             window.location.href = `${base}/inbox`;
             return;
@@ -46,7 +56,30 @@
           console.warn('[ServerAuth] Server session check failed:', e);
         }
 
-        // Fall back to client-side auth initialization
+        // Check if localhost - use special localhost auth
+        const isLocalhost = window.location.hostname === 'localhost' || 
+                           window.location.hostname === '127.0.0.1' || 
+                           window.location.hostname.startsWith('192.168.');
+        
+        if (isLocalhost) {
+          try {
+            const { initLocalhostAuth } = await import('$lib/gmail/localhost-auth');
+            await initLocalhostAuth();
+            // Check if we got authentication
+            const { getDB } = await import('$lib/db/indexeddb');
+            const db = await getDB();
+            const account = await db.get('auth', 'me');
+            if (account) {
+              console.log('[Localhost] Auth successful, redirecting to inbox');
+              window.location.href = `${base}/inbox`;
+              return;
+            }
+          } catch (e) {
+            console.warn('[Localhost] Auth failed:', e);
+          }
+        }
+
+        // Fall back to regular client-side auth initialization
         try {
           CLIENT_ID = CLIENT_ID || resolveGoogleClientId() as string;
           // Add timeout to prevent hanging
@@ -79,13 +112,19 @@
         console.error('[Page] Unexpected error during initialization:', e);
       } finally {
         // Always ensure loading is set to false, even if operations fail
-        clearTimeout(overallTimeout);
+        try {
+          if (overallTimeout) clearTimeout(overallTimeout);
+        } catch {}
         loading = false;
       }
     })();
     return () => {
-      unsub();
-      clearTimeout(overallTimeout);
+      try {
+        if (unsub) unsub();
+        if (overallTimeout) clearTimeout(overallTimeout);
+      } catch (err) {
+        console.warn('[Page] Cleanup failed:', err);
+      }
     };
   });
 

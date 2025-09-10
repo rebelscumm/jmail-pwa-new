@@ -71,54 +71,87 @@
   const ruleKeys = [ ...new Set([ ...quickKeys, ...hourKeys, ...dayKeys, ...weekdayKeys, ...timeKeys, ...persistentKeys ]) ];
   let _fontScalePercent = $state(100);
   let _inboxPageSize = $state(100);
+  let _pullForwardCount = $state(3);
+  
+  // Authentication settings
+  let _suppressAuthPopups = $state(false);
+  let _authPopupCooldownSeconds = $state(30);
 
   // Tabs
-  let currentTab = $state<'app' | 'api' | 'mapping' | 'backups'>('app');
+  let currentTab = $state<'app' | 'api' | 'auth' | 'mapping' | 'backups'>('app');
   const tabItems = [
     { name: 'App', value: 'app' },
     { name: 'API', value: 'api' },
+    { name: 'Authentication', value: 'auth' },
     { name: 'Label Mapping', value: 'mapping' },
     { name: 'Backups', value: 'backups' }
   ];
 
   onMount(async () => {
-    await loadSettings();
-    const s = $settings as AppSettings;
-    _anchorHour = s.anchorHour;
-    _roundMinutes = s.roundMinutes;
-    _unreadOnUnsnooze = s.unreadOnUnsnooze;
-    _notifEnabled = !!s.notifEnabled;
-    _aiProvider = s.aiProvider || 'openai';
-    _aiApiKey = s.aiApiKey || '';
-    _aiModel = s.aiModel || '';
-    _aiSummaryModel = s.aiSummaryModel || '';
-    _aiDraftModel = s.aiDraftModel || '';
-    _aiPageFetchOptIn = !!s.aiPageFetchOptIn;
-    _taskFilePath = s.taskFilePath || '';
-    _trailingRefreshDelayMs = Number(s.trailingRefreshDelayMs || 5000);
-    _trailingSlideOutDurationMs = Number((s as any).trailingSlideOutDurationMs || 260);
-    _inboxPageSize = Number(s.inboxPageSize || 100);
-    _precomputeSummaries = !!(s as any).precomputeSummaries;
-    _precomputeUseBatch = (s as any).precomputeUseBatch !== false;
-    _precomputeUseContextCache = (s as any).precomputeUseContextCache !== false;
-    _precomputeAutoRun = !!(s as any).precomputeAutoRun;
-    _aiSummaryVersion = Number((s as any).aiSummaryVersion || 1);
-    _forceRecomputeOnVersionBump = !!(s as any).forceRecomputeOnVersionBump;
-    _swipeRightPrimary = (s.swipeRightPrimary || 'archive') as any;
-    _swipeLeftPrimary = (s.swipeLeftPrimary || 'delete') as any;
-    _confirmDelete = !!s.confirmDelete;
-    _swipeCommitVelocityPxPerSec = Number(s.swipeCommitVelocityPxPerSec || 1000);
-    _swipeDisappearMs = Number(s.swipeDisappearMs || 5000);
-    mappingJson = JSON.stringify(s.labelMapping, null, 2);
-    uiMapping = { ...s.labelMapping };
-    _fontScalePercent = Number((s as any).fontScalePercent || 100);
+    try {
+      console.log('[Settings] Starting initialization...');
+      await loadSettings();
+      console.log('[Settings] Settings loaded successfully');
+      
+      const s = $settings as AppSettings;
+      _anchorHour = s.anchorHour;
+      _roundMinutes = s.roundMinutes;
+      _unreadOnUnsnooze = s.unreadOnUnsnooze;
+      _notifEnabled = !!s.notifEnabled;
+      _aiProvider = s.aiProvider || 'openai';
+      _aiApiKey = s.aiApiKey || '';
+      _aiModel = s.aiModel || '';
+      _aiSummaryModel = s.aiSummaryModel || '';
+      _aiDraftModel = s.aiDraftModel || '';
+      _aiPageFetchOptIn = !!s.aiPageFetchOptIn;
+      _taskFilePath = s.taskFilePath || '';
+      _trailingRefreshDelayMs = Number(s.trailingRefreshDelayMs || 5000);
+      _trailingSlideOutDurationMs = Number((s as any).trailingSlideOutDurationMs || 260);
+      _inboxPageSize = Number(s.inboxPageSize || 100);
+      _precomputeSummaries = !!(s as any).precomputeSummaries;
+      _precomputeUseBatch = (s as any).precomputeUseBatch !== false;
+      _precomputeUseContextCache = (s as any).precomputeUseContextCache !== false;
+      _precomputeAutoRun = !!(s as any).precomputeAutoRun;
+      _aiSummaryVersion = Number((s as any).aiSummaryVersion || 1);
+      _forceRecomputeOnVersionBump = !!(s as any).forceRecomputeOnVersionBump;
+      _swipeRightPrimary = (s.swipeRightPrimary || 'archive') as any;
+      _swipeLeftPrimary = (s.swipeLeftPrimary || 'delete') as any;
+      _confirmDelete = !!s.confirmDelete;
+      _swipeCommitVelocityPxPerSec = Number(s.swipeCommitVelocityPxPerSec || 1000);
+      _swipeDisappearMs = Number(s.swipeDisappearMs || 5000);
+      mappingJson = JSON.stringify(s.labelMapping, null, 2);
+      uiMapping = { ...s.labelMapping };
+      _fontScalePercent = Number((s as any).fontScalePercent || 100);
+      _suppressAuthPopups = !!(s as any).suppressAuthPopups;
+      _authPopupCooldownSeconds = Number((s as any).authPopupCooldownSeconds || 30);
+      _pullForwardCount = Number((s as any).pullForwardCount || 3);
 
-    const db = await getDB();
-    const tx = db.transaction('labels');
-    labels = await tx.store.getAll();
-    backups = await listBackups();
-    // Mark initialLoaded only after we've populated local state from $settings
-    initialLoaded = true;
+      // Check URL parameters for tab selection
+      try {
+        const urlParams = new URLSearchParams(window.location.search);
+        const tabParam = urlParams.get('tab');
+        if (tabParam && ['app', 'api', 'auth', 'mapping', 'backups'].includes(tabParam)) {
+          currentTab = tabParam as any;
+        }
+      } catch (_) {}
+
+      console.log('[Settings] Loading database data...');
+      const db = await getDB();
+      const tx = db.transaction('labels');
+      labels = await tx.store.getAll();
+      backups = await listBackups();
+      console.log('[Settings] Database data loaded successfully');
+      
+      // Mark initialLoaded only after we've populated local state from $settings
+      initialLoaded = true;
+      console.log('[Settings] Initialization complete, initialLoaded set to true');
+    } catch (error) {
+      console.error('[Settings] Initialization failed:', error);
+      // Even if there's an error, set initialLoaded to true so the page shows
+      // This allows users to at least see the settings page even if some data failed to load
+      initialLoaded = true;
+      info = `Initialization error: ${error instanceof Error ? error.message : String(error)}`;
+    }
   });
 
   // Track dirty state for guards
@@ -275,7 +308,7 @@
   }
 
   async function saveAppSettings() {
-    await updateAppSettings({ anchorHour: _anchorHour, roundMinutes: _roundMinutes, unreadOnUnsnooze: _unreadOnUnsnooze, notifEnabled: _notifEnabled, aiProvider: _aiProvider, aiApiKey: _aiApiKey, aiModel: _aiModel, aiSummaryModel: _aiSummaryModel, aiDraftModel: _aiDraftModel, aiPageFetchOptIn: _aiPageFetchOptIn, taskFilePath: _taskFilePath, trailingRefreshDelayMs: Math.max(0, Number(_trailingRefreshDelayMs || 0)), trailingSlideOutDurationMs: Math.max(0, Number(_trailingSlideOutDurationMs || 0)), swipeRightPrimary: _swipeRightPrimary, swipeLeftPrimary: _swipeLeftPrimary, confirmDelete: _confirmDelete, swipeCommitVelocityPxPerSec: Math.max(100, Number(_swipeCommitVelocityPxPerSec || 1000)), swipeDisappearMs: Math.max(100, Number(_swipeDisappearMs || 800)), fontScalePercent: Math.max(50, Math.min(200, Number(_fontScalePercent || 100))), precomputeSummaries: _precomputeSummaries, precomputeUseBatch: _precomputeUseBatch, precomputeUseContextCache: _precomputeUseContextCache, inboxPageSize: Math.max(10, Number(_inboxPageSize || 100)) });
+    await updateAppSettings({ anchorHour: _anchorHour, roundMinutes: _roundMinutes, unreadOnUnsnooze: _unreadOnUnsnooze, notifEnabled: _notifEnabled, aiProvider: _aiProvider, aiApiKey: _aiApiKey, aiModel: _aiModel, aiSummaryModel: _aiSummaryModel, aiDraftModel: _aiDraftModel, aiPageFetchOptIn: _aiPageFetchOptIn, taskFilePath: _taskFilePath, trailingRefreshDelayMs: Math.max(0, Number(_trailingRefreshDelayMs || 0)), trailingSlideOutDurationMs: Math.max(0, Number(_trailingSlideOutDurationMs || 0)), swipeRightPrimary: _swipeRightPrimary, swipeLeftPrimary: _swipeLeftPrimary, confirmDelete: _confirmDelete, swipeCommitVelocityPxPerSec: Math.max(100, Number(_swipeCommitVelocityPxPerSec || 1000)), swipeDisappearMs: Math.max(100, Number(_swipeDisappearMs || 800)), fontScalePercent: Math.max(50, Math.min(200, Number(_fontScalePercent || 100))), precomputeSummaries: _precomputeSummaries, precomputeUseBatch: _precomputeUseBatch, precomputeUseContextCache: _precomputeUseContextCache, inboxPageSize: Math.max(10, Number(_inboxPageSize || 100)), suppressAuthPopups: _suppressAuthPopups, authPopupCooldownSeconds: Math.max(5, Number(_authPopupCooldownSeconds || 30)), pullForwardCount: Math.max(1, Math.min(10, Number(_pullForwardCount || 3))) });
     if (_notifEnabled && 'Notification' in window) {
       const p = await Notification.requestPermission();
       if (p !== 'granted') {
@@ -298,7 +331,7 @@
   }
 
   async function saveAll() {
-    if (currentTab === 'app' || currentTab === 'api') {
+    if (currentTab === 'app' || currentTab === 'api' || currentTab === 'auth') {
       await saveAppSettings();
     } else if (currentTab === 'mapping') {
       await saveMapping();
@@ -382,10 +415,21 @@
   }
 </script>
 
+{#if !initialLoaded}
+  <div style="display: flex; justify-content: center; align-items: center; min-height: 200px;">
+    <div style="text-align: center;">
+      <div style="margin-bottom: 1rem;">Loading settings...</div>
+      {#if info}
+        <div style="color: rgb(var(--m3-scheme-error)); font-size: 0.875rem;">{info}</div>
+      {/if}
+    </div>
+  </div>
+{:else}
 <Tabs items={tabItems} bind:tab={currentTab} secondary />
 <ActionBar onSave={saveAll} onSaveAndExit={saveAndExit} onClose={closeWithoutSaving} />
+{/if}
 
-{#if currentTab === 'app'}
+{#if initialLoaded && currentTab === 'app'}
   <h3 style="margin-top:1rem;">App Settings</h3>
   <Card variant="outlined">
     <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap:0.75rem; align-items:center;">
@@ -394,6 +438,7 @@
       <TextFieldOutlined label="Trailing refresh delay (ms)" type="number" min="0" step="100" bind:value={(_trailingRefreshDelayMs as any)} />
       <TextFieldOutlined label="Slide-out duration on refresh (ms)" type="number" min="0" step="20" bind:value={(_trailingSlideOutDurationMs as any)} />
       <TextFieldOutlined label="Inbox page size (messages per load)" type="number" min="10" step="10" bind:value={(_inboxPageSize as any)} />
+      <TextFieldOutlined label="Pull forward count (emails when inbox empty)" type="number" min="1" max="10" step="1" bind:value={(_pullForwardCount as any)} />
       <div style="display:flex; gap:0.5rem; align-items:center;">
         <TextFieldOutlined label="Font size (%)" type="number" min="50" max="200" step="1" bind:value={(_fontScalePercent as any)} />
         <Button variant="outlined" onclick={() => (_fontScalePercent = Math.max(50, Math.min(200, Number(_fontScalePercent || 0) - 1)))}>-1%</Button>
@@ -466,7 +511,7 @@
   </Card>
 {/if}
 
-{#if currentTab === 'api'}
+{#if initialLoaded && currentTab === 'api'}
   <h3 style="margin-top:1rem;">API Keys & Models</h3>
   <Card variant="outlined">
     <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap:0.75rem; align-items:center;">
@@ -566,7 +611,41 @@
   </Card>
 {/if}
 
-{#if currentTab === 'mapping'}
+{#if initialLoaded && currentTab === 'auth'}
+  <h3 style="margin-top:1rem;">Authentication Settings</h3>
+  <Card variant="outlined">
+    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap:0.75rem; align-items:center;">
+      <label style="display:flex; align-items:center; gap:0.5rem;">
+        <Switch bind:checked={_suppressAuthPopups} />
+        <span class="m3-font-body-medium">Suppress authentication popups</span>
+      </label>
+      <TextFieldOutlined 
+        label="Popup cooldown (seconds)" 
+        type="number" 
+        min="5" 
+        max="300" 
+        step="5" 
+        bind:value={(_authPopupCooldownSeconds as any)}
+        disabled={!_suppressAuthPopups}
+      />
+    </div>
+    <div style="margin-top:0.75rem; padding-top:0.75rem; border-top: 1px solid rgb(var(--m3-scheme-outline-variant));">
+      <div class="m3-font-body-small" style="color: rgb(var(--m3-scheme-on-surface-variant)); margin-bottom:0.5rem;">
+        <strong>About authentication popups:</strong><br/>
+        Google authorization popups appear when your access token expires (typically every hour) or when the app needs additional permissions to read message content. 
+        Enabling "Suppress authentication popups" will add rate limiting to prevent excessive popups, but may temporarily prevent access to some features when authentication is required.
+      </div>
+      <div class="m3-font-body-small" style="color: rgb(var(--m3-scheme-on-surface-variant));">
+        <strong>Cooldown period:</strong> Minimum time between authentication popups. Higher values reduce interruptions but may delay access to features requiring authentication.
+      </div>
+    </div>
+    <div style="margin-top:0.75rem; display:flex; gap:0.5rem; justify-content:flex-end;">
+      <Button variant="filled" onclick={saveAppSettings}>Save Authentication Settings</Button>
+    </div>
+  </Card>
+{/if}
+
+{#if initialLoaded && currentTab === 'mapping'}
   <h3 style="margin-top:1rem;">Label Mapping</h3>
   <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap; margin-bottom:0.5rem;">
     <Button variant="outlined" onclick={discoverLabels}>Refresh labels</Button>
@@ -682,7 +761,7 @@
   </div>
 {/if}
 
-{#if currentTab === 'backups'}
+{#if initialLoaded && currentTab === 'backups'}
   <h3 style="margin-top:1rem;">Backups</h3>
   <Card variant="outlined">
     <div style="display:flex; gap:0.5rem; align-items:center; margin-bottom:0.5rem;">
@@ -701,5 +780,3 @@
     </ul>
   </Card>
 {/if}
-
-<ActionBar onSave={saveAll} onSaveAndExit={saveAndExit} onClose={closeWithoutSaving} />

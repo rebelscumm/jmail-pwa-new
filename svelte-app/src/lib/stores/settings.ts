@@ -46,6 +46,12 @@ export type AppSettings = {
   // remains in INBOX. No app-controlled summary version is stored.
   /** Number of messages to load per inbox page */
   inboxPageSize?: number;
+  /** Suppress authentication popups with rate limiting */
+  suppressAuthPopups?: boolean;
+  /** Cooldown period in seconds between authentication popups */
+  authPopupCooldownSeconds?: number;
+  /** Number of emails to pull forward from snooze when inbox is empty */
+  pullForwardCount?: number;
 };
 
 const DEFAULTS: AppSettings = {
@@ -72,7 +78,9 @@ const DEFAULTS: AppSettings = {
   // Auto-run nightly/initial backfill by default
   precomputeAutoRun: true,
   // Default to 100 messages per page for a denser inbox load while keeping performance reasonable
-  inboxPageSize: 100
+  inboxPageSize: 100,
+  // Default to pulling forward 3 emails when inbox is empty
+  pullForwardCount: 3
 };
 
 export const settings = writable<AppSettings>({ ...DEFAULTS });

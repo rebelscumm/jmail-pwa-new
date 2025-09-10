@@ -40,6 +40,7 @@ import { precomputeStatus } from '$lib/stores/precompute';
   import { onMount } from 'svelte';
   import { trailingHolds } from '$lib/stores/holds';
   import { labels as labelsStore } from '$lib/stores/labels';
+  import { optimisticCounters } from '$lib/stores/optimistic-counters';
   let { onSyncNow, backHref, backLabel }: { onSyncNow?: () => void; backHref?: string; backLabel?: string } = $props();
   let overflowDetails: HTMLDetailsElement;
   let aboutOpen = $state(false);
@@ -184,6 +185,7 @@ import { precomputeStatus } from '$lib/stores/precompute';
         precomputeLogsContent = [];
       }
       precomputeLogsOpen = true;
+      overflowDetails.open = false;
     } catch (e) {
       showSnackbar({ message: `Could not load logs: ${e instanceof Error ? e.message : e}`, timeout: 4000 });
     }
@@ -206,6 +208,7 @@ import { precomputeStatus } from '$lib/stores/precompute';
       }
       precomputeSummary = summary;
       precomputeSummaryOpen = true;
+      overflowDetails.open = false;
     } catch (e) {
       showSnackbar({ message: `Could not load summary: ${e instanceof Error ? e.message : e}`, timeout: 4000 });
     }
@@ -682,8 +685,82 @@ import { precomputeStatus } from '$lib/stores/precompute';
     const held = (($trailingHolds || {})[(t as any).threadId] || 0) > now;
     return inInbox || held;
   }));
-  const inboxCount = $derived(inboxThreads.length);
-  const unreadCount = $derived(inboxThreads.filter((t) => (t.labelIds || []).includes('UNREAD')).length);
+  
+  // Count threads that are held (being animated) separately to avoid double counting with optimistic adjustments
+  const heldThreads = $derived(() => {
+    try {
+      const threads = $threadsStore || [];
+      const holds = $trailingHolds || {};
+      return threads.filter((t) => {
+        if (!t || typeof (t as any).threadId !== 'string') return false;
+        const held = (holds[(t as any).threadId] || 0) > now;
+        const labels = Array.isArray((t as any).labelIds) ? ((t as any).labelIds as string[]) : [];
+        const inInbox = labels.includes('INBOX');
+        // Only count held threads that are NOT in inbox (i.e., were removed but still showing due to animation)
+        return held && !inInbox;
+      });
+    } catch {
+      return [];
+    }
+  });
+  
+  const baseInboxCount = $derived(() => {
+    try {
+      const threads = $threadsStore || [];
+      return threads.filter((t) => {
+        if (!t || typeof (t as any).threadId !== 'string') return false;
+        const labels = Array.isArray((t as any).labelIds) ? ((t as any).labelIds as string[]) : [];
+        return labels.includes('INBOX');
+      }).length;
+    } catch {
+      return 0;
+    }
+  });
+  
+  const baseUnreadCount = $derived(() => {
+    try {
+      const threads = $threadsStore || [];
+      return threads.filter((t) => {
+        if (!t || typeof (t as any).threadId !== 'string') return false;
+        const labels = Array.isArray((t as any).labelIds) ? ((t as any).labelIds as string[]) : [];
+        return labels.includes('INBOX') && labels.includes('UNREAD');
+      }).length;
+    } catch {
+      return 0;
+    }
+  });
+  
+  // Apply optimistic adjustments on top of base counts (held threads are handled by trailing holds visual)
+  const inboxCount = $derived(() => {
+    try {
+      return baseInboxCount() + heldThreads().length;
+    } catch {
+      return 0;
+    }
+  });
+  const unreadCount = $derived(() => {
+    try {
+      return baseUnreadCount();
+    } catch {
+      return 0;
+    }
+  });
+  const optimisticInboxCount = $derived(() => {
+    try {
+      const counters = $optimisticCounters || { inboxDelta: 0, unreadDelta: 0, timestamp: 0 };
+      return Math.max(0, baseInboxCount() + counters.inboxDelta + heldThreads().length);
+    } catch {
+      return 0;
+    }
+  });
+  const optimisticUnreadCount = $derived(() => {
+    try {
+      const counters = $optimisticCounters || { inboxDelta: 0, unreadDelta: 0, timestamp: 0 };
+      return Math.max(0, baseUnreadCount() + counters.unreadDelta);
+    } catch {
+      return 0;
+    }
+  });
   // Schedule authoritative label stat refresh when local counts change
   let _labelRefreshTimer: number | undefined;
   function scheduleLabelRefresh() {
@@ -694,11 +771,21 @@ import { precomputeStatus } from '$lib/stores/precompute';
   }
   // React to derived value changes (these are reactive primitives, not Svelte stores)
   $effect(() => {
-    try { renderedInboxCount = Number(inboxCount || 0); } catch { renderedInboxCount = 0; }
+    try { 
+      const count = optimisticInboxCount();
+      renderedInboxCount = Number(count || 0); 
+    } catch { 
+      renderedInboxCount = 0; 
+    }
     scheduleLabelRefresh();
   });
   $effect(() => {
-    try { renderedUnreadCount = Number(unreadCount || 0); } catch { renderedUnreadCount = 0; }
+    try { 
+      const count = optimisticUnreadCount();
+      renderedUnreadCount = Number(count || 0); 
+    } catch { 
+      renderedUnreadCount = 0; 
+    }
     scheduleLabelRefresh();
   });
   // Cleanup timer when component unmounts
@@ -714,7 +801,7 @@ import { precomputeStatus } from '$lib/stores/precompute';
       if (typeof inboxMessagesTotal === 'number') {
         renderedInboxCount = inboxMessagesTotal;
       } else {
-        try { renderedInboxCount = Number(inboxCount || 0); } catch { renderedInboxCount = 0; }
+        try { renderedInboxCount = Number(optimisticInboxCount() || 0); } catch { renderedInboxCount = 0; }
       }
     } catch {
       renderedInboxCount = 0;
@@ -723,7 +810,7 @@ import { precomputeStatus } from '$lib/stores/precompute';
       if (typeof inboxMessagesUnread === 'number') {
         renderedUnreadCount = inboxMessagesUnread;
       } else {
-        try { renderedUnreadCount = Number(unreadCount || 0); } catch { renderedUnreadCount = 0; }
+        try { renderedUnreadCount = Number(optimisticUnreadCount() || 0); } catch { renderedUnreadCount = 0; }
       }
     } catch {
       renderedUnreadCount = 0;
@@ -753,11 +840,9 @@ import { precomputeStatus } from '$lib/stores/precompute';
     <Button variant="outlined" iconType="left" onclick={doSync}>
       {#snippet children()}
         <Icon icon={iconSync} />
-        {#if $syncState.pendingOps > 0}
-          <span class="label">{$syncState.pendingOps} pending</span>
-        {:else}
-          <span class="last-sync m3-font-label-small">{formatLastSync($syncState.lastUpdatedAt)}</span>
-        {/if}
+        <span class="last-sync m3-font-label-small">
+          {formatLastSync($syncState.lastUpdatedAt)}{$syncState.pendingOps > 0 ? ` (${$syncState.pendingOps})` : ''}
+        </span>
       {/snippet}
     </Button>
 
@@ -767,17 +852,15 @@ import { precomputeStatus } from '$lib/stores/precompute';
         <span class="label">Undo</span>
       {/snippet}
       {#snippet menu()}
-        <div class="history-menu">
-          <Menu>
-            {#if undoItems.length}
-              {#each undoItems as it, idx}
-                <MenuItem onclick={() => doUndo(idx + 1)}>{it.description}</MenuItem>
-              {/each}
-            {:else}
-              <MenuItem disabled={true} onclick={() => {}}>No actions to undo</MenuItem>
-            {/if}
-          </Menu>
-        </div>
+        <Menu class="history-menu">
+          {#if undoItems.length}
+            {#each undoItems as it, idx}
+              <MenuItem onclick={() => doUndo(idx + 1)}>{it.description}</MenuItem>
+            {/each}
+          {:else}
+            <MenuItem disabled={true} onclick={() => {}}>No actions to undo</MenuItem>
+          {/if}
+        </Menu>
       {/snippet}
     </SplitButton>
 
@@ -787,17 +870,15 @@ import { precomputeStatus } from '$lib/stores/precompute';
         <span class="label">Redo</span>
       {/snippet}
       {#snippet menu()}
-        <div class="history-menu">
-          <Menu>
-            {#if redoItems.length}
-              {#each redoItems as it, idx}
-                <MenuItem onclick={() => doRedo(idx + 1)}>{it.description}</MenuItem>
-              {/each}
-            {:else}
-              <MenuItem disabled={true} onclick={() => {}}>No actions to redo</MenuItem>
-            {/if}
-          </Menu>
-        </div>
+        <Menu class="history-menu">
+          {#if redoItems.length}
+            {#each redoItems as it, idx}
+              <MenuItem onclick={() => doRedo(idx + 1)}>{it.description}</MenuItem>
+            {/each}
+          {:else}
+            <MenuItem disabled={true} onclick={() => {}}>No actions to redo</MenuItem>
+          {/if}
+        </Menu>
       {/snippet}
     </SplitButton>
 
@@ -819,45 +900,28 @@ import { precomputeStatus } from '$lib/stores/precompute';
         </Button>
       </summary>
       <Menu>
-        <!-- Primary: Inbox / Sync -->
-        <MenuItem icon="space" disabled={true} onclick={() => {}}>
-          <strong style="font-weight:600;">Inbox & Sync</strong>
-        </MenuItem>
-        <MenuItem icon={iconSync} onclick={doSync}>
-          Sync Now
-          <div class="menu-desc">Flush pending ops and refresh inbox from server</div>
-        </MenuItem>
-        <MenuItem icon={iconRefresh} onclick={() => { const u = new URL(window.location.href); u.searchParams.set('refresh', '1'); location.href = u.toString(); }}>
-          Check for App Update
-      
-        </MenuItem>
-
-        <!-- Precompute section -->
-        <MenuItem icon="space" disabled={true} onclick={() => {}}>
-          <strong style="font-weight:600;">Precompute</strong>
-        </MenuItem>
-        <MenuItem icon={iconSparkles} onclick={doPrecompute}>
-          Run Precompute
-          <div class="menu-desc">Generate AI summaries for cached threads (requires AI key)</div>
-        </MenuItem>
-        <MenuItem icon={iconLogs} onclick={doShowPrecomputeLogs}>
-          Review Precompute Logs
-          <div class="menu-desc">Inspect recent precompute activity and errors</div>
-        </MenuItem>
-        <MenuItem icon={iconSmartToy} onclick={doShowPrecomputeSummary}>
-          Precompute Summary
-          <div class="menu-desc">View aggregate stats and recent run details</div>
-        </MenuItem>
-        <MenuItem icon={iconSparkles} onclick={doBackfillSummaryVersions}>Backfill AI summary versions</MenuItem>
-
-        <!-- Dev / Diagnostics section (recommended sequence included) -->
-        <MenuItem icon="space" disabled={true} onclick={() => {}}>
-          <strong style="font-weight:600;">Developer tools</strong>
-        </MenuItem>
-        <MenuItem icon={iconTerminal} onclick={() => (devToolsOpen = true)} aria-label="Developer tools">
-          Dev tools
-          <div class="menu-desc">Common developer utilities</div>
-        </MenuItem>
+        <div class="menu-section-header">Quick Actions</div>
+        <MenuItem icon={iconSettings} onclick={() => (location.href = '/settings')}>Settings</MenuItem>
+        
+        <div class="menu-section-header">AI Features</div>
+        <MenuItem icon={iconSparkles} onclick={doPrecompute}>Run Precompute</MenuItem>
+        <MenuItem icon={iconSmartToy} onclick={doShowPrecomputeSummary}>Precompute Summary</MenuItem>
+        <MenuItem icon={iconLogs} onclick={doShowPrecomputeLogs}>Review Precompute Logs</MenuItem>
+        <MenuItem icon={iconSparkles} onclick={doBackfillSummaryVersions}>Backfill AI Summary Versions</MenuItem>
+        
+        <div class="menu-section-header">System</div>
+        <MenuItem icon={iconRefresh} onclick={() => { const u = new URL(window.location.href); u.searchParams.set('refresh', '1'); location.href = u.toString(); }}>Check for App Update</MenuItem>
+        <MenuItem icon={iconNotifications} onclick={async () => {
+          try {
+            const { getHistory } = await import('$lib/containers/snackbar');
+            notifications = getHistory();
+            notificationsOpen = true;
+            overflowDetails.open = false;
+          } catch (e) { showSnackbar({ message: 'Failed to load notifications', closable: true }); }
+        }}>Notifications</MenuItem>
+        
+        <div class="menu-section-header">Developer</div>
+        <MenuItem icon={iconTerminal} onclick={() => { devToolsOpen = true; overflowDetails.open = false; }}>Dev Tools</MenuItem>
         <MenuItem icon={iconTerminal} onclick={async () => {
           try {
             // Collect recent diagnostics and surface a copy dialog for both client and server probes
@@ -880,19 +944,11 @@ import { precomputeStatus } from '$lib/stores/precompute';
             showSnackbar({ message: ok ? 'Diagnostics copied' : 'Could not copy; check console', timeout: 4000 });
             if (!ok) console.log('Diagnostics payload:', payload);
           } catch (e) { showSnackbar({ message: `Inspection failed: ${e instanceof Error ? e.message : String(e)}`, closable: true }); }
-        }}>Inspect Gmail requests</MenuItem>
-        <MenuItem icon={iconNotifications} onclick={async () => {
-          try {
-            const { getHistory } = await import('$lib/containers/snackbar');
-            notifications = getHistory();
-            notificationsOpen = true;
-          } catch (e) { showSnackbar({ message: 'Failed to load notifications', closable: true }); }
-        }}>Notifications</MenuItem>
-
-        <!-- Account & About -->
+        }}>Inspect Gmail Requests</MenuItem>
+        
+        <div class="menu-section-header">Account</div>
         <MenuItem icon={iconLogout} onclick={doRelogin}>Re-login</MenuItem>
-        <MenuItem icon={iconSettings} onclick={() => (location.href = '/settings')}>Settings</MenuItem>
-        <MenuItem icon={iconInfo} onclick={() => { aboutOpen = true; }}>About</MenuItem>
+        <MenuItem icon={iconInfo} onclick={() => { aboutOpen = true; overflowDetails.open = false; }}>About</MenuItem>
       </Menu>
     </details>
     <Dialog icon={iconInfo} headline="About" bind:open={aboutOpen} closeOnClick={false}>
@@ -1135,31 +1191,126 @@ import { precomputeStatus } from '$lib/stores/precompute';
   }
   .left, .right { display: flex; align-items: center; gap: 0.5rem; }
   .right { flex: 1; flex-wrap: wrap; min-width: 0; justify-content: flex-end; }
+  /* Ensure all buttons in the topbar have consistent height and alignment */
+  .right :global(.m3-container) { 
+    height: 2.5rem; 
+    display: inline-flex;
+    align-items: center;
+  }
+  .right :global(.split) { 
+    height: 2.5rem; 
+    display: flex;
+    align-items: center;
+  }
+  /* Ensure button groups maintain proper vertical alignment */
+  .right > * {
+    display: flex;
+    align-items: center;
+  }
   .label { margin-inline-start: 0.25rem; }
   .search-field { flex: 1 1 12rem; min-width: 0; }
   .search-field :global(.m3-container) {
     min-width: 12rem;
     width: 100%;
   }
-  .overflow { position:relative; }
+  .overflow { 
+    position: relative; 
+    overflow: visible;
+  }
   .overflow > summary { list-style: none; }
   .summary-btn { cursor: pointer; }
-  .overflow[open] > :global(.m3-container) { position:absolute; right:0; margin-top:0.25rem; }
+  .overflow[open] > :global(.m3-container) { 
+    position: absolute; 
+    right: 0; 
+    top: 100%;
+    margin-top: 0.25rem; 
+    background-color: rgb(var(--m3-scheme-surface-container)) !important;
+    border: 1px solid rgb(var(--m3-scheme-outline-variant));
+    box-shadow: var(--m3-util-elevation-3);
+    min-width: 12rem;
+    max-width: 20rem;
+    max-height: none !important;
+    overflow: visible !important;
+    overflow-y: visible !important;
+    z-index: 10002;
+    padding: 0.5rem 0 !important;
+    gap: 0 !important;
+  }
   .last-sync { color: rgb(var(--m3-scheme-on-surface-variant)); margin-inline-start: 0; }
   .about { display:flex; flex-direction:column; gap:0.5rem; }
+  
+    /* Menu section headers with solid background - no transparency issues */
+    .overflow :global(.menu-section-header) {
+      color: rgb(var(--m3-scheme-on-surface-variant));
+      font-size: 0.6875rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      padding: 0.75rem 1rem 0.375rem 1rem;
+      margin: 0;
+      background-color: rgb(var(--m3-scheme-surface-container)) !important;
+      line-height: 1.2;
+      display: block;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    
+    /* First section header styling */
+    .overflow :global(.menu-section-header:first-child) {
+      padding-top: 0.5rem;
+    }
+   
+   /* Ensure menu items are visible and properly sized */
+   .overflow :global(.m3-container .item) {
+     color: rgb(var(--m3-scheme-on-surface)) !important;
+     background-color: rgb(var(--m3-scheme-surface-container)) !important;
+     white-space: nowrap !important;
+     height: 2.5rem !important;
+     min-height: 2.5rem !important;
+     display: flex !important;
+     align-items: center !important;
+     width: 100%;
+     padding: 0 1rem !important;
+     margin: 0 !important;
+     border-radius: 0 !important;
+   }
+   
+   .overflow :global(.m3-container .item .icon svg) {
+     color: rgb(var(--m3-scheme-on-surface-variant)) !important;
+     width: 1.5rem;
+     height: 1.5rem;
+   }
+   
+   /* Hover states for better UX */
+   .overflow :global(.m3-container .item:hover) {
+     background-color: rgb(var(--m3-scheme-surface-container-high)) !important;
+   }
+   
+   /* Ensure dialogs appear above overflow menu */
+   :global(dialog[open]) {
+     z-index: 10010 !important;
+   }
   .about .row { display:flex; justify-content:space-between; gap:1rem; }
   .about .k { color: rgb(var(--m3-scheme-on-surface-variant)); }
   .about .v { color: rgb(var(--m3-scheme-on-surface)); font-variant-numeric: tabular-nums; }
-  /* Make Undo/Redo dropdowns wider to accommodate longer text */
-  .history-menu :global(.m3-container) { max-width: 28rem; }
-  /* Center Undo/Redo dropdown menus in the viewport */
-  .history-menu {
-    position: fixed !important;
-    top: 50% !important;
-    left: 50% !important;
-    transform: translate(-50%, -50%);
-    right: auto !important;
-    bottom: auto !important;
+  /* Fix the history menu sizing issues */
+  :global(.history-menu.m3-container) {
+    min-width: 16rem !important;
+    max-width: min(28rem, calc(100vw - 2rem)) !important;
+    min-height: 8rem !important;
+    max-height: min(24rem, calc(100vh - 4rem)) !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+  }
+  
+  /* Allow text wrapping in history menu items */
+  :global(.history-menu) :global(.item) {
+    white-space: normal !important;
+    word-wrap: break-word !important;
+    line-height: 1.3 !important;
+    min-height: 3rem !important;
+    height: auto !important;
+    padding: 0.75rem 1rem !important;
   }
   :global(.chip-icon) { width:1.1rem; height:1.1rem; flex:0 0 auto; }
 </style>

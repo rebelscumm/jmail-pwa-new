@@ -179,6 +179,31 @@ export async function acquireTokenInteractive(prompt: 'none' | 'consent' | 'sele
         // If token info check fails, fall through to allow prompt to fix potential auth issues
       }
     }
+
+    // Rate limit interactive auth popups to avoid spam
+    const lastInteractiveAuth = Number(localStorage.getItem('jmail_last_interactive_auth') || '0');
+    let minIntervalMs = 30000; // 30 seconds default minimum between popups
+    let suppressPopups = false;
+    
+    // Check user preferences for authentication behavior
+    try {
+      const { getDB } = await import('$lib/db/indexeddb');
+      const db = await getDB();
+      const settings = await db.get('settings', 'app') as any;
+      if (settings) {
+        suppressPopups = !!settings.suppressAuthPopups;
+        minIntervalMs = Math.max(5000, Number(settings.authPopupCooldownSeconds || 30) * 1000);
+      }
+    } catch (_) {
+      // If settings can't be loaded, use defaults
+    }
+    
+    const now = Date.now();
+    if (suppressPopups && lastInteractiveAuth && (now - lastInteractiveAuth) < minIntervalMs) {
+      pushGmailDiag({ type: 'auth_interactive_rate_limited', reason, lastAuth: lastInteractiveAuth, minInterval: minIntervalMs, suppressPopups });
+      throw new Error(`Authentication rate limited by user preference. Please wait ${Math.ceil((minIntervalMs - (now - lastInteractiveAuth)) / 1000)} seconds before trying again.`);
+    }
+
     let beforeInfo: any = undefined;
     try { beforeInfo = await fetchTokenInfo(); } catch (_) {}
     // Pre-auth explanation dialog with diagnostics and scope analysis
@@ -199,6 +224,50 @@ export async function acquireTokenInteractive(prompt: 'none' | 'consent' | 'sele
       });
     } catch (_) {}
     pushGmailDiag({ type: 'auth_popup_before', flow: 'interactive', prompt, reason, requestedScopes: SCOPES, tokenInfo: beforeInfo });
+    
+    // Record that we're showing a popup to enforce rate limiting
+    localStorage.setItem('jmail_last_interactive_auth', String(Date.now()));
+    
+    // Show diagnostic snackbar for popup tracking
+    try {
+      const { show } = await import('$lib/containers/snackbar');
+      show({ 
+        message: `Auth popup triggered: ${reason || 'unknown reason'}`, 
+        timeout: 8000, 
+        closable: true,
+        actions: { 
+          'Copy Diagnostics': async () => {
+            try {
+              const diagnostics = {
+                timestamp: new Date().toISOString(),
+                reason,
+                prompt,
+                flow: 'interactive',
+                requestedScopes: SCOPES,
+                tokenInfo: beforeInfo,
+                authState: getAuthState(),
+                suppressPopups,
+                minIntervalMs,
+                lastInteractiveAuth,
+                rateLimitCheck: suppressPopups && lastInteractiveAuth && (Date.now() - lastInteractiveAuth) < minIntervalMs,
+                localStorage: {
+                  jmail_last_interactive_auth: localStorage.getItem('jmail_last_interactive_auth'),
+                  jmail_last_scope_auth: localStorage.getItem('jmail_last_scope_auth'),
+                  jmail_last_server_redirect: localStorage.getItem('jmail_last_server_redirect')
+                }
+              };
+              await navigator.clipboard.writeText(JSON.stringify(diagnostics, null, 2));
+              show({ message: 'Auth popup diagnostics copied to clipboard', timeout: 3000 });
+            } catch (e) {
+              show({ message: 'Failed to copy diagnostics: ' + String(e), timeout: 5000, closable: true });
+            }
+          }
+        }
+      });
+    } catch (_) {
+      // Snackbar not available, continue silently
+    }
+    
     const token = await withTimeout(
       new Promise<TokenResponse>((resolve, reject) => {
         tokenClient!.callback = (res) => {
@@ -211,8 +280,8 @@ export async function acquireTokenInteractive(prompt: 'none' | 'consent' | 'sele
       30000,
       'interactive_token'
     );
-    const now = Date.now();
-    const expiryMs = now + (token.expires_in - 60) * 1000; // safety margin
+    const tokenNow = Date.now();
+    const expiryMs = tokenNow + (token.expires_in - 60) * 1000; // safety margin
     authState.update((s) => ({ ...s, accessToken: token.access_token, expiryMs }));
     let afterInfo: any = undefined;
     try { afterInfo = await fetchTokenInfo(); } catch (_) {}
@@ -262,6 +331,31 @@ export async function acquireTokenForScopes(scopes: string, prompt: 'none' | 'co
         }
       } catch (_) {}
     }
+
+    // Rate limit scope upgrade popups to avoid spam
+    const lastScopeAuth = Number(localStorage.getItem('jmail_last_scope_auth') || '0');
+    let minIntervalMs = 15000; // 15 seconds default minimum between scope upgrade popups
+    let suppressPopups = false;
+    
+    // Check user preferences for authentication behavior
+    try {
+      const { getDB } = await import('$lib/db/indexeddb');
+      const db = await getDB();
+      const settings = await db.get('settings', 'app') as any;
+      if (settings) {
+        suppressPopups = !!settings.suppressAuthPopups;
+        minIntervalMs = Math.max(5000, Number(settings.authPopupCooldownSeconds || 15) * 1000);
+      }
+    } catch (_) {
+      // If settings can't be loaded, use defaults
+    }
+    
+    const now = Date.now();
+    if (suppressPopups && lastScopeAuth && (now - lastScopeAuth) < minIntervalMs) {
+      pushGmailDiag({ type: 'auth_scope_upgrade_rate_limited', reason, lastAuth: lastScopeAuth, minInterval: minIntervalMs, suppressPopups });
+      throw new Error(`Scope upgrade rate limited by user preference. Please wait ${Math.ceil((minIntervalMs - (now - lastScopeAuth)) / 1000)} seconds before trying again.`);
+    }
+
     let beforeInfo: any = undefined;
     try { beforeInfo = await fetchTokenInfo(); } catch (_) {}
     // Pre-auth explanation dialog with diagnostics and scope analysis
@@ -282,6 +376,50 @@ export async function acquireTokenForScopes(scopes: string, prompt: 'none' | 'co
       });
     } catch (_) {}
     pushGmailDiag({ type: 'auth_popup_before', flow: 'scope_upgrade', prompt, reason, requestedScopes: scopes, tokenInfo: beforeInfo });
+    
+    // Record that we're showing a scope upgrade popup to enforce rate limiting
+    localStorage.setItem('jmail_last_scope_auth', String(Date.now()));
+    
+    // Show diagnostic snackbar for scope upgrade popup tracking
+    try {
+      const { show } = await import('$lib/containers/snackbar');
+      show({ 
+        message: `Scope upgrade popup triggered: ${reason || 'unknown reason'}`, 
+        timeout: 8000, 
+        closable: true,
+        actions: { 
+          'Copy Diagnostics': async () => {
+            try {
+              const diagnostics = {
+                timestamp: new Date().toISOString(),
+                reason,
+                prompt,
+                flow: 'scope_upgrade',
+                requestedScopes: scopes,
+                tokenInfo: beforeInfo,
+                authState: getAuthState(),
+                suppressPopups,
+                minIntervalMs,
+                lastScopeAuth,
+                rateLimitCheck: suppressPopups && lastScopeAuth && (Date.now() - lastScopeAuth) < minIntervalMs,
+                localStorage: {
+                  jmail_last_interactive_auth: localStorage.getItem('jmail_last_interactive_auth'),
+                  jmail_last_scope_auth: localStorage.getItem('jmail_last_scope_auth'),
+                  jmail_last_server_redirect: localStorage.getItem('jmail_last_server_redirect')
+                }
+              };
+              await navigator.clipboard.writeText(JSON.stringify(diagnostics, null, 2));
+              show({ message: 'Scope upgrade diagnostics copied to clipboard', timeout: 3000 });
+            } catch (e) {
+              show({ message: 'Failed to copy diagnostics: ' + String(e), timeout: 5000, closable: true });
+            }
+          }
+        }
+      });
+    } catch (_) {
+      // Snackbar not available, continue silently
+    }
+    
     const token = await withTimeout(
       new Promise<TokenResponse>((resolve, reject) => {
         tokenClient!.callback = (res) => {
@@ -294,8 +432,8 @@ export async function acquireTokenForScopes(scopes: string, prompt: 'none' | 'co
       'scope_upgrade'
     ).catch(() => null);
     if (!token) return false;
-    const now = Date.now();
-    const expiryMs = now + (token.expires_in - 60) * 1000;
+    const tokenNow = Date.now();
+    const expiryMs = tokenNow + (token.expires_in - 60) * 1000;
     authState.update((s) => ({ ...s, accessToken: token.access_token, expiryMs }));
     let afterInfo: any = undefined;
     try { afterInfo = await fetchTokenInfo(); } catch (_) {}
