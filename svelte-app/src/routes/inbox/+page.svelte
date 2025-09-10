@@ -666,21 +666,46 @@
       const seenThreadIds = new Set<string>();
       let consecutiveEmptyPages = 0;
       let totalThreadsProcessed = 0;
+      let totalPagesAttempted = 0;
+      const MAX_PAGES_SAFETY_LIMIT = 50; // Safety limit to prevent runaway syncs
       authoritativeSyncProgress = { running: true, pagesCompleted: 0, pagesTotal: 0 };
+
+      if (import.meta.env.DEV) {
+        console.log(`[AuthSync] Starting authoritative inbox sync with pageSize: ${pageSize}`);
+      }
 
       // Stream thread ids (preferred) rather than messages to avoid missing
       // threads due to message-level pagination nuances.
       while (true) {
+        totalPagesAttempted++;
+        
+        // Safety check to prevent runaway syncs
+        if (totalPagesAttempted > MAX_PAGES_SAFETY_LIMIT) {
+          if (import.meta.env.DEV) {
+            console.error(`[AuthSync] SAFETY STOP: Attempted ${totalPagesAttempted} pages, stopping to prevent runaway sync`);
+          }
+          throw new Error(`Sync exceeded safety limit of ${MAX_PAGES_SAFETY_LIMIT} pages`);
+        }
         // Attempt to fetch a page with a per-page timeout and retry policy
         let page: { ids: string[]; nextPageToken?: string } | null = null;
         let attempt = 0;
         while (attempt <= maxRetries && !page) {
           attempt += 1;
           try {
-            page = await Promise.race([
-              listThreadIdsByLabelId('INBOX', pageSize, pageToken),
+            // Use the same message-based approach as regular inbox loading for consistency
+            const messagePage = await Promise.race([
+              listInboxMessageIds(pageSize, pageToken),
               new Promise((_, rej) => setTimeout(() => rej(new Error('page_timeout')), perPageTimeoutMs))
             ]) as any;
+            
+            // Convert message IDs to thread IDs by fetching message metadata
+            if (messagePage?.ids?.length) {
+              const msgs = await mapWithConcurrency(messagePage.ids, 4, (id: string) => getMessageMetadata(id));
+              const threadIds = [...new Set(msgs.map(m => m.threadId))]; // Deduplicate thread IDs
+              page = { ids: threadIds, nextPageToken: messagePage.nextPageToken };
+            } else {
+              page = { ids: [], nextPageToken: messagePage?.nextPageToken };
+            }
           } catch (e) {
             if (attempt > maxRetries) throw e; // escalate after retries
             // small backoff
@@ -692,11 +717,22 @@
         const pageResolved = page as { ids: string[]; nextPageToken?: string };
         pageToken = pageResolved.nextPageToken;
         
+        // Debug logging for each page
+        if (import.meta.env.DEV) {
+          console.log(`[AuthSync] Page ${authoritativeSyncProgress.pagesCompleted + 1}: ${pageResolved.ids?.length || 0} threads, nextToken: ${!!pageResolved.nextPageToken}`);
+        }
+        
         // Check if this page is empty
         if (!pageResolved.ids || !pageResolved.ids.length) {
           consecutiveEmptyPages++;
+          if (import.meta.env.DEV) {
+            console.log(`[AuthSync] Empty page ${consecutiveEmptyPages}, nextToken: ${!!pageResolved.nextPageToken}`);
+          }
           // Break if we get too many consecutive empty pages to prevent infinite loops
           if (consecutiveEmptyPages >= 5 || !pageToken) {
+            if (import.meta.env.DEV) {
+              console.log(`[AuthSync] Breaking due to ${consecutiveEmptyPages} consecutive empty pages or no nextToken`);
+            }
             break;
           }
           continue; // Don't increment page counter for empty pages
@@ -768,7 +804,7 @@
       
       // Log sync completion with stats
       if (import.meta.env.DEV) {
-        console.log(`[AuthSync] Completed: ${totalThreadsProcessed} threads processed, ${authoritativeSyncProgress.pagesCompleted} pages fetched`);
+        console.log(`[AuthSync] Completed: ${totalThreadsProcessed} threads processed, ${authoritativeSyncProgress.pagesCompleted} pages fetched, ${totalPagesAttempted} total attempts`);
       }
     } catch (e) {
       // Surface a subtle telemetry snackbar so user can retry if needed

@@ -362,7 +362,15 @@ export async function listThreadIdsByLabelId(labelId: string, maxResults = 25, p
   const data = await api<{ threads?: { id: string }[]; nextPageToken?: string }>(
     `/threads?${q.toString()}`
   );
-  return { ids: (data?.threads || []).map((t) => t.id), nextPageToken: data?.nextPageToken };
+  
+  const result = { ids: (data?.threads || []).map((t) => t.id), nextPageToken: data?.nextPageToken };
+  
+  // Debug logging for thread listing
+  if (import.meta.env.DEV && labelId === 'INBOX') {
+    console.log(`[Gmail API] listThreadIds: ${result.ids.length} threads, nextToken: ${!!result.nextPageToken}, pageToken: ${pageToken || 'none'}`);
+  }
+  
+  return result;
 }
 
 export async function getMessageMetadata(id: string): Promise<GmailMessage> {
