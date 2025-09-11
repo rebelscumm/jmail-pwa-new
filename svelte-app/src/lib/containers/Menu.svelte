@@ -1,11 +1,19 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
 
-  let { children }: { children: Snippet } = $props();
+  let { 
+    children, 
+    class: className = "",
+    ...restProps
+  }: { 
+    children: Snippet;
+    class?: string;
+  } & Record<string, any> = $props();
 </script>
 
 <div
-  class="m3-container"
+  class="m3-container {className}"
+  {...restProps}
   role="menu"
   aria-orientation="vertical"
   aria-label="Menu"
@@ -42,6 +50,13 @@
     background-color: rgb(var(--m3-scheme-surface-container));
     z-index: 10001; /* above list row so native pickers are visible */
     box-shadow: var(--m3-util-elevation-3);
+  }
+  
+  /* Allow history menu to override size constraints */
+  .m3-container.history-menu {
+    max-width: none !important;
+    min-width: none !important;
+    width: auto !important;
   }
   @media (max-width: 480px) {
     .m3-container {

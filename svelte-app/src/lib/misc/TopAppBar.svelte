@@ -846,7 +846,7 @@ import { precomputeStatus } from '$lib/stores/precompute';
       {/snippet}
     </Button>
 
-    <SplitButton variant="filled" x="inner" y="down" onclick={() => doUndo(1)} on:toggle={(e) => { if (e.detail) refreshUndo(); }}>
+    <SplitButton variant="filled" x="right" y="down" onclick={() => doUndo(1)} on:toggle={(e) => { if (e.detail) refreshUndo(); }}>
       {#snippet children()}
         <Icon icon={iconUndo} />
         <span class="label">Undo</span>
@@ -864,7 +864,7 @@ import { precomputeStatus } from '$lib/stores/precompute';
       {/snippet}
     </SplitButton>
 
-    <SplitButton variant="tonal" x="inner" y="down" onclick={() => doRedo(1)} on:toggle={(e) => { if (e.detail) refreshRedo(); }}>
+    <SplitButton variant="tonal" x="right" y="down" onclick={() => doRedo(1)} on:toggle={(e) => { if (e.detail) refreshRedo(); }}>
       {#snippet children()}
         <Icon icon={iconRedo} />
         <span class="label">Redo</span>
@@ -1295,12 +1295,13 @@ import { precomputeStatus } from '$lib/stores/precompute';
   .about .v { color: rgb(var(--m3-scheme-on-surface)); font-variant-numeric: tabular-nums; }
   /* Fix the history menu sizing issues */
   :global(.history-menu.m3-container) {
-    min-width: 16rem !important;
-    max-width: min(28rem, calc(100vw - 2rem)) !important;
-    min-height: 8rem !important;
-    max-height: min(24rem, calc(100vh - 4rem)) !important;
+    min-width: 20rem !important;
+    max-width: min(32rem, calc(100vw - 2rem)) !important;
+    min-height: auto !important;
+    max-height: min(20rem, calc(100vh - 4rem)) !important;
     overflow-x: hidden !important;
     overflow-y: auto !important;
+    width: auto !important;
   }
   
   /* Allow text wrapping in history menu items */

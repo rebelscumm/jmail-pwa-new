@@ -226,6 +226,14 @@
 	details.align-right > :global(:not(summary)) { right: 0; }
 	details.align-down > :global(:not(summary)) { top: 100%; }
 	details.align-up > :global(:not(summary)) { bottom: 100%; }
+	
+	/* Special positioning for history menu to allow it to be wider */
+	details > :global(.history-menu.m3-container) {
+		right: 0 !important;
+		left: auto !important;
+		top: 100% !important;
+		margin-top: 0.25rem !important;
+	}
 
   .m3-container {
     print-color-adjust: exact;
