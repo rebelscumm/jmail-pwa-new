@@ -700,8 +700,14 @@
             
             // Convert message IDs to thread IDs by fetching message metadata
             if (messagePage?.ids?.length) {
+              if (import.meta.env.DEV) {
+                console.log(`[AuthSync] Converting ${messagePage.ids.length} message IDs to thread IDs`);
+              }
               const msgs = await mapWithConcurrency(messagePage.ids, 4, (id: string) => getMessageMetadata(id));
               const threadIds = [...new Set(msgs.map(m => m.threadId))]; // Deduplicate thread IDs
+              if (import.meta.env.DEV) {
+                console.log(`[AuthSync] Converted to ${threadIds.length} unique thread IDs from ${msgs.length} messages`);
+              }
               page = { ids: threadIds, nextPageToken: messagePage.nextPageToken };
             } else {
               page = { ids: [], nextPageToken: messagePage?.nextPageToken };

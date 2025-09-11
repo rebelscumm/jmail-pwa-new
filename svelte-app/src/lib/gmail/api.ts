@@ -333,10 +333,20 @@ export async function listInboxMessageIds(maxResults = 25, pageToken?: string): 
   const q = new URLSearchParams({ maxResults: String(maxResults) });
   q.append('labelIds', 'INBOX');
   if (pageToken) q.set('pageToken', pageToken);
+  
+  if (import.meta.env.DEV) {
+    console.log(`[Gmail API] listInboxMessageIds: maxResults=${maxResults}, pageToken=${pageToken || 'none'}, query=${q.toString()}`);
+  }
+  
   const data = await api<{ messages?: { id: string }[]; nextPageToken?: string }>(
     `/messages?${q.toString()}`
   );
   const ids = (data?.messages || []).map((m) => m.id);
+  
+  if (import.meta.env.DEV) {
+    console.log(`[Gmail API] listInboxMessageIds response: ${ids.length} messages, nextToken: ${!!data?.nextPageToken}, resultSample:`, ids.slice(0, 3));
+  }
+  
   if (!ids.length) {
     pushGmailDiag({ type: 'inbox_empty', fn: 'listInboxMessageIds', params: { maxResults, pageToken, labelIds: 'INBOX' }, data: summarizeListData(data) });
   } else {

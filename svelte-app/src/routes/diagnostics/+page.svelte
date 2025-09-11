@@ -35,6 +35,9 @@ let parsedDiag: any = null;
 let parseError: string | null = null;
 let diagSummary: Record<string, any> | null = null;
 
+// Inbox sync diagnostics state
+let inboxDiagnostics: Record<string, any> | null = null;
+
 // Authentication management functions
 function clearAuthCache() {
 	try {
@@ -686,6 +689,182 @@ function clearClientCookies() {
  	} catch (e) { addLog('error', ['clearClientCookies failed', e]); }
 }
 
+// Inbox sync diagnostic functions
+async function debugInboxSync() {
+	try {
+		addLog('info', ['Starting inbox sync debug...']);
+		
+		// Import necessary functions
+		const { getDB } = await import('$lib/db/indexeddb');
+		const { listInboxMessageIds, getLabel } = await import('$lib/gmail/api');
+		
+		const db = await getDB();
+		
+		// Get local data
+		const localThreads = await db.getAll('threads');
+		const localMessages = await db.getAll('messages');
+		const localInboxThreads = localThreads.filter((t: any) => 
+			Array.isArray(t.labelIds) && t.labelIds.includes('INBOX')
+		);
+		
+		// Get Gmail data (first page only to avoid runaway)
+		let gmailMessageIds: string[] = [];
+		let gmailInboxLabel: any = null;
+		try {
+			const page = await listInboxMessageIds(50); // Small page for diagnostics
+			gmailMessageIds = page.ids || [];
+			gmailInboxLabel = await getLabel('INBOX');
+		} catch (e) {
+			addLog('error', ['Failed to fetch Gmail data', e]);
+		}
+		
+		// Get trailing holds
+		const { trailingHolds } = await import('$lib/stores/holds');
+		let currentHolds: Record<string, number> = {};
+		trailingHolds.subscribe(holds => { currentHolds = holds; })();
+		
+		const now = Date.now();
+		const activeHolds = Object.entries(currentHolds).filter(([, timestamp]) => timestamp > now);
+		
+		inboxDiagnostics = {
+			timestamp: new Date().toISOString(),
+			localData: {
+				totalThreads: localThreads.length,
+				totalMessages: localMessages.length,
+				inboxThreads: localInboxThreads.length,
+				inboxThreadIds: localInboxThreads.map((t: any) => t.threadId).slice(0, 10)
+			},
+			gmailData: {
+				firstPageMessageIds: gmailMessageIds.length,
+				inboxLabelStats: gmailInboxLabel ? {
+					messagesTotal: gmailInboxLabel.messagesTotal,
+					messagesUnread: gmailInboxLabel.messagesUnread,
+					threadsTotal: gmailInboxLabel.threadsTotal,
+					threadsUnread: gmailInboxLabel.threadsUnread
+				} : null
+			},
+			trailingHolds: {
+				total: Object.keys(currentHolds).length,
+				active: activeHolds.length,
+				activeThreadIds: activeHolds.map(([threadId]) => threadId)
+			}
+		};
+		
+		addLog('info', ['Inbox sync debug completed', inboxDiagnostics]);
+	} catch (e) {
+		addLog('error', ['debugInboxSync failed', e]);
+		inboxDiagnostics = { error: String(e) };
+	}
+}
+
+async function compareInboxCounts() {
+	try {
+		addLog('info', ['Comparing local vs Gmail inbox counts...']);
+		
+		const { getDB } = await import('$lib/db/indexeddb');
+		const { getLabel } = await import('$lib/gmail/api');
+		
+		const db = await getDB();
+		const localThreads = await db.getAll('threads');
+		const localInboxThreads = localThreads.filter((t: any) => 
+			Array.isArray(t.labelIds) && t.labelIds.includes('INBOX')
+		);
+		
+		const gmailInboxLabel = await getLabel('INBOX');
+		
+		const comparison = {
+			local: {
+				inboxThreads: localInboxThreads.length,
+				totalThreads: localThreads.length
+			},
+			gmail: {
+				threadsTotal: gmailInboxLabel.threadsTotal,
+				threadsUnread: gmailInboxLabel.threadsUnread,
+				messagesTotal: gmailInboxLabel.messagesTotal,
+				messagesUnread: gmailInboxLabel.messagesUnread
+			},
+			discrepancy: {
+				threadCountDiff: localInboxThreads.length - (gmailInboxLabel.threadsTotal || 0)
+			}
+		};
+		
+		inboxDiagnostics = { ...inboxDiagnostics, comparison };
+		addLog('info', ['Count comparison completed', comparison]);
+	} catch (e) {
+		addLog('error', ['compareInboxCounts failed', e]);
+	}
+}
+
+async function clearLocalInboxData() {
+	try {
+		addLog('info', ['Clearing local inbox data...']);
+		
+		const { getDB } = await import('$lib/db/indexeddb');
+		const { trailingHolds } = await import('$lib/stores/holds');
+		
+		const db = await getDB();
+		
+		// Clear threads and messages
+		await db.clear('threads');
+		await db.clear('messages');
+		
+		// Clear trailing holds
+		trailingHolds.set({});
+		
+		// Clear optimistic counters
+		const { resetOptimisticCounters } = await import('$lib/stores/optimistic-counters');
+		resetOptimisticCounters();
+		
+		addLog('info', ['Local inbox data cleared successfully']);
+		alert('Local inbox data cleared. Refresh the page to reload from Gmail.');
+	} catch (e) {
+		addLog('error', ['clearLocalInboxData failed', e]);
+		alert('Failed to clear local data: ' + String(e));
+	}
+}
+
+async function testGmailPagination() {
+	try {
+		addLog('info', ['Testing Gmail API pagination...']);
+		
+		const { listInboxMessageIds } = await import('$lib/gmail/api');
+		
+		let pageCount = 0;
+		let totalMessages = 0;
+		let pageToken: string | undefined = undefined;
+		const maxPages = 5; // Safety limit for testing
+		const results: any[] = [];
+		
+		while (pageCount < maxPages) {
+			const page = await listInboxMessageIds(10, pageToken); // Small pages for testing
+			pageCount++;
+			totalMessages += page.ids.length;
+			
+			results.push({
+				page: pageCount,
+				messageCount: page.ids.length,
+				hasNextToken: !!page.nextPageToken,
+				sampleIds: page.ids.slice(0, 3)
+			});
+			
+			if (!page.nextPageToken) break;
+			pageToken = page.nextPageToken;
+		}
+		
+		const paginationTest = {
+			pagesRequested: pageCount,
+			totalMessages,
+			stoppedEarly: pageCount >= maxPages && pageToken,
+			results
+		};
+		
+		inboxDiagnostics = { ...inboxDiagnostics, paginationTest };
+		addLog('info', ['Gmail pagination test completed', paginationTest]);
+	} catch (e) {
+		addLog('error', ['testGmailPagination failed', e]);
+	}
+}
+
 loadApiBaseOverride();
 
 </script>
@@ -807,6 +986,23 @@ pre.diag {
 					<summary>Show parsed diagnostics</summary>
 					<pre class="diag">{JSON.stringify(parsedDiag, null, 2)}</pre>
 				</details>
+			</div>
+		{/if}
+	</div>
+
+	<div class="wizard">
+		<h2>Inbox Sync Diagnostics</h2>
+		<p>Debug inbox sync issues - excessive pages, wrong email counts, stale data.</p>
+		<div class="controls">
+			<button on:click={debugInboxSync}>Debug inbox sync state</button>
+			<button on:click={compareInboxCounts}>Compare local vs Gmail counts</button>
+			<button on:click={clearLocalInboxData}>Clear local inbox data</button>
+			<button on:click={testGmailPagination}>Test Gmail API pagination</button>
+		</div>
+		{#if inboxDiagnostics}
+			<div class="summary">
+				<strong>Inbox Sync Diagnostics</strong>
+				<pre style="white-space:pre-wrap">{JSON.stringify(inboxDiagnostics, null, 2)}</pre>
 			</div>
 		{/if}
 	</div>
