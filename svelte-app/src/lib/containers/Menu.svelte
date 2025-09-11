@@ -62,5 +62,14 @@
     .m3-container {
       max-width: calc(100vw - 1rem);
     }
+    /* Ensure history menu uses full width on mobile too */
+    .m3-container.history-menu {
+      max-width: calc(100vw - 2rem) !important;
+      width: calc(100vw - 2rem) !important;
+    }
+  }
+  /* Make sure the menu's inner content is left-aligned while the container is centered */
+  .m3-container.history-menu {
+    text-align: left !important;
   }
 </style>

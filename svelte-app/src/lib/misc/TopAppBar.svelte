@@ -855,10 +855,14 @@ import { precomputeStatus } from '$lib/stores/precompute';
         <Menu class="history-menu">
           {#if undoItems.length}
             {#each undoItems as it, idx}
-              <MenuItem onclick={() => doUndo(idx + 1)}>{it.description}</MenuItem>
+              <MenuItem onclick={() => doUndo(idx + 1)}>
+                <span class="history-text">{it.description}</span>
+              </MenuItem>
             {/each}
           {:else}
-            <MenuItem disabled={true} onclick={() => {}}>No actions to undo</MenuItem>
+            <MenuItem disabled={true} onclick={() => {}}>
+              <span class="history-text">No actions to undo</span>
+            </MenuItem>
           {/if}
         </Menu>
       {/snippet}
@@ -873,10 +877,14 @@ import { precomputeStatus } from '$lib/stores/precompute';
         <Menu class="history-menu">
           {#if redoItems.length}
             {#each redoItems as it, idx}
-              <MenuItem onclick={() => doRedo(idx + 1)}>{it.description}</MenuItem>
+              <MenuItem onclick={() => doRedo(idx + 1)}>
+                <span class="history-text">{it.description}</span>
+              </MenuItem>
             {/each}
           {:else}
-            <MenuItem disabled={true} onclick={() => {}}>No actions to redo</MenuItem>
+            <MenuItem disabled={true} onclick={() => {}}>
+              <span class="history-text">No actions to redo</span>
+            </MenuItem>
           {/if}
         </Menu>
       {/snippet}
@@ -1295,13 +1303,14 @@ import { precomputeStatus } from '$lib/stores/precompute';
   .about .v { color: rgb(var(--m3-scheme-on-surface)); font-variant-numeric: tabular-nums; }
   /* Fix the history menu sizing issues */
   :global(.history-menu.m3-container) {
-    min-width: 20rem !important;
-    max-width: min(32rem, calc(100vw - 2rem)) !important;
+    min-width: 24rem !important;
+    max-width: calc(100vw - 3rem) !important;
+    width: calc(100vw - 3rem) !important;
     min-height: auto !important;
-    max-height: min(20rem, calc(100vh - 4rem)) !important;
+    height: auto !important; /* grow to fit content up to max-height */
+    max-height: calc(100vh - 4rem) !important; /* almost full viewport height */
     overflow-x: hidden !important;
     overflow-y: auto !important;
-    width: auto !important;
   }
   
   /* Allow text wrapping in history menu items */
@@ -1312,6 +1321,20 @@ import { precomputeStatus } from '$lib/stores/precompute';
     min-height: 3rem !important;
     height: auto !important;
     padding: 0.75rem 1rem !important;
+  }
+  
+  /*
+    Force left alignment for history menu items.
+    The MenuItem component renders a button with class "item" that has justify-content: center.
+    We need to override this to align the text to the left.
+  */
+  :global(.history-menu button.item) {
+    justify-content: flex-start !important;
+    text-align: left !important;
+  }
+  :global(.history-menu .history-text) {
+    display: block !important;
+    text-align: left !important;
   }
   :global(.chip-icon) { width:1.1rem; height:1.1rem; flex:0 0 auto; }
 </style>

@@ -227,12 +227,23 @@
 	details.align-down > :global(:not(summary)) { top: 100%; }
 	details.align-up > :global(:not(summary)) { bottom: 100%; }
 	
-	/* Special positioning for history menu to allow it to be wider */
+	/* Special positioning for history menu to allow it to be wider and centered */
 	details > :global(.history-menu.m3-container) {
-		right: 0 !important;
-		left: auto !important;
-		top: 100% !important;
-		margin-top: 0.25rem !important;
+		/* Use fixed positioning so the menu isn't clipped by parent stacking contexts */
+		position: fixed !important;
+		left: 50% !important;
+		top: 8vh !important; /* place near top but leave some breathing room */
+		transform: translateX(-50%) !important;
+		margin: 0 !important;
+		padding-top: 0.5rem !important;
+		width: calc(100vw - 3rem) !important;
+		max-width: calc(100vw - 3rem) !important;
+		max-height: calc(100vh - 6rem) !important;
+		overflow-x: hidden !important;
+		overflow-y: auto !important;
+		z-index: 10003 !important;
+		box-shadow: var(--m3-util-elevation-4) !important;
+		border-radius: var(--m3-util-rounding-medium) !important;
 	}
 
   .m3-container {
