@@ -750,15 +750,22 @@
         
         const ids = pageResolved.ids;
         totalThreadsProcessed += ids.length;
+        
+        // Add all thread IDs from this page to seenThreadIds for proper reconciliation
+        for (const tid of ids) {
+          seenThreadIds.add(tid);
+        }
+        
         // For threads on this page, fetch summaries only for those missing or
         // needing update in local DB to keep network usage reasonable.
         const toFetch: string[] = [];
-        for (const tid of page.ids) {
+        for (const tid of ids) {
           try {
             const existing = await db.get('threads', tid) as any | undefined;
             if (!existing) toFetch.push(tid);
-            seenThreadIds.add(tid);
-          } catch (_) { seenThreadIds.add(tid); toFetch.push(tid); }
+          } catch (_) { 
+            toFetch.push(tid); 
+          }
         }
         // Fetch thread summaries with modest concurrency
         const fetched = await mapWithConcurrency(toFetch, 4, async (tid) => {
@@ -781,16 +788,30 @@
       }
 
       // Reconcile threads in DB: remove INBOX label from threads not seen
+      if (import.meta.env.DEV) {
+        console.log(`[AuthSync] Reconciliation: ${seenThreadIds.size} threads seen from Gmail`);
+      }
+      
       const txThreads = db.transaction('threads', 'readwrite');
       const allThreads = await txThreads.store.getAll();
+      let threadsUpdated = 0;
+      
       for (const t of (allThreads || [])) {
         try {
           const labels = Array.isArray(t.labelIds) ? t.labelIds.slice() : [];
           if (labels.includes('INBOX') && !seenThreadIds.has(t.threadId)) {
             const next = { ...t, labelIds: labels.filter((l) => l !== 'INBOX') } as any;
             await txThreads.store.put(next);
+            threadsUpdated++;
+            if (import.meta.env.DEV) {
+              console.log(`[AuthSync] Removed INBOX label from thread: ${t.threadId}`);
+            }
           }
         } catch (_) {}
+      }
+      
+      if (import.meta.env.DEV) {
+        console.log(`[AuthSync] Reconciliation complete: ${threadsUpdated} threads updated`);
       }
       await txThreads.done;
       authoritativeSyncProgress = { ...authoritativeSyncProgress, running: false };

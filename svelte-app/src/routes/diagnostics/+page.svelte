@@ -1,5 +1,10 @@
 <script lang="ts">
 import { onMount, onDestroy } from 'svelte';
+import Button from '$lib/buttons/Button.svelte';
+import Card from '$lib/containers/Card.svelte';
+import iconCopy from '@ktibow/iconset-material-symbols/content-copy-outline';
+import iconSelectAll from '@ktibow/iconset-material-symbols/select-all';
+import Icon from '$lib/misc/_icon.svelte';
 
 type LogEntry = { level: 'log' | 'warn' | 'error' | 'info'; msg: any[]; ts: string };
 
@@ -320,6 +325,50 @@ async function copyDiagnostics() {
 	} catch (e) {
 		addLog('error', ['failed to copy diagnostics', e]);
 		alert('Failed to copy diagnostics: ' + String(e));
+	}
+}
+
+// Copy functions for individual sections
+async function copySection(sectionName: string, data: any) {
+	try {
+		const content = JSON.stringify(data, null, 2);
+		await navigator.clipboard.writeText(content);
+		addLog('info', [`copied ${sectionName} to clipboard`]);
+		alert(`${sectionName} copied to clipboard`);
+	} catch (e) {
+		addLog('error', [`failed to copy ${sectionName}`, e]);
+		alert(`Failed to copy ${sectionName}: ` + String(e));
+	}
+}
+
+async function copyAllSections() {
+	try {
+		const allData = {
+			timestamp: new Date().toISOString(),
+			userAgent: navigator.userAgent,
+			environmentChecks: serverProbeResult,
+			profileResult,
+			parsedDiagnostics: parsedDiag,
+			diagnosticsSummary: diagSummary,
+			inboxDiagnostics,
+			queueDiagnostics,
+			endpointResults,
+			logs: logs.slice(-200),
+			authCache: {
+				jmail_last_interactive_auth: localStorage.getItem('jmail_last_interactive_auth'),
+				jmail_last_scope_auth: localStorage.getItem('jmail_last_scope_auth'),
+				jmail_last_server_redirect: localStorage.getItem('jmail_last_server_redirect'),
+				LOCALHOST_ACCESS_TOKEN: localStorage.getItem('LOCALHOST_ACCESS_TOKEN') ? 'Present' : 'Not found',
+				LOCALHOST_TOKEN_EXPIRY: localStorage.getItem('LOCALHOST_TOKEN_EXPIRY')
+			}
+		};
+		const content = JSON.stringify(allData, null, 2);
+		await navigator.clipboard.writeText(content);
+		addLog('info', ['copied all diagnostics sections to clipboard']);
+		alert('All diagnostics sections copied to clipboard');
+	} catch (e) {
+		addLog('error', ['failed to copy all diagnostics sections', e]);
+		alert('Failed to copy all diagnostics sections: ' + String(e));
 	}
 }
 
@@ -865,6 +914,65 @@ async function testGmailPagination() {
 	}
 }
 
+async function identifyStaleThreads() {
+	try {
+		addLog('info', ['Identifying stale threads...']);
+		
+		const { getDB } = await import('$lib/db/indexeddb');
+		const { listInboxMessageIds, getMessageMetadata } = await import('$lib/gmail/api');
+		
+		const db = await getDB();
+		
+		// Get all local inbox threads
+		const localThreads = await db.getAll('threads');
+		const localInboxThreads = localThreads.filter((t: any) => 
+			Array.isArray(t.labelIds) && t.labelIds.includes('INBOX')
+		);
+		
+		// Get all Gmail thread IDs (fetch all pages safely)
+		const gmailThreadIds = new Set<string>();
+		let pageToken: string | undefined = undefined;
+		let pageCount = 0;
+		const maxPages = 20; // Safety limit
+		
+		while (pageCount < maxPages) {
+			const page = await listInboxMessageIds(100, pageToken);
+			if (!page.ids?.length) break;
+			
+			// Convert message IDs to thread IDs
+			const msgs = await Promise.all(page.ids.map(id => getMessageMetadata(id).catch(() => null)));
+			const threadIds = msgs.filter(m => m).map(m => m!.threadId);
+			threadIds.forEach(tid => gmailThreadIds.add(tid));
+			
+			pageCount++;
+			if (!page.nextPageToken) break;
+			pageToken = page.nextPageToken;
+		}
+		
+		// Find stale threads (in local DB but not in Gmail)
+		const staleThreads = localInboxThreads.filter((t: any) => 
+			!gmailThreadIds.has(t.threadId)
+		);
+		
+		const staleAnalysis = {
+			localInboxThreads: localInboxThreads.length,
+			gmailThreadIds: gmailThreadIds.size,
+			staleThreads: staleThreads.length,
+			staleThreadDetails: staleThreads.map((t: any) => ({
+				threadId: t.threadId,
+				labels: t.labelIds,
+				lastMsgSubject: t.lastMsgMeta?.subject,
+				lastMsgFrom: t.lastMsgMeta?.from
+			}))
+		};
+		
+		inboxDiagnostics = { ...inboxDiagnostics, staleAnalysis };
+		addLog('info', ['Stale thread analysis completed', staleAnalysis]);
+	} catch (e) {
+		addLog('error', ['identifyStaleThreads failed', e]);
+	}
+}
+
 loadApiBaseOverride();
 
 </script>
@@ -875,62 +983,175 @@ pre.diag {
   overflow: auto; 
   background: rgb(var(--m3-scheme-surface-variant)); 
   color: rgb(var(--m3-scheme-on-surface-variant)); 
-  padding: 8px; 
-  border-radius: 6px;
+  padding: 1rem; 
+  border-radius: var(--m3-util-rounding-medium);
+  font-family: 'Roboto Mono', monospace;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
 }
-.controls { display:flex; gap:8px; margin-bottom:8px }
-.wizard { 
-  margin: 0.5rem 0 1rem 0; 
-  padding: 0.5rem; 
-  border: 1px solid rgb(var(--m3-scheme-outline-variant)); 
-  border-radius: 6px; 
-  background: rgb(var(--m3-scheme-surface));
+.controls { 
+  display: flex; 
+  gap: 0.5rem; 
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
 }
-.step { margin-bottom: 0.5rem; }
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+.section-header h2, .section-header h3 {
+  margin: 0;
+  color: rgb(var(--m3-scheme-on-surface));
+}
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+:global(.copy-button) {
+  flex-shrink: 0;
+}
+.step { 
+  margin-bottom: 1rem;
+  color: rgb(var(--m3-scheme-on-surface-variant));
+}
 .pastebox { 
-  width:100%; 
+  width: 100%; 
   min-height: 8rem; 
-  font-family: monospace; 
-  background: rgb(var(--m3-scheme-surface)); 
+  font-family: 'Roboto Mono', monospace; 
+  background: rgb(var(--m3-scheme-surface-container)); 
   color: rgb(var(--m3-scheme-on-surface)); 
   border: 1px solid rgb(var(--m3-scheme-outline));
+  border-radius: var(--m3-util-rounding-medium);
+  padding: 1rem;
+  resize: vertical;
 }
 .summary { 
   background: rgb(var(--m3-scheme-surface-variant)); 
   color: rgb(var(--m3-scheme-on-surface-variant)); 
-  padding: 0.5rem; 
-  border-radius: 6px; 
-  margin-top: 0.5rem; 
+  padding: 1rem; 
+  border-radius: var(--m3-util-rounding-medium); 
+  margin-top: 1rem; 
+}
+.main-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 2rem;
+}
+.main-header h1 {
+  margin: 0;
+  color: rgb(var(--m3-scheme-on-surface));
+}
+.copy-all-container {
+  display: flex;
+  gap: 0.5rem;
+}
+
+/* Add spacing between cards */
+:global(.m3-container + .m3-container) {
+  margin-top: 1.5rem;
 }
 </style>
 
 <div>
-	<h1>Diagnostics</h1>
-	<div class="controls">
-		<button on:click={runStep1EnvChecks}>Run environment checks</button>
-		<button on:click={tryVerifyServerSession} disabled={verifying}>Verify server session</button>
-		<button on:click={startServerLogin}>Start server login</button>
-		<button on:click={copyDiagnostics}>Copy diagnostics to clipboard</button>
-		<button on:click={clearLogs}>Clear client logs</button>
+	<div class="main-header">
+		<h1>Diagnostics</h1>
+		<div class="copy-all-container">
+			<Button variant="tonal" iconType="left" onclick={copyAllSections}>
+				<Icon icon={iconSelectAll} />
+				Copy All Sections
+			</Button>
+		</div>
 	</div>
+	
+	<Card variant="outlined">
+		<div class="section-header">
+			<div class="section-title">
+				<h2>Environment & Session</h2>
+			</div>
+			<Button variant="text" iconType="left" class="copy-button" onclick={() => copySection('Environment & Session', { serverProbeResult, profileResult, verifying, step })}>
+				<Icon icon={iconCopy} />
+				Copy Section
+			</Button>
+		</div>
+		<div class="controls">
+			<Button variant="filled" onclick={runStep1EnvChecks}>Run environment checks</Button>
+			<Button variant="filled" onclick={tryVerifyServerSession} disabled={verifying}>
+				{verifying ? 'Verifying...' : 'Verify server session'}
+			</Button>
+			<Button variant="tonal" onclick={startServerLogin}>Start server login</Button>
+			<Button variant="outlined" onclick={copyDiagnostics}>Copy diagnostics to clipboard</Button>
+			<Button variant="text" color="error" onclick={clearLogs}>Clear client logs</Button>
+		</div>
+	</Card>
 
-	<div class="controls">
-		<h3>Authentication Management</h3>
-		<button on:click={clearAuthCache}>Clear authentication cache</button>
-		<button on:click={openAuthSettings}>Open authentication settings</button>
-		<button on:click={resetAuthRateLimit}>Reset authentication rate limits</button>
-	</div>
+	<Card variant="outlined">
+		<div class="section-header">
+			<div class="section-title">
+				<h3>Authentication Management</h3>
+			</div>
+			<Button variant="text" iconType="left" class="copy-button" onclick={() => copySection('Authentication Management', { 
+				authCache: {
+					jmail_last_interactive_auth: localStorage.getItem('jmail_last_interactive_auth'),
+					jmail_last_scope_auth: localStorage.getItem('jmail_last_scope_auth'),
+					jmail_last_server_redirect: localStorage.getItem('jmail_last_server_redirect')
+				}
+			})}>
+				<Icon icon={iconCopy} />
+				Copy Section
+			</Button>
+		</div>
+		<div class="controls">
+			<Button variant="tonal" onclick={clearAuthCache}>Clear authentication cache</Button>
+			<Button variant="outlined" onclick={openAuthSettings}>Open authentication settings</Button>
+			<Button variant="outlined" onclick={resetAuthRateLimit}>Reset authentication rate limits</Button>
+		</div>
+	</Card>
 
-	<div class="controls">
-		<h3>Localhost Authentication Setup</h3>
-		<button on:click={configureLocalhostClientId}>Configure localhost Google Client ID</button>
-		<button on:click={checkLocalhostAuthStatus}>Check localhost auth status</button>
-		<button on:click={setupServerAuth}>Setup server authentication (SWA CLI)</button>
-		<button on:click={showOAuthInstructions}>Show OAuth setup instructions</button>
-	</div>
+	<Card variant="outlined">
+		<div class="section-header">
+			<div class="section-title">
+				<h3>Localhost Authentication Setup</h3>
+			</div>
+			<Button variant="text" iconType="left" class="copy-button" onclick={async () => {
+				const localhostAuthData = {
+					clientIds: {
+						LOCALHOST_GOOGLE_CLIENT_ID: localStorage.getItem('LOCALHOST_GOOGLE_CLIENT_ID'),
+						DEV_GOOGLE_CLIENT_ID: localStorage.getItem('DEV_GOOGLE_CLIENT_ID'),
+						VITE_GOOGLE_CLIENT_ID: import.meta.env.VITE_GOOGLE_CLIENT_ID
+					},
+					tokens: {
+						LOCALHOST_ACCESS_TOKEN: localStorage.getItem('LOCALHOST_ACCESS_TOKEN') ? 'Present' : 'Not found',
+						LOCALHOST_TOKEN_EXPIRY: localStorage.getItem('LOCALHOST_TOKEN_EXPIRY')
+					}
+				};
+				await copySection('Localhost Authentication Setup', localhostAuthData);
+			}}>
+				<Icon icon={iconCopy} />
+				Copy Section
+			</Button>
+		</div>
+		<div class="controls">
+			<Button variant="filled" onclick={configureLocalhostClientId}>Configure localhost Google Client ID</Button>
+			<Button variant="tonal" onclick={checkLocalhostAuthStatus}>Check localhost auth status</Button>
+			<Button variant="outlined" onclick={setupServerAuth}>Setup server authentication (SWA CLI)</Button>
+			<Button variant="text" onclick={showOAuthInstructions}>Show OAuth setup instructions</Button>
+		</div>
+	</Card>
 
-	<div class="wizard">
-		<h2>Wizard</h2>
+	<Card variant="filled">
+		<div class="section-header">
+			<div class="section-title">
+				<h2>Setup Wizard</h2>
+			</div>
+			<Button variant="text" iconType="left" class="copy-button" onclick={() => copySection('Setup Wizard', { step, serverProbeResult, serverProbeError, profileResult, verifying })}>
+				<Icon icon={iconCopy} />
+				Copy Section
+			</Button>
+		</div>
 		{#if step === 1}
 			<div class="step">
 				<p>Step 1 — Environment checks. Click "Run environment checks" to probe server endpoints and check client runtime.</p>
@@ -943,7 +1164,7 @@ pre.diag {
 					<pre class="diag">{JSON.stringify(serverProbeResult, null, 2)}</pre>
 				{/if}
 				{#if serverProbeError}
-					<div class="warn">Probe error: {serverProbeError}</div>
+					<div style="color: rgb(var(--m3-scheme-error)); padding: 0.5rem; background: rgb(var(--m3-scheme-error-container) / 0.1); border-radius: var(--m3-util-rounding-small); margin-top: 0.5rem;">Probe error: {serverProbeError}</div>
 				{/if}
 			</div>
 		{/if}
@@ -960,19 +1181,27 @@ pre.diag {
 				{/if}
 			</div>
 		{/if}
-	</div>
+	</Card>
 
-	<div class="wizard">
-		<h2>Paste diagnostics</h2>
-		<p>Paste diagnostics JSON (from the "Copy diagnostics to clipboard" button or saved diagnostics) then click "Process" to summarize and surface auth-related findings.</p>
+	<Card variant="outlined">
+		<div class="section-header">
+			<div class="section-title">
+				<h2>Paste Diagnostics</h2>
+			</div>
+			<Button variant="text" iconType="left" class="copy-button" onclick={() => copySection('Paste Diagnostics', { parsedDiag, diagSummary, parseError, pastedText: pastedText ? 'Present' : 'Empty' })}>
+				<Icon icon={iconCopy} />
+				Copy Section
+			</Button>
+		</div>
+		<p style="color: rgb(var(--m3-scheme-on-surface-variant)); margin-bottom: 1rem;">Paste diagnostics JSON (from the "Copy diagnostics to clipboard" button or saved diagnostics) then click "Process" to summarize and surface auth-related findings.</p>
 		<textarea class="pastebox" bind:value={pastedText} placeholder='Paste diagnostics JSON here'></textarea>
-		<div style="display:flex; gap:0.5rem; margin-top:0.5rem">
-			<button on:click={processPastedDiagnostics}>Process pasted diagnostics</button>
-			<button on:click={async ()=>{ const ok = await copyParsedDiagnostics(); if(ok) alert('Parsed diagnostics copied'); else alert('Failed to copy parsed diagnostics'); }}>Copy parsed diagnostics</button>
-			<button on:click={submitParsedDiagnostics} disabled={!parsedDiag}>Submit parsed diagnostics</button>
+		<div class="controls">
+			<Button variant="filled" onclick={processPastedDiagnostics}>Process pasted diagnostics</Button>
+			<Button variant="tonal" onclick={async ()=>{ const ok = await copyParsedDiagnostics(); if(ok) alert('Parsed diagnostics copied'); else alert('Failed to copy parsed diagnostics'); }}>Copy parsed diagnostics</Button>
+			<Button variant="outlined" onclick={submitParsedDiagnostics} disabled={!parsedDiag}>Submit parsed diagnostics</Button>
 		</div>
 		{#if parseError}
-			<div class="warn">Parse error: {parseError}</div>
+			<div style="color: rgb(var(--m3-scheme-error)); padding: 1rem; background: rgb(var(--m3-scheme-error-container) / 0.1); border-radius: var(--m3-util-rounding-medium); margin-top: 1rem;">Parse error: {parseError}</div>
 		{/if}
 		{#if diagSummary}
 			<div class="summary">
@@ -981,23 +1210,32 @@ pre.diag {
 			</div>
 		{/if}
 		{#if parsedDiag}
-			<div style="margin-top:0.5rem">
+			<div style="margin-top: 1rem">
 				<details>
-					<summary>Show parsed diagnostics</summary>
+					<summary style="cursor: pointer; color: rgb(var(--m3-scheme-primary)); padding: 0.5rem; border-radius: var(--m3-util-rounding-small);">Show parsed diagnostics</summary>
 					<pre class="diag">{JSON.stringify(parsedDiag, null, 2)}</pre>
 				</details>
 			</div>
 		{/if}
-	</div>
+	</Card>
 
-	<div class="wizard">
-		<h2>Inbox Sync Diagnostics</h2>
-		<p>Debug inbox sync issues - excessive pages, wrong email counts, stale data.</p>
+	<Card variant="outlined">
+		<div class="section-header">
+			<div class="section-title">
+				<h2>Inbox Sync Diagnostics</h2>
+			</div>
+			<Button variant="text" iconType="left" class="copy-button" onclick={() => copySection('Inbox Sync Diagnostics', inboxDiagnostics)}>
+				<Icon icon={iconCopy} />
+				Copy Section
+			</Button>
+		</div>
+		<p style="color: rgb(var(--m3-scheme-on-surface-variant)); margin-bottom: 1rem;">Debug inbox sync issues - excessive pages, wrong email counts, stale data.</p>
 		<div class="controls">
-			<button on:click={debugInboxSync}>Debug inbox sync state</button>
-			<button on:click={compareInboxCounts}>Compare local vs Gmail counts</button>
-			<button on:click={clearLocalInboxData}>Clear local inbox data</button>
-			<button on:click={testGmailPagination}>Test Gmail API pagination</button>
+			<Button variant="filled" onclick={debugInboxSync}>Debug inbox sync state</Button>
+			<Button variant="tonal" onclick={compareInboxCounts}>Compare local vs Gmail counts</Button>
+			<Button variant="outlined" color="error" onclick={clearLocalInboxData}>Clear local inbox data</Button>
+			<Button variant="outlined" onclick={testGmailPagination}>Test Gmail API pagination</Button>
+			<Button variant="text" onclick={identifyStaleThreads}>Identify stale threads</Button>
 		</div>
 		{#if inboxDiagnostics}
 			<div class="summary">
@@ -1005,17 +1243,25 @@ pre.diag {
 				<pre style="white-space:pre-wrap">{JSON.stringify(inboxDiagnostics, null, 2)}</pre>
 			</div>
 		{/if}
-	</div>
+	</Card>
 
-	<div class="wizard">
-		<h2>Action Queue Diagnostics</h2>
-		<p>Diagnose issues with deletes, archives, snoozes not being saved properly.</p>
+	<Card variant="outlined">
+		<div class="section-header">
+			<div class="section-title">
+				<h2>Action Queue Diagnostics</h2>
+			</div>
+			<Button variant="text" iconType="left" class="copy-button" onclick={() => copySection('Action Queue Diagnostics', queueDiagnostics)}>
+				<Icon icon={iconCopy} />
+				Copy Section
+			</Button>
+		</div>
+		<p style="color: rgb(var(--m3-scheme-on-surface-variant)); margin-bottom: 1rem;">Diagnose issues with deletes, archives, snoozes not being saved properly.</p>
 		<div class="controls">
-			<button on:click={checkActionQueue}>Check action queue status</button>
-			<button on:click={checkJournal}>Check action journal</button>
-			<button on:click={forceFlushQueue}>Force flush queue</button>
-			<button on:click={clearFailedOps}>Clear failed operations</button>
-			<button on:click={checkFlushLoop}>Check flush loop status</button>
+			<Button variant="filled" onclick={checkActionQueue}>Check action queue status</Button>
+			<Button variant="tonal" onclick={checkJournal}>Check action journal</Button>
+			<Button variant="outlined" onclick={forceFlushQueue}>Force flush queue</Button>
+			<Button variant="outlined" color="error" onclick={clearFailedOps}>Clear failed operations</Button>
+			<Button variant="text" onclick={checkFlushLoop}>Check flush loop status</Button>
 		</div>
 		{#if queueDiagnostics}
 			<div class="summary">
@@ -1023,37 +1269,74 @@ pre.diag {
 				<pre style="white-space:pre-wrap">{JSON.stringify(queueDiagnostics, null, 2)}</pre>
 			</div>
 		{/if}
-	</div>
+	</Card>
 
-	<div class="wizard">
-		<h2>Guided actions</h2>
-		<p>Use these quick actions to validate API base, endpoints, and client cookies.</p>
-		<div style="display:flex; gap:0.5rem; align-items:center; margin-bottom:0.5rem">
-			<input placeholder="optional APP_BASE_URL override" bind:value={apiBaseOverride} style="width:60%" />
-			<button on:click={saveApiBaseOverride}>Save override</button>
-			<button on:click={() => { loadApiBaseOverride(); alert('Loaded override: ' + (apiBaseOverride || '(none)')); }}>Reload</button>
+	<Card variant="outlined">
+		<div class="section-header">
+			<div class="section-title">
+				<h2>Guided Actions</h2>
+			</div>
+			<Button variant="text" iconType="left" class="copy-button" onclick={() => copySection('Guided Actions', { apiBaseOverride, endpointResults })}>
+				<Icon icon={iconCopy} />
+				Copy Section
+			</Button>
 		</div>
-		<div style="display:flex; gap:0.5rem; margin-bottom:0.5rem">
-			<button on:click={() => checkEndpoint('/api/google-login')}>Check /api/google-login</button>
-			<button on:click={() => checkEndpoint('/api/google-callback')}>Check /api/google-callback</button>
-			<button on:click={() => checkEndpoint('/api/google-me')}>Check /api/google-me</button>
-			<button on:click={() => checkEndpoint('/api/gmail/profile')}>Check /api/gmail/profile</button>
+		<p style="color: rgb(var(--m3-scheme-on-surface-variant)); margin-bottom: 1rem;">Use these quick actions to validate API base, endpoints, and client cookies.</p>
+		<div style="display: flex; gap: 0.5rem; align-items: center; margin-bottom: 1rem; flex-wrap: wrap;">
+			<input 
+				placeholder="optional APP_BASE_URL override" 
+				bind:value={apiBaseOverride} 
+				style="
+					flex: 1;
+					min-width: 200px;
+					padding: 0.75rem 1rem;
+					border: 1px solid rgb(var(--m3-scheme-outline));
+					border-radius: var(--m3-util-rounding-small);
+					background: rgb(var(--m3-scheme-surface));
+					color: rgb(var(--m3-scheme-on-surface));
+					font-family: inherit;
+				" />
+			<Button variant="tonal" onclick={saveApiBaseOverride}>Save override</Button>
+			<Button variant="text" onclick={() => { loadApiBaseOverride(); alert('Loaded override: ' + (apiBaseOverride || '(none)')); }}>Reload</Button>
 		</div>
-		<div style="display:flex; gap:0.5rem; margin-bottom:0.5rem">
-			<button on:click={listClientCookies}>List client cookies</button>
-			<button on:click={clearClientCookies}>Clear client cookies (non-httpOnly)</button>
+		<div class="controls">
+			<Button variant="filled" onclick={() => checkEndpoint('/api/google-login')}>Check /api/google-login</Button>
+			<Button variant="filled" onclick={() => checkEndpoint('/api/google-callback')}>Check /api/google-callback</Button>
+			<Button variant="filled" onclick={() => checkEndpoint('/api/google-me')}>Check /api/google-me</Button>
+			<Button variant="filled" onclick={() => checkEndpoint('/api/gmail/profile')}>Check /api/gmail/profile</Button>
+		</div>
+		<div class="controls">
+			<Button variant="tonal" onclick={listClientCookies}>List client cookies</Button>
+			<Button variant="outlined" color="error" onclick={clearClientCookies}>Clear client cookies (non-httpOnly)</Button>
 		</div>
 		{#if Object.keys(endpointResults).length}
-			<div style="display:flex; gap:0.5rem; margin-bottom:0.5rem">
-				<button on:click={async ()=>{ try { await navigator.clipboard.writeText(JSON.stringify(endpointResults, null, 2)); alert('Copied endpoint results'); addLog('info',['copied endpointResults']); } catch(e){ alert('Copy failed: '+String(e)); } }}>Copy endpoint results</button>
-				<button on:click={async ()=>{ const full = { endpointResults, profileResult, parsedDiag, logs: logs.slice(-200) }; try { await navigator.clipboard.writeText(JSON.stringify(full, null, 2)); alert('Copied full guided report'); addLog('info',['copied full guided report']); } catch(e){ alert('Copy failed: '+String(e)); } }}>Copy full guided report</button>
+			<div class="controls">
+				<Button variant="tonal" iconType="left" onclick={async ()=>{ try { await navigator.clipboard.writeText(JSON.stringify(endpointResults, null, 2)); alert('Copied endpoint results'); addLog('info',['copied endpointResults']); } catch(e){ alert('Copy failed: '+String(e)); } }}>
+					<Icon icon={iconCopy} />
+					Copy endpoint results
+				</Button>
+				<Button variant="outlined" iconType="left" onclick={async ()=>{ const full = { endpointResults, profileResult, parsedDiag, logs: logs.slice(-200) }; try { await navigator.clipboard.writeText(JSON.stringify(full, null, 2)); alert('Copied full guided report'); addLog('info',['copied full guided report']); } catch(e){ alert('Copy failed: '+String(e)); } }}>
+					<Icon icon={iconCopy} />
+					Copy full guided report
+				</Button>
 			</div>
 			<pre class="diag">{JSON.stringify(endpointResults, null, 2)}</pre>
 		{/if}
-	</div>
+	</Card>
 
-	<h2>Client logs</h2>
-	<pre class="diag">{JSON.stringify(logs.slice(-200), null, 2)}</pre>
+	<Card variant="outlined">
+		<div class="section-header">
+			<div class="section-title">
+				<h2>Client Logs</h2>
+			</div>
+			<Button variant="text" iconType="left" class="copy-button" onclick={() => copySection('Client Logs', { logs: logs.slice(-200), totalLogs: logs.length })}>
+				<Icon icon={iconCopy} />
+				Copy Section
+			</Button>
+		</div>
+		<p style="color: rgb(var(--m3-scheme-on-surface-variant)); margin-bottom: 1rem;">Showing last 200 log entries (Total: {logs.length})</p>
+		<pre class="diag">{JSON.stringify(logs.slice(-200), null, 2)}</pre>
+	</Card>
 </div>
 
 
