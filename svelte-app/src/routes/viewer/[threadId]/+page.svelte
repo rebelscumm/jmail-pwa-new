@@ -83,6 +83,49 @@ import iconOpenInNew from "@ktibow/iconset-material-symbols/open-in-new";
       return input.replace(/&(amp|lt|gt|quot|apos|nbsp);|&#(34|39);/g, (m) => map[m] ?? m);
     } catch { return input || ''; }
   }
+
+  // Convert URLs in plain text to clickable links that open in new tabs
+  function linkifyText(text: string): string {
+    if (!text) return '';
+    
+    // URL regex pattern that matches http, https, and www links
+    const urlRegex = /(https?:\/\/[^\s<>"{}|\\^`[\]]+|www\.[^\s<>"{}|\\^`[\]]+)/gi;
+    
+    return text.replace(urlRegex, (url) => {
+      // Add protocol if missing for www links
+      const href = url.toLowerCase().startsWith('www.') ? `https://${url}` : url;
+      // Escape any HTML characters in the URL for display
+      const displayUrl = url.replace(/[&<>"']/g, (char) => {
+        const entities: Record<string, string> = {
+          '&': '&amp;',
+          '<': '&lt;',
+          '>': '&gt;',
+          '"': '&quot;',
+          "'": '&#39;'
+        };
+        return entities[char] || char;
+      });
+      return `<a href="${href}" target="_blank" rel="noopener noreferrer" style="color: rgb(var(--m3-scheme-primary)); text-decoration: underline;">${displayUrl}</a>`;
+    });
+  }
+
+  // Svelte action to set target="_blank" on all links in HTML content after it's rendered
+  function processHtmlLinks(element: HTMLElement) {
+    if (!element) return;
+    
+    const links = element.querySelectorAll('a');
+    links.forEach(link => {
+      link.setAttribute('target', '_blank');
+      link.setAttribute('rel', 'noopener noreferrer');
+    });
+    
+    // Return cleanup function (not needed here but required by Svelte action interface)
+    return {
+      destroy() {
+        // No cleanup needed
+      }
+    };
+  }
   function copyText(text: string) { navigator.clipboard.writeText(text); }
   let loadingMap: Record<string, boolean> = $state({});
   let errorMap: Record<string, string> = $state({});
@@ -998,7 +1041,7 @@ onMount(() => {
                   compact={true} 
                 />
               {/if}
-              <div class="html-body" style="white-space:normal; overflow-wrap:anywhere;">{@html m.bodyHtml}</div>
+              <div class="html-body" style="white-space:normal; overflow-wrap:anywhere;" use:processHtmlLinks>{@html m.bodyHtml}</div>
               {#if Array.isArray(m?.attachments) && m.attachments.length}
                 <div class="attachments">
                   {#each m.attachments as a, i}
@@ -1035,7 +1078,7 @@ onMount(() => {
                   compact={true} 
                 />
               {/if}
-              <pre style="white-space:pre-wrap">{decodeEntities(m.bodyText)}</pre>
+              <div style="white-space:pre-wrap; font-family: monospace;">{@html linkifyText(decodeEntities(m.bodyText))}</div>
               {#if Array.isArray(m?.attachments) && m.attachments.length}
                 <div class="attachments">
                   {#each m.attachments as a, i}
@@ -1097,9 +1140,9 @@ onMount(() => {
                 />
               {/if}
               {#if m?.bodyHtml}
-                <div class="html-body" style="white-space:normal; overflow-wrap:anywhere;">{@html m.bodyHtml}</div>
+                <div class="html-body" style="white-space:normal; overflow-wrap:anywhere;" use:processHtmlLinks>{@html m.bodyHtml}</div>
               {:else}
-                <pre style="white-space:pre-wrap">{decodeEntities(m.bodyText)}</pre>
+                <div style="white-space:pre-wrap; font-family: monospace;">{@html linkifyText(decodeEntities(m.bodyText))}</div>
               {/if}
               {#if Array.isArray(m?.attachments) && m.attachments.length}
                 <div class="attachments">
@@ -1424,6 +1467,11 @@ onMount(() => {
   :global(.html-body img), :global(.html-body svg), :global(.html-body video), :global(.html-body iframe), :global(.html-body canvas) {
     max-width: 100% !important;
     height: auto !important;
+  }
+  /* Style links in HTML emails */
+  :global(.html-body a) {
+    color: rgb(var(--m3-scheme-primary));
+    text-decoration: underline;
   }
   /* Mobile: avoid clipping wide email layouts; prefer container scroll to hidden overflow */
   .html-body {
