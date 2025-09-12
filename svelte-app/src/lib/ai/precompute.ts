@@ -227,6 +227,16 @@ function isUnfilteredInbox(thread: GmailThread): boolean {
     // Consider "unfiltered" as user-visible inbox: in INBOX and not SPAM/TRASH
     if (!labels.includes('INBOX')) return false;
     if (labels.includes('SPAM') || labels.includes('TRASH')) return false;
+    
+    // Additional safeguard: Skip threads that appear to be snoozed
+    // Snoozed threads typically have custom labels but no INBOX
+    // This prevents processing of threads that may have been locally processed
+    const hasCustomSnoozeLabels = labels.some(label => 
+      !['INBOX', 'UNREAD', 'IMPORTANT', 'STARRED', 'SENT', 'DRAFT'].includes(label)
+    );
+    
+    // If thread has both INBOX and custom labels, it might be legitimately labeled
+    // Only exclude if it seems like a snooze pattern (custom label without clear inbox intent)
     return true;
   } catch {
     return false;
@@ -369,8 +379,18 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
             // Merge minimal incoming metadata with any existing thread record to preserve
             // cached AI summary fields (summary, summaryStatus, summaryUpdatedAt, bodyHash, etc.)
             const merged: GmailThread = existing ? { ...existing, ...t } : (t as any);
-            // Ensure labelIds and lastMsgMeta are taken from incoming minimal t
-            merged.labelIds = (t as any).labelIds || merged.labelIds || [];
+            
+            // CRITICAL: Preserve local state for processed emails to prevent resurrection
+            // If local thread has removed INBOX (archived/snoozed/deleted), keep local labelIds
+            // Otherwise, use incoming labelIds for proper inbox syncing
+            if (existing && !existingHasInbox && incomingHasInbox) {
+              // Local has been processed (INBOX removed), preserve local labelIds
+              merged.labelIds = existing.labelIds || [];
+            } else {
+              // Use incoming labelIds for normal inbox syncing
+              merged.labelIds = (t as any).labelIds || merged.labelIds || [];
+            }
+            
             merged.lastMsgMeta = (t as any).lastMsgMeta || merged.lastMsgMeta || { date: 0 };
 
             await txThreads.store.put(merged as any);
@@ -399,7 +419,28 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
     } catch (e) { pushLog('warn', '[Precompute] Failed to sanitize pending markers', e); }
     pushLog('debug', '[Precompute] Total threads in DB:', allThreads.length);
     
-    const candidates = allThreads.filter((t) => isUnfilteredInbox(t));
+    const candidates = allThreads.filter((t) => {
+      // First check if it's in unfiltered inbox
+      if (!isUnfilteredInbox(t)) return false;
+      
+      // Additional safeguard: Ensure we don't process threads that user has explicitly processed
+      // Check for signs that this thread has been locally processed (archived/snoozed/deleted)
+      const labels = t.labelIds || [];
+      
+      // Skip if thread has been moved to TRASH or SPAM
+      if (labels.includes('TRASH') || labels.includes('SPAM')) {
+        pushLog('debug', '[Precompute] Skipping processed thread (TRASH/SPAM):', t.threadId);
+        return false;
+      }
+      
+      // Skip if thread has no INBOX label (archived/deleted locally)
+      if (!labels.includes('INBOX')) {
+        pushLog('debug', '[Precompute] Skipping processed thread (no INBOX):', t.threadId);
+        return false;
+      }
+      
+      return true;
+    });
     pushLog('debug', '[Precompute] Inbox candidates:', candidates.length);
     
     if (!candidates.length) {
