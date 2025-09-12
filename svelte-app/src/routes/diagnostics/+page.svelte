@@ -919,7 +919,7 @@ async function identifyStaleThreads() {
 		addLog('info', ['Identifying stale threads...']);
 		
 		const { getDB } = await import('$lib/db/indexeddb');
-		const { listInboxMessageIds, getMessageMetadata } = await import('$lib/gmail/api');
+		const { listThreadIdsByLabelId } = await import('$lib/gmail/api');
 		
 		const db = await getDB();
 		
@@ -929,20 +929,17 @@ async function identifyStaleThreads() {
 			Array.isArray(t.labelIds) && t.labelIds.includes('INBOX')
 		);
 		
-		// Get all Gmail thread IDs (fetch all pages safely)
+		// Get all Gmail thread IDs using efficient thread listing
 		const gmailThreadIds = new Set<string>();
 		let pageToken: string | undefined = undefined;
 		let pageCount = 0;
 		const maxPages = 20; // Safety limit
 		
 		while (pageCount < maxPages) {
-			const page = await listInboxMessageIds(100, pageToken);
+			const page = await listThreadIdsByLabelId('INBOX', 100, pageToken);
 			if (!page.ids?.length) break;
 			
-			// Convert message IDs to thread IDs
-			const msgs = await Promise.all(page.ids.map(id => getMessageMetadata(id).catch(() => null)));
-			const threadIds = msgs.filter(m => m).map(m => m!.threadId);
-			threadIds.forEach(tid => gmailThreadIds.add(tid));
+			page.ids.forEach(tid => gmailThreadIds.add(tid));
 			
 			pageCount++;
 			if (!page.nextPageToken) break;
@@ -970,6 +967,87 @@ async function identifyStaleThreads() {
 		addLog('info', ['Stale thread analysis completed', staleAnalysis]);
 	} catch (e) {
 		addLog('error', ['identifyStaleThreads failed', e]);
+	}
+}
+
+async function testPaginationHealth() {
+	try {
+		addLog('info', ['Testing pagination health...']);
+		
+		const { listThreadIdsByLabelId } = await import('$lib/gmail/api');
+		
+		// Test pagination behavior
+		let pageToken: string | undefined = undefined;
+		let pageCount = 0;
+		let totalThreads = 0;
+		let consecutiveEmptyPages = 0;
+		const maxTestPages = 10; // Safety limit for testing
+		const pageSizes = [10, 50, 100]; // Test different page sizes
+		
+		const paginationTest = {
+			timestamp: new Date().toISOString(),
+			results: [] as Array<{
+				pageSize: number;
+				totalPages: number;
+				totalThreads: number;
+				consecutiveEmptyPages: number;
+				avgThreadsPerPage: number;
+				successful: boolean;
+				error?: string;
+			}>
+		};
+		
+		for (const pageSize of pageSizes) {
+			try {
+				pageToken = undefined;
+				pageCount = 0;
+				totalThreads = 0;
+				consecutiveEmptyPages = 0;
+				let maxConsecutiveEmpty = 0;
+				
+				while (pageCount < maxTestPages) {
+					const page = await listThreadIdsByLabelId('INBOX', pageSize, pageToken);
+					pageCount++;
+					
+					if (!page.ids?.length) {
+						consecutiveEmptyPages++;
+						maxConsecutiveEmpty = Math.max(maxConsecutiveEmpty, consecutiveEmptyPages);
+						if (consecutiveEmptyPages >= 3 || !page.nextPageToken) break;
+					} else {
+						totalThreads += page.ids.length;
+						consecutiveEmptyPages = 0;
+					}
+					
+					if (!page.nextPageToken) break;
+					pageToken = page.nextPageToken;
+				}
+				
+				paginationTest.results.push({
+					pageSize,
+					totalPages: pageCount,
+					totalThreads,
+					consecutiveEmptyPages: maxConsecutiveEmpty,
+					avgThreadsPerPage: totalThreads > 0 ? totalThreads / pageCount : 0,
+					successful: true
+				});
+				
+			} catch (e) {
+				paginationTest.results.push({
+					pageSize,
+					totalPages: pageCount,
+					totalThreads,
+					consecutiveEmptyPages,
+					avgThreadsPerPage: 0,
+					successful: false,
+					error: String(e)
+				});
+			}
+		}
+		
+		inboxDiagnostics = { ...inboxDiagnostics, paginationTest };
+		addLog('info', ['Pagination health test completed', paginationTest]);
+	} catch (e) {
+		addLog('error', ['testPaginationHealth failed', e]);
 	}
 }
 
@@ -1236,6 +1314,7 @@ pre.diag {
 			<Button variant="outlined" color="error" onclick={clearLocalInboxData}>Clear local inbox data</Button>
 			<Button variant="outlined" onclick={testGmailPagination}>Test Gmail API pagination</Button>
 			<Button variant="text" onclick={identifyStaleThreads}>Identify stale threads</Button>
+			<Button variant="text" onclick={testPaginationHealth}>Test pagination health</Button>
 		</div>
 		{#if inboxDiagnostics}
 			<div class="summary">

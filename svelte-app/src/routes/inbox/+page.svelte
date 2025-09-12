@@ -661,7 +661,7 @@
     const maxRetries = opts?.maxRetries ?? 2;
     const db = await getDB();
     try {
-      const pageSize = 500; // reasonably large page for manual full sync
+      const pageSize = 100; // More reasonable page size for thread API
       let pageToken: string | undefined = undefined;
       const seenThreadIds = new Set<string>();
       let consecutiveEmptyPages = 0;
@@ -692,26 +692,11 @@
         while (attempt <= maxRetries && !page) {
           attempt += 1;
           try {
-            // Use the same message-based approach as regular inbox loading for consistency
-            const messagePage = await Promise.race([
-              listInboxMessageIds(pageSize, pageToken),
+            // Use direct thread listing which is much more efficient than message->thread conversion
+            page = await Promise.race([
+              listThreadIdsByLabelId('INBOX', pageSize, pageToken),
               new Promise((_, rej) => setTimeout(() => rej(new Error('page_timeout')), perPageTimeoutMs))
-            ]) as any;
-            
-            // Convert message IDs to thread IDs by fetching message metadata
-            if (messagePage?.ids?.length) {
-              if (import.meta.env.DEV) {
-                console.log(`[AuthSync] Converting ${messagePage.ids.length} message IDs to thread IDs`);
-              }
-              const msgs = await mapWithConcurrency(messagePage.ids, 4, (id: string) => getMessageMetadata(id));
-              const threadIds = [...new Set(msgs.map(m => m.threadId))]; // Deduplicate thread IDs
-              if (import.meta.env.DEV) {
-                console.log(`[AuthSync] Converted to ${threadIds.length} unique thread IDs from ${msgs.length} messages`);
-              }
-              page = { ids: threadIds, nextPageToken: messagePage.nextPageToken };
-            } else {
-              page = { ids: [], nextPageToken: messagePage?.nextPageToken };
-            }
+            ]) as { ids: string[]; nextPageToken?: string };
           } catch (e) {
             if (attempt > maxRetries) throw e; // escalate after retries
             // small backoff
@@ -720,22 +705,21 @@
         }
         if (!page) break; // defensive
         
-        const pageResolved = page as { ids: string[]; nextPageToken?: string };
-        pageToken = pageResolved.nextPageToken;
+        pageToken = page.nextPageToken;
         
         // Debug logging for each page
         if (import.meta.env.DEV) {
-          console.log(`[AuthSync] Page ${authoritativeSyncProgress.pagesCompleted + 1}: ${pageResolved.ids?.length || 0} threads, nextToken: ${!!pageResolved.nextPageToken}`);
+          console.log(`[AuthSync] Page ${authoritativeSyncProgress.pagesCompleted + 1}: ${page.ids?.length || 0} threads, nextToken: ${!!page.nextPageToken}`);
         }
         
-        // Check if this page is empty
-        if (!pageResolved.ids || !pageResolved.ids.length) {
+        // Check if this page is empty or making no progress
+        if (!page.ids || !page.ids.length) {
           consecutiveEmptyPages++;
           if (import.meta.env.DEV) {
-            console.log(`[AuthSync] Empty page ${consecutiveEmptyPages}, nextToken: ${!!pageResolved.nextPageToken}`);
+            console.log(`[AuthSync] Empty page ${consecutiveEmptyPages}, nextToken: ${!!page.nextPageToken}`);
           }
-          // Break if we get too many consecutive empty pages to prevent infinite loops
-          if (consecutiveEmptyPages >= 5 || !pageToken) {
+          // Break if we get too many consecutive empty pages OR no next token
+          if (consecutiveEmptyPages >= 3 || !pageToken) {
             if (import.meta.env.DEV) {
               console.log(`[AuthSync] Breaking due to ${consecutiveEmptyPages} consecutive empty pages or no nextToken`);
             }
@@ -748,7 +732,7 @@
         consecutiveEmptyPages = 0;
         authoritativeSyncProgress = { ...authoritativeSyncProgress, pagesCompleted: authoritativeSyncProgress.pagesCompleted + 1 };
         
-        const ids = pageResolved.ids;
+        const ids = page.ids;
         totalThreadsProcessed += ids.length;
         
         // Add all thread IDs from this page to seenThreadIds for proper reconciliation
