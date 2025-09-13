@@ -13,6 +13,7 @@
   import SnoozePanel from '$lib/snooze/SnoozePanel.svelte';
   import { lastSelectedSnoozeRuleKey } from '$lib/stores/snooze';
   import Icon from '$lib/misc/_icon.svelte';
+  import iconGmail from '$lib/icons/gmail';
   import Layer from '$lib/misc/Layer.svelte';
   import iconExpand from '@ktibow/iconset-material-symbols/keyboard-arrow-down';
   import iconArchive from '@ktibow/iconset-material-symbols/archive';
@@ -862,7 +863,7 @@
 {#snippet trailing()}
   <div class="actions" style={`opacity:${dx === 0 ? 1 : 0}; pointer-events:${dx === 0 ? 'auto' : 'none'};`}>
     <Button variant="text" iconType="full" aria-label="Open in Gmail" onclick={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); openGmailPopup(thread.threadId); }}>
-      <img src="/gmail-favicon.svg" alt="Gmail" style="width: 1rem; height: 1rem; color: inherit;" />
+      <Icon icon={iconGmail} width="1rem" height="1rem" />
     </Button>
     {#if isSnoozedThread(thread)}
       <Button variant="text" onclick={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); animateAndUnsnooze(); }}>Unsnooze</Button>

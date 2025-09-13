@@ -62,12 +62,21 @@ module.exports = async function (context, req) {
   }
 
   // Ensure path is appended correctly to avoid double slashes which can
-  // cause the Gmail API to return 404 for some routes.
+  // cause the Gmail API to return 404 for some routes. Also PRESERVE the
+  // original query string exactly (supports repeated params like metadataHeaders).
   const base = "https://gmail.googleapis.com/gmail/v1/users/me";
   const cleanPath = path ? `/${path.replace(/^\/+/, '')}` : '';
-  const url = `${base}${cleanPath}`;
-  // Debug: record constructed URL for troubleshooting 404s
-  try { context.log(`[gmail-proxy] incoming path=${path} cleanPath=${cleanPath} url=${url} method=${method}`); } catch (_) {}
+  let queryString = '';
+  try {
+    const u = new URL(req.url);
+    queryString = u.search || '';
+  } catch (_) {
+    const i = (req.url || '').indexOf('?');
+    queryString = i >= 0 ? (req.url || '').slice(i) : '';
+  }
+  const url = `${base}${cleanPath}${queryString}`;
+  // Debug: record constructed URL for troubleshooting 404/403 while avoiding logging full URL
+  try { context.log(`[gmail-proxy] incoming path=${path} method=${method} query=${queryString}`); } catch (_) {}
   const headers = {
     Authorization: `Bearer ${token}`,
     "Content-Type": "application/json"

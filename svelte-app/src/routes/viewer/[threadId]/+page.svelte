@@ -22,6 +22,7 @@
   import Menu from "$lib/containers/Menu.svelte";
   import MenuItem from "$lib/containers/MenuItem.svelte";
   import Icon from "$lib/misc/_icon.svelte";
+  import iconGmail from "$lib/icons/gmail";
 import iconBack from "@ktibow/iconset-material-symbols/chevron-left";
 import iconForward from "@ktibow/iconset-material-symbols/chevron-right";
 import iconArrowDown from "@ktibow/iconset-material-symbols/arrow-downward";
@@ -867,7 +868,7 @@ onMount(() => {
           {/if}
         </h3>
         <Button variant="text" iconType="full" aria-label="Open thread in Gmail" onclick={() => openGmailPopup(currentThread.threadId)}>
-          <img src="/gmail-favicon.svg" alt="Gmail" style="width: 1rem; height: 1rem; color: inherit;" />
+          <Icon icon={iconGmail} width="1rem" height="1rem" />
         </Button>
       </div>
     </Card>
@@ -1028,7 +1029,7 @@ onMount(() => {
                 <div style="display:flex; align-items:center; justify-content:space-between; margin:0.25rem 0;">
                   <p class="m3-font-body-small" style="margin:0; color:rgb(var(--m3-scheme-on-surface-variant))">{formatDateTime(m.internalDate)}</p>
                   <Button variant="text" iconType="full" aria-label="Open message in Gmail" onclick={() => openGmailMessagePopup(threadId, mid)}>
-                    <img src="/gmail-favicon.svg" alt="Gmail" style="width: 1rem; height: 1rem; color: inherit;" />
+                    <Icon icon={iconGmail} width="1rem" height="1rem" />
                   </Button>
                 </div>
               {/if}
@@ -1065,7 +1066,7 @@ onMount(() => {
                 <div style="display:flex; align-items:center; justify-content:space-between; margin:0.25rem 0;">
                   <p class="m3-font-body-small" style="margin:0; color:rgb(var(--m3-scheme-on-surface-variant))">{formatDateTime(m.internalDate)}</p>
                   <Button variant="text" iconType="full" aria-label="Open message in Gmail" onclick={() => openGmailMessagePopup(threadId, mid)}>
-                    <img src="/gmail-favicon.svg" alt="Gmail" style="width: 1rem; height: 1rem; color: inherit;" />
+                    <Icon icon={iconGmail} width="1rem" height="1rem" />
                   </Button>
                 </div>
               {/if}
@@ -1126,7 +1127,7 @@ onMount(() => {
                 <div style="display:flex; align-items:center; justify-content:space-between; margin:0.25rem 0;">
                   <p class="m3-font-body-small" style="margin:0; color:rgb(var(--m3-scheme-on-surface-variant))">{formatDateTime(m.internalDate)}</p>
                   <Button variant="text" iconType="full" aria-label="Open message in Gmail" onclick={() => openGmailMessagePopup(threadId, mid)}>
-                    <img src="/gmail-favicon.svg" alt="Gmail" style="width: 1rem; height: 1rem; color: inherit;" />
+                    <Icon icon={iconGmail} width="1rem" height="1rem" />
                   </Button>
                 </div>
               {/if}

@@ -661,18 +661,36 @@
     const maxRetries = opts?.maxRetries ?? 2;
     const db = await getDB();
     try {
-      const pageSize = 100; // More reasonable page size for thread API
+      const pageSize = 500; // Max page size supported by Gmail threads.list to reduce pages
       let pageToken: string | undefined = undefined;
       const seenThreadIds = new Set<string>();
       let consecutiveEmptyPages = 0;
       let totalThreadsProcessed = 0;
       let totalPagesAttempted = 0;
-      const MAX_PAGES_SAFETY_LIMIT = 50; // Safety limit to prevent runaway syncs
+      let lastPageToken: string | undefined = undefined;
+      let consecutiveNoNewThreads = 0;
+      const seenPageTokens = new Set<string>();
+      let MAX_PAGES_SAFETY_LIMIT = 50; // Default safety limit; will adjust dynamically when possible
       authoritativeSyncProgress = { running: true, pagesCompleted: 0, pagesTotal: 0 };
 
       if (import.meta.env.DEV) {
         console.log(`[AuthSync] Starting authoritative inbox sync with pageSize: ${pageSize}`);
       }
+
+      // Try to compute a dynamic page limit based on INBOX size to avoid premature stop for large inboxes
+      try {
+        const inboxLabel = await getLabel('INBOX');
+        const threadsTotal = Number((inboxLabel as any)?.threadsTotal || 0);
+        if (threadsTotal > 0) {
+          const estimatedPages = Math.ceil(threadsTotal / pageSize);
+          // Allow a small buffer over the estimate
+          MAX_PAGES_SAFETY_LIMIT = Math.max(50, estimatedPages + 2);
+          authoritativeSyncProgress = { ...authoritativeSyncProgress, pagesTotal: estimatedPages };
+          if (import.meta.env.DEV) {
+            console.log(`[AuthSync] INBOX threadsTotal=${threadsTotal}, estimatedPages=${estimatedPages}, maxPages=${MAX_PAGES_SAFETY_LIMIT}`);
+          }
+        }
+      } catch (_) {}
 
       // Stream thread ids (preferred) rather than messages to avoid missing
       // threads due to message-level pagination nuances.
@@ -705,6 +723,22 @@
         }
         if (!page) break; // defensive
         
+        // Detect non-advancing page tokens to avoid infinite loops
+        if (lastPageToken && page.nextPageToken && lastPageToken === page.nextPageToken) {
+          if (import.meta.env.DEV) {
+            console.warn(`[AuthSync] nextPageToken did not advance; breaking to avoid loop: ${page.nextPageToken}`);
+          }
+          break;
+        }
+        // If we have seen this nextPageToken before (cycle), break
+        if (page.nextPageToken && seenPageTokens.has(page.nextPageToken)) {
+          if (import.meta.env.DEV) {
+            console.warn(`[AuthSync] Detected repeated nextPageToken cycle; breaking: ${page.nextPageToken}`);
+          }
+          break;
+        }
+        if (page.nextPageToken) seenPageTokens.add(page.nextPageToken);
+        lastPageToken = pageToken;
         pageToken = page.nextPageToken;
         
         // Debug logging for each page
@@ -736,8 +770,24 @@
         totalThreadsProcessed += ids.length;
         
         // Add all thread IDs from this page to seenThreadIds for proper reconciliation
+        const before = seenThreadIds.size;
         for (const tid of ids) {
           seenThreadIds.add(tid);
+        }
+        const delta = seenThreadIds.size - before;
+        if (delta === 0) {
+          consecutiveNoNewThreads++;
+          if (import.meta.env.DEV) {
+            console.warn('[AuthSync] Page yielded no new threads; consecutiveNoNewThreads=', consecutiveNoNewThreads);
+          }
+          if (consecutiveNoNewThreads >= 3) {
+            if (import.meta.env.DEV) {
+              console.warn('[AuthSync] Breaking due to repeated pages with no new threads');
+            }
+            break;
+          }
+        } else {
+          consecutiveNoNewThreads = 0;
         }
         
         // For threads on this page, fetch summaries only for those missing or
