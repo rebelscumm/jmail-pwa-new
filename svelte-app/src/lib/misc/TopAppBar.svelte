@@ -37,6 +37,7 @@ import { precomputeStatus } from '$lib/stores/precompute';
   import iconLogs from '@ktibow/iconset-material-symbols/article';
   import iconNotifications from '@ktibow/iconset-material-symbols/notifications';
   import iconTerminal from '@ktibow/iconset-material-symbols/terminal';
+  import iconDiagnostics from '@ktibow/iconset-material-symbols/bug-report';
   import { onMount } from 'svelte';
   import { trailingHolds } from '$lib/stores/holds';
   import { labels as labelsStore } from '$lib/stores/labels';
@@ -919,6 +920,7 @@ import { precomputeStatus } from '$lib/stores/precompute';
         
         <div class="menu-section-header">System</div>
         <MenuItem icon={iconRefresh} onclick={() => { const u = new URL(window.location.href); u.searchParams.set('refresh', '1'); location.href = u.toString(); }}>Check for App Update</MenuItem>
+        <MenuItem icon={iconDiagnostics} onclick={() => (location.href = '/diagnostics')}>Diagnostics</MenuItem>
         <MenuItem icon={iconNotifications} onclick={async () => {
           try {
             const { getHistory } = await import('$lib/containers/snackbar');

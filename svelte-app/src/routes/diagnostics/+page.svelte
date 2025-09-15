@@ -4,6 +4,10 @@ import Button from '$lib/buttons/Button.svelte';
 import Card from '$lib/containers/Card.svelte';
 import iconCopy from '@ktibow/iconset-material-symbols/content-copy-outline';
 import iconSelectAll from '@ktibow/iconset-material-symbols/select-all';
+import iconCheck from '@ktibow/iconset-material-symbols/check-circle';
+import iconError from '@ktibow/iconset-material-symbols/error';
+import iconWarning from '@ktibow/iconset-material-symbols/warning';
+import iconPlayArrow from '@ktibow/iconset-material-symbols/play-arrow';
 import Icon from '$lib/misc/_icon.svelte';
 
 type LogEntry = { level: 'log' | 'warn' | 'error' | 'info'; msg: any[]; ts: string };
@@ -42,6 +46,340 @@ let diagSummary: Record<string, any> | null = null;
 
 // Inbox sync diagnostics state
 let inboxDiagnostics: Record<string, any> | null = null;
+
+// Full diagnostics runner state
+let fullDiagnostics: {
+	running: boolean;
+	results: Array<{
+		name: string;
+		status: 'pending' | 'running' | 'success' | 'warning' | 'error';
+		message?: string;
+		data?: any;
+	}>;
+	summary?: {
+		total: number;
+		success: number;
+		warning: number;
+		error: number;
+		pending: number;
+	};
+} = {
+	running: false,
+	results: []
+};
+
+// Comprehensive diagnostics runner
+async function runFullDiagnostics() {
+	fullDiagnostics.running = true;
+	fullDiagnostics.results = [
+		{ name: 'Environment Check', status: 'pending' },
+		{ name: 'Server Session Verification', status: 'pending' },
+		{ name: 'Authentication Status', status: 'pending' },
+		{ name: 'Localhost Auth Configuration', status: 'pending' },
+		{ name: 'Action Queue Health', status: 'pending' },
+		{ name: 'Inbox Sync Status', status: 'pending' },
+		{ name: 'Gmail API Connectivity', status: 'pending' },
+		{ name: 'Client Storage Health', status: 'pending' },
+		{ name: 'Cookie Configuration', status: 'pending' }
+	];
+	
+	try {
+		// 1. Environment Check
+		await runDiagnosticStep('Environment Check', async () => {
+			const result = await probeServer();
+			const hasErrors = Object.values(result).some((r: any) => r.error || (!r.ok && r.status >= 400));
+			return {
+				status: hasErrors ? 'warning' : 'success',
+				message: hasErrors ? 'Some endpoints not responding correctly' : 'All endpoints accessible',
+				data: result
+			};
+		});
+		
+		// 2. Server Session Verification
+		await runDiagnosticStep('Server Session Verification', async () => {
+			try {
+				const r = await fetch('/api/gmail/profile', { method: 'GET', credentials: 'include' });
+				if (r.ok) {
+					const profile = tryParseJson(await r.text());
+					return {
+						status: 'success',
+						message: `Authenticated as ${profile.emailAddress || 'unknown user'}`,
+						data: profile
+					};
+				} else {
+					return {
+						status: 'warning',
+						message: `Not authenticated (${r.status})`,
+						data: { status: r.status, statusText: r.statusText }
+					};
+				}
+			} catch (e) {
+				return {
+					status: 'error',
+					message: 'Failed to check server session',
+					data: { error: String(e) }
+				};
+			}
+		});
+		
+		// 3. Authentication Status
+		await runDiagnosticStep('Authentication Status', async () => {
+			const authCache = {
+				jmail_last_interactive_auth: localStorage.getItem('jmail_last_interactive_auth'),
+				jmail_last_scope_auth: localStorage.getItem('jmail_last_scope_auth'),
+				jmail_last_server_redirect: localStorage.getItem('jmail_last_server_redirect'),
+				LOCALHOST_ACCESS_TOKEN: localStorage.getItem('LOCALHOST_ACCESS_TOKEN') ? 'Present' : 'Not found',
+				LOCALHOST_TOKEN_EXPIRY: localStorage.getItem('LOCALHOST_TOKEN_EXPIRY')
+			};
+			
+			const hasTokens = authCache.LOCALHOST_ACCESS_TOKEN === 'Present' || 
+							 authCache.jmail_last_interactive_auth || 
+							 authCache.jmail_last_scope_auth;
+			
+			return {
+				status: hasTokens ? 'success' : 'warning',
+				message: hasTokens ? 'Authentication tokens found' : 'No authentication tokens found',
+				data: authCache
+			};
+		});
+		
+		// 4. Localhost Auth Configuration
+		await runDiagnosticStep('Localhost Auth Configuration', async () => {
+			const hostname = window.location.hostname;
+			const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1' || hostname.startsWith('192.168.');
+			
+			if (!isLocalhost) {
+				return {
+					status: 'success',
+					message: 'Running on production domain',
+					data: { hostname, isLocalhost }
+				};
+			}
+			
+			const clientIds = {
+				LOCALHOST_GOOGLE_CLIENT_ID: localStorage.getItem('LOCALHOST_GOOGLE_CLIENT_ID'),
+				DEV_GOOGLE_CLIENT_ID: localStorage.getItem('DEV_GOOGLE_CLIENT_ID'),
+				VITE_GOOGLE_CLIENT_ID: import.meta.env.VITE_GOOGLE_CLIENT_ID
+			};
+			
+			const hasClientId = Object.values(clientIds).some(id => id && id.trim());
+			
+			return {
+				status: hasClientId ? 'success' : 'warning',
+				message: hasClientId ? 'Localhost client ID configured' : 'No localhost client ID configured',
+				data: { hostname, isLocalhost, clientIds }
+			};
+		});
+		
+		// 5. Action Queue Health
+		await runDiagnosticStep('Action Queue Health', async () => {
+			try {
+				const { getDB } = await import('$lib/db/indexeddb');
+				const db = await getDB();
+				
+				const ops = await db.getAll('ops');
+				const now = Date.now();
+				const pending = ops.filter(o => o.nextAttemptAt <= now);
+				const failed = ops.filter(o => o.attempts > 3);
+				
+				let status: 'success' | 'warning' | 'error' = 'success';
+				let message = 'Queue healthy';
+				
+				if (failed.length > 0) {
+					status = 'error';
+					message = `${failed.length} failed operations need attention`;
+				} else if (pending.length > 10) {
+					status = 'warning';
+					message = `${pending.length} operations pending`;
+				}
+				
+				return {
+					status,
+					message,
+					data: { totalOps: ops.length, pendingOps: pending.length, failedOps: failed.length }
+				};
+			} catch (e) {
+				return {
+					status: 'error',
+					message: 'Failed to check action queue',
+					data: { error: String(e) }
+				};
+			}
+		});
+		
+		// 6. Inbox Sync Status
+		await runDiagnosticStep('Inbox Sync Status', async () => {
+			try {
+				const { getDB } = await import('$lib/db/indexeddb');
+				const { getLabel } = await import('$lib/gmail/api');
+				
+				const db = await getDB();
+				const localThreads = await db.getAll('threads');
+				const localInboxThreads = localThreads.filter((t: any) => 
+					Array.isArray(t.labelIds) && t.labelIds.includes('INBOX')
+				);
+				
+				const gmailInboxLabel = await getLabel('INBOX');
+				const discrepancy = Math.abs(localInboxThreads.length - (gmailInboxLabel.threadsTotal || 0));
+				
+				let status: 'success' | 'warning' | 'error' = 'success';
+				let message = 'Inbox sync healthy';
+				
+				if (discrepancy > 50) {
+					status = 'error';
+					message = `Large discrepancy: ${discrepancy} threads`;
+				} else if (discrepancy > 10) {
+					status = 'warning';
+					message = `Minor discrepancy: ${discrepancy} threads`;
+				}
+				
+				return {
+					status,
+					message,
+					data: {
+						localThreads: localInboxThreads.length,
+						gmailThreads: gmailInboxLabel.threadsTotal,
+						discrepancy
+					}
+				};
+			} catch (e) {
+				return {
+					status: 'error',
+					message: 'Failed to check inbox sync',
+					data: { error: String(e) }
+				};
+			}
+		});
+		
+		// 7. Gmail API Connectivity
+		await runDiagnosticStep('Gmail API Connectivity', async () => {
+			try {
+				const { listInboxMessageIds } = await import('$lib/gmail/api');
+				const page = await listInboxMessageIds(10);
+				
+				return {
+					status: 'success',
+					message: `API responding (${page.ids.length} messages)`,
+					data: { messageCount: page.ids.length, hasNextToken: !!page.nextPageToken }
+				};
+			} catch (e) {
+				return {
+					status: 'error',
+					message: 'Gmail API not accessible',
+					data: { error: String(e) }
+				};
+			}
+		});
+		
+		// 8. Client Storage Health
+		await runDiagnosticStep('Client Storage Health', async () => {
+			try {
+				const { getDB } = await import('$lib/db/indexeddb');
+				const db = await getDB();
+				
+				const stores = ['threads', 'messages', 'ops', 'journal'] as const;
+				const counts: Record<string, number | string> = {};
+				
+				for (const store of stores) {
+					try {
+						const items = await db.getAll(store);
+						counts[store] = items.length;
+					} catch (e) {
+						counts[store] = `Error: ${String(e)}`;
+					}
+				}
+				
+				const hasData = Object.values(counts).some(count => typeof count === 'number' && count > 0);
+				
+				return {
+					status: hasData ? 'success' : 'warning',
+					message: hasData ? 'IndexedDB accessible with data' : 'IndexedDB accessible but empty',
+					data: counts
+				};
+			} catch (e) {
+				return {
+					status: 'error',
+					message: 'IndexedDB not accessible',
+					data: { error: String(e) }
+				};
+			}
+		});
+		
+		// 9. Cookie Configuration
+		await runDiagnosticStep('Cookie Configuration', async () => {
+			try {
+				const raw = document.cookie || '';
+				const cookies: Record<string, string> = {};
+				raw.split(';').forEach((p) => { 
+					const i = p.indexOf('='); 
+					if (i === -1) return; 
+					const k = p.slice(0, i).trim(); 
+					const v = p.slice(i + 1).trim(); 
+					cookies[k] = v; 
+				});
+				
+				const hasCookies = Object.keys(cookies).length > 0;
+				
+				return {
+					status: hasCookies ? 'success' : 'warning',
+					message: hasCookies ? `${Object.keys(cookies).length} cookies found` : 'No cookies found',
+					data: cookies
+				};
+			} catch (e) {
+				return {
+					status: 'error',
+					message: 'Failed to check cookies',
+					data: { error: String(e) }
+				};
+			}
+		});
+		
+	} catch (e) {
+		addLog('error', ['Full diagnostics failed', e]);
+	} finally {
+		fullDiagnostics.running = false;
+		updateDiagnosticsSummary();
+	}
+}
+
+async function runDiagnosticStep(name: string, testFn: () => Promise<{ status: 'success' | 'warning' | 'error'; message: string; data?: any }>) {
+	const resultIndex = fullDiagnostics.results.findIndex(r => r.name === name);
+	if (resultIndex === -1) return;
+	
+	fullDiagnostics.results[resultIndex].status = 'running';
+	fullDiagnostics = { ...fullDiagnostics }; // Trigger reactivity
+	
+	try {
+		const result = await testFn();
+		fullDiagnostics.results[resultIndex] = {
+			name,
+			status: result.status,
+			message: result.message,
+			data: result.data
+		};
+		addLog('info', [`Diagnostic ${name}: ${result.status}`, result]);
+	} catch (e) {
+		fullDiagnostics.results[resultIndex] = {
+			name,
+			status: 'error',
+			message: `Test failed: ${String(e)}`,
+			data: { error: String(e) }
+		};
+		addLog('error', [`Diagnostic ${name} failed`, e]);
+	}
+	
+	fullDiagnostics = { ...fullDiagnostics }; // Trigger reactivity
+}
+
+function updateDiagnosticsSummary() {
+	const total = fullDiagnostics.results.length;
+	const success = fullDiagnostics.results.filter(r => r.status === 'success').length;
+	const warning = fullDiagnostics.results.filter(r => r.status === 'warning').length;
+	const error = fullDiagnostics.results.filter(r => r.status === 'error').length;
+	const pending = fullDiagnostics.results.filter(r => r.status === 'pending').length;
+	
+	fullDiagnostics.summary = { total, success, warning, error, pending };
+}
 
 // Authentication management functions
 function clearAuthCache() {
@@ -1132,9 +1470,148 @@ pre.diag {
 :global(.m3-container + .m3-container) {
   margin-top: 1.5rem;
 }
+
+/* Full diagnostics styles */
+.diagnostics-summary {
+  background: rgb(var(--m3-scheme-surface-container-high));
+  border-radius: var(--m3-util-rounding-medium);
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+.summary-stats {
+  display: flex;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.stat {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 500;
+}
+
+.stat.success {
+  color: rgb(var(--m3-scheme-tertiary));
+}
+
+.stat.warning {
+  color: rgb(var(--m3-scheme-error));
+}
+
+.stat.error {
+  color: rgb(var(--m3-scheme-error));
+}
+
+.stat :global(svg) {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+.diagnostics-results {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.diagnostic-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-radius: var(--m3-util-rounding-medium);
+  background: rgb(var(--m3-scheme-surface-container));
+  border: 1px solid rgb(var(--m3-scheme-outline-variant));
+}
+
+.diagnostic-item.success {
+  border-color: rgb(var(--m3-scheme-tertiary));
+  background: rgb(var(--m3-scheme-tertiary-container) / 0.1);
+}
+
+.diagnostic-item.warning {
+  border-color: rgb(var(--m3-scheme-error));
+  background: rgb(var(--m3-scheme-error-container) / 0.1);
+}
+
+.diagnostic-item.error {
+  border-color: rgb(var(--m3-scheme-error));
+  background: rgb(var(--m3-scheme-error-container) / 0.2);
+}
+
+.diagnostic-item.running {
+  border-color: rgb(var(--m3-scheme-primary));
+  background: rgb(var(--m3-scheme-primary-container) / 0.1);
+}
+
+.diagnostic-icon {
+  flex-shrink: 0;
+  width: 1.5rem;
+  height: 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.diagnostic-icon :global(svg) {
+  width: 1.5rem;
+  height: 1.5rem;
+}
+
+.diagnostic-item.success .diagnostic-icon :global(svg) {
+  color: rgb(var(--m3-scheme-tertiary));
+}
+
+.diagnostic-item.warning .diagnostic-icon :global(svg) {
+  color: rgb(var(--m3-scheme-error));
+}
+
+.diagnostic-item.error .diagnostic-icon :global(svg) {
+  color: rgb(var(--m3-scheme-error));
+}
+
+.diagnostic-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.diagnostic-name {
+  font-weight: 500;
+  color: rgb(var(--m3-scheme-on-surface));
+  line-height: 1.25;
+}
+
+.diagnostic-message {
+  font-size: 0.875rem;
+  color: rgb(var(--m3-scheme-on-surface-variant));
+  line-height: 1.25;
+  margin-top: 0.25rem;
+}
+
+.spinner {
+  width: 1.5rem;
+  height: 1.5rem;
+  border: 2px solid rgb(var(--m3-scheme-primary-container));
+  border-top: 2px solid rgb(var(--m3-scheme-primary));
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+.pending-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: rgb(var(--m3-scheme-outline));
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
 </style>
 
-<div>
+	<div>
 	<div class="main-header">
 		<h1>Diagnostics</h1>
 		<div class="copy-all-container">
@@ -1144,6 +1621,75 @@ pre.diag {
 			</Button>
 		</div>
 	</div>
+	
+	<Card variant="filled">
+		<div class="section-header">
+			<div class="section-title">
+				<h2>Full System Diagnostics</h2>
+			</div>
+			<Button variant="text" iconType="left" class="copy-button" onclick={() => copySection('Full System Diagnostics', fullDiagnostics)}>
+				<Icon icon={iconCopy} />
+				Copy Section
+			</Button>
+		</div>
+		<p style="color: rgb(var(--m3-scheme-on-surface-variant)); margin-bottom: 1rem;">Run comprehensive diagnostics to check all system components and get a summary with checkmarks and issues.</p>
+		
+		<div class="controls">
+			<Button variant="filled" iconType="left" onclick={runFullDiagnostics} disabled={fullDiagnostics.running}>
+				<Icon icon={iconPlayArrow} />
+				{fullDiagnostics.running ? 'Running Diagnostics...' : 'Run Full Diagnostics'}
+			</Button>
+		</div>
+		
+		{#if fullDiagnostics.results.length > 0}
+			<div style="margin-top: 1.5rem;">
+				{#if fullDiagnostics.summary}
+					<div class="diagnostics-summary">
+						<div class="summary-stats">
+							<div class="stat success">
+								<Icon icon={iconCheck} />
+								<span>{fullDiagnostics.summary.success} Passed</span>
+							</div>
+							<div class="stat warning">
+								<Icon icon={iconWarning} />
+								<span>{fullDiagnostics.summary.warning} Warnings</span>
+							</div>
+							<div class="stat error">
+								<Icon icon={iconError} />
+								<span>{fullDiagnostics.summary.error} Errors</span>
+							</div>
+						</div>
+					</div>
+				{/if}
+				
+				<div class="diagnostics-results">
+					{#each fullDiagnostics.results as result}
+						<div class="diagnostic-item {result.status}">
+							<div class="diagnostic-icon">
+								{#if result.status === 'success'}
+									<Icon icon={iconCheck} />
+								{:else if result.status === 'warning'}
+									<Icon icon={iconWarning} />
+								{:else if result.status === 'error'}
+									<Icon icon={iconError} />
+								{:else if result.status === 'running'}
+									<div class="spinner"></div>
+								{:else}
+									<div class="pending-dot"></div>
+								{/if}
+							</div>
+							<div class="diagnostic-content">
+								<div class="diagnostic-name">{result.name}</div>
+								{#if result.message}
+									<div class="diagnostic-message">{result.message}</div>
+								{/if}
+							</div>
+						</div>
+					{/each}
+				</div>
+			</div>
+		{/if}
+	</Card>
 	
 	<Card variant="outlined">
 		<div class="section-header">
