@@ -9,6 +9,7 @@ import iconError from '@ktibow/iconset-material-symbols/error';
 import iconWarning from '@ktibow/iconset-material-symbols/warning';
 import iconPlayArrow from '@ktibow/iconset-material-symbols/play-arrow';
 import Icon from '$lib/misc/_icon.svelte';
+import { show as showSnackbar } from '$lib/containers/snackbar';
 
 type LogEntry = { level: 'log' | 'warn' | 'error' | 'info'; msg: any[]; ts: string };
 
@@ -82,6 +83,13 @@ async function runFullDiagnostics() {
 		{ name: 'Client Storage Health', status: 'pending' },
 		{ name: 'Cookie Configuration', status: 'pending' }
 	];
+	
+	// Show immediate feedback that diagnostics are starting
+	showSnackbar({
+		message: 'Starting system health check...',
+		timeout: 3000,
+		closable: true
+	});
 	
 	try {
 		// 1. Environment Check
@@ -365,9 +373,59 @@ async function runFullDiagnostics() {
 		
 	} catch (e) {
 		addLog('error', ['Full diagnostics failed', e]);
+		// Show error feedback
+		showSnackbar({
+			message: `Health check interrupted: ${e instanceof Error ? e.message : String(e)}`,
+			timeout: 6000,
+			closable: true,
+			actions: {
+				'Copy details': async () => {
+					try {
+						await navigator.clipboard.writeText(String(e));
+						showSnackbar({ message: 'Error details copied', timeout: 2000 });
+					} catch {
+						showSnackbar({ message: 'Copy failed', timeout: 3000 });
+					}
+				}
+			}
+		});
 	} finally {
 		fullDiagnostics.running = false;
 		updateDiagnosticsSummary();
+		
+		// Show completion feedback with summary
+		if (fullDiagnostics.summary) {
+			const { success, warning, error, total } = fullDiagnostics.summary;
+			let message = `Health check complete: ${success}/${total} passed`;
+			let timeout = 4000;
+			
+			if (error > 0) {
+				message += `, ${error} ${error === 1 ? 'issue' : 'issues'} found`;
+				timeout = 6000; // Longer timeout for errors
+			}
+			if (warning > 0) {
+				message += `, ${warning} ${warning === 1 ? 'warning' : 'warnings'}`;
+			}
+			
+			showSnackbar({
+				message,
+				timeout,
+				closable: true,
+				actions: {
+					'Copy summary': async () => {
+						try {
+							const resultsText = fullDiagnostics.results
+								.map(r => `${r.name}: ${r.status}${r.message ? ` - ${r.message}` : ''}`)
+								.join('\n');
+							await navigator.clipboard.writeText(`System Health Summary:\n${resultsText}`);
+							showSnackbar({ message: 'Summary copied', timeout: 2000 });
+						} catch {
+							showSnackbar({ message: 'Copy failed', timeout: 3000 });
+						}
+					}
+				}
+			});
+		}
 	}
 }
 
@@ -440,39 +498,27 @@ async function refreshServerSession() {
 	try {
 		addLog('info', ['Attempting to refresh server session...']);
 		
-		// Try to refresh the session using the refresh endpoint
-		const response = await fetch('/api/google-refresh', {
-			method: 'POST',
-			credentials: 'include'
-		});
+		// Use the session manager to refresh
+		const success = await import('$lib/auth/session-manager').then(m => m.sessionManager.refreshSession());
 		
-		if (response.ok) {
-			const result = await response.text();
-			addLog('info', ['Session refresh successful', result]);
+		if (success) {
+			addLog('info', ['Session refresh successful']);
 			alert('Server session refreshed successfully! The session should now be valid for another hour.');
 			
 			// Verify the refresh worked by checking the profile
 			setTimeout(async () => {
 				try {
-					const profileCheck = await fetch('/api/gmail/profile', { 
-						method: 'GET', 
-						credentials: 'include' 
-					});
-					if (profileCheck.ok) {
-						const profile = await profileCheck.text();
-						addLog('info', ['Profile verification after refresh', profile]);
-					} else {
-						addLog('warn', ['Profile check failed after refresh', profileCheck.status]);
-					}
+					const { sessionManager } = await import('$lib/auth/session-manager');
+					const status = await sessionManager.checkSessionStatus();
+					addLog('info', ['Profile verification after refresh', status]);
 				} catch (e) {
 					addLog('error', ['Profile verification failed', e]);
 				}
 			}, 1000);
 			
 		} else {
-			const errorText = await response.text();
-			addLog('error', ['Session refresh failed', { status: response.status, error: errorText }]);
-			alert(`Session refresh failed: ${response.status} - ${errorText}\n\nThis usually means:\n1. Your refresh token has expired (need to re-login)\n2. The server is not configured properly\n3. Network connectivity issues`);
+			addLog('error', ['Session refresh failed']);
+			alert(`Session refresh failed.\n\nThis usually means:\n1. Your refresh token has expired (need to re-login)\n2. The server is not configured properly\n3. Network connectivity issues`);
 		}
 	} catch (e) {
 		addLog('error', ['refreshServerSession failed', e]);
@@ -484,44 +530,15 @@ async function checkSessionExpiry() {
 	try {
 		addLog('info', ['Checking session expiry status...']);
 		
-		// Check various endpoints to understand session state
-		const endpoints = [
-			'/api/google-me',
-			'/api/google-tokeninfo', 
-			'/api/gmail/profile'
-		];
-		
-		const results: Record<string, any> = {};
-		
-		for (const endpoint of endpoints) {
-			try {
-				const response = await fetch(endpoint, {
-					method: 'GET',
-					credentials: 'include'
-				});
-				
-				let body = '';
-				try {
-					body = await response.text();
-				} catch (_) {
-					body = '<<unreadable>>';
-				}
-				
-				results[endpoint] = {
-					status: response.status,
-					ok: response.ok,
-					body: body.length > 500 ? body.substring(0, 500) + '...' : body
-				};
-			} catch (e) {
-				results[endpoint] = { error: String(e) };
-			}
-		}
+		// Use the session manager to check status safely
+		const { sessionManager } = await import('$lib/auth/session-manager');
+		const status = await sessionManager.checkSessionStatus();
 		
 		// Analyze the results
 		const analysis = {
 			timestamp: new Date().toISOString(),
-			endpoints: results,
-			diagnosis: analyzeSessionState(results)
+			status,
+			diagnosis: analyzeSessionState(status)
 		};
 		
 		addLog('info', ['Session expiry check completed', analysis]);
@@ -544,12 +561,9 @@ ${analysis.diagnosis.recommendation}`;
 	}
 }
 
-function analyzeSessionState(results: Record<string, any>) {
-	const gmailWorking = results['/api/gmail/profile']?.ok === true;
-	const googleMeWorking = results['/api/google-me']?.ok === true;
-	const tokenInfoWorking = results['/api/google-tokeninfo']?.ok === true;
-	
-	const oauthWorking = googleMeWorking || tokenInfoWorking;
+function analyzeSessionState(status: { gmailWorking: boolean; oauthWorking: boolean }) {
+	const gmailWorking = status.gmailWorking;
+	const oauthWorking = status.oauthWorking;
 	
 	let summary = '';
 	let likelyIssue = '';
@@ -592,30 +606,41 @@ Current session will be lost. Continue?`);
 		
 		addLog('info', ['Starting forced re-authentication...']);
 		
-		// Clear all local auth data
-		clearAuthCache();
-		
-		// Clear any client-side cookies we can access
-		try {
-			const raw = document.cookie || '';
-			raw.split(';').forEach((p) => {
-				const i = p.indexOf('='); 
-				if (i === -1) return;
-				const k = p.slice(0,i).trim();
-				document.cookie = k + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/';
-			});
-		} catch (_) {}
-		
-		// Redirect to server login
-		const loginUrl = new URL('/api/google-login', window.location.origin);
-		loginUrl.searchParams.set('return_to', window.location.href);
-		
-		addLog('info', ['Redirecting to forced login', loginUrl.toString()]);
-		window.location.href = loginUrl.toString();
+		// Use the session manager to handle re-auth
+		const { sessionManager } = await import('$lib/auth/session-manager');
+		await sessionManager.forceReauth();
 		
 	} catch (e) {
 		addLog('error', ['forceReauth failed', e]);
 		alert('Failed to force re-authentication: ' + String(e));
+	}
+}
+
+let globalInterceptorEnabled = false;
+let uninstallGlobalInterceptor: (() => void) | null = null;
+
+async function enableGlobalInterceptor() {
+	try {
+		if (globalInterceptorEnabled) {
+			// Disable it
+			if (uninstallGlobalInterceptor) {
+				uninstallGlobalInterceptor();
+				uninstallGlobalInterceptor = null;
+			}
+			globalInterceptorEnabled = false;
+			addLog('info', ['Global auth interceptor disabled']);
+			alert('Global auto-refresh interceptor disabled.');
+		} else {
+			// Enable it
+			const { installGlobalAuthInterceptor } = await import('$lib/auth/session-manager');
+			uninstallGlobalInterceptor = installGlobalAuthInterceptor();
+			globalInterceptorEnabled = true;
+			addLog('info', ['Global auth interceptor enabled']);
+			alert('Global auto-refresh interceptor enabled! It will automatically handle 401 errors by refreshing your session.\n\nNote: This is experimental. If you experience issues, click this button again to disable it.');
+		}
+	} catch (e) {
+		addLog('error', ['enableGlobalInterceptor failed', e]);
+		alert('Failed to toggle global interceptor: ' + String(e));
 	}
 }
 
@@ -717,10 +742,10 @@ async function checkLocalhostAuthStatus() {
 		
 		addLog('info', ['Localhost auth status', status]);
 		await navigator.clipboard.writeText(JSON.stringify(status, null, 2));
-		alert('Localhost auth status copied to clipboard! Check logs for details.');
+		showSnackbar({ message: 'Localhost auth status copied to clipboard! Check logs for details.', closable: true });
 	} catch (e) {
 		addLog('error', ['checkLocalhostAuthStatus failed', e]);
-		alert('Failed to check localhost auth status: ' + String(e));
+		showSnackbar({ message: 'Failed to check localhost auth status: ' + String(e), closable: true });
 	}
 }
 
@@ -871,10 +896,10 @@ async function copyDiagnostics() {
 	try {
 		await navigator.clipboard.writeText(JSON.stringify(diag, null, 2));
 		addLog('info', ['copied diagnostics to clipboard']);
-		alert('Diagnostics copied to clipboard');
+		showSnackbar({ message: 'Diagnostics copied to clipboard', closable: true });
 	} catch (e) {
 		addLog('error', ['failed to copy diagnostics', e]);
-		alert('Failed to copy diagnostics: ' + String(e));
+		showSnackbar({ message: 'Failed to copy diagnostics: ' + String(e), closable: true });
 	}
 }
 
@@ -884,10 +909,10 @@ async function copySection(sectionName: string, data: any) {
 		const content = JSON.stringify(data, null, 2);
 		await navigator.clipboard.writeText(content);
 		addLog('info', [`copied ${sectionName} to clipboard`]);
-		alert(`${sectionName} copied to clipboard`);
+		showSnackbar({ message: `${sectionName} copied to clipboard`, closable: true });
 	} catch (e) {
 		addLog('error', [`failed to copy ${sectionName}`, e]);
-		alert(`Failed to copy ${sectionName}: ` + String(e));
+		showSnackbar({ message: `Failed to copy ${sectionName}: ` + String(e), closable: true });
 	}
 }
 
@@ -915,10 +940,10 @@ async function copyAllSections() {
 		const content = JSON.stringify(allData, null, 2);
 		await navigator.clipboard.writeText(content);
 		addLog('info', ['copied all diagnostics sections to clipboard']);
-		alert('All diagnostics sections copied to clipboard');
+		showSnackbar({ message: 'All diagnostics sections copied to clipboard', closable: true });
 	} catch (e) {
 		addLog('error', ['failed to copy all diagnostics sections', e]);
-		alert('Failed to copy all diagnostics sections: ' + String(e));
+		showSnackbar({ message: 'Failed to copy all diagnostics sections: ' + String(e), closable: true });
 	}
 }
 
@@ -1951,6 +1976,9 @@ pre.diag {
 			<Button variant="outlined" onclick={clearAuthCache}>Clear authentication cache</Button>
 			<Button variant="outlined" onclick={openAuthSettings}>Open authentication settings</Button>
 			<Button variant="outlined" onclick={resetAuthRateLimit}>Reset authentication rate limits</Button>
+			<Button variant="outlined" onclick={enableGlobalInterceptor}>
+				{globalInterceptorEnabled ? 'Disable auto-refresh' : 'Enable auto-refresh (experimental)'}
+			</Button>
 			<Button variant="text" color="error" onclick={forceReauth}>Force re-authentication</Button>
 		</div>
 	</Card>
@@ -2041,7 +2069,7 @@ pre.diag {
 		<textarea class="pastebox" bind:value={pastedText} placeholder='Paste diagnostics JSON here'></textarea>
 		<div class="controls">
 			<Button variant="filled" onclick={processPastedDiagnostics}>Process pasted diagnostics</Button>
-			<Button variant="tonal" onclick={async ()=>{ const ok = await copyParsedDiagnostics(); if(ok) alert('Parsed diagnostics copied'); else alert('Failed to copy parsed diagnostics'); }}>Copy parsed diagnostics</Button>
+			<Button variant="tonal" onclick={async ()=>{ const ok = await copyParsedDiagnostics(); if(ok) showSnackbar({ message: 'Parsed diagnostics copied', closable: true }); else showSnackbar({ message: 'Failed to copy parsed diagnostics', closable: true }); }}>Copy parsed diagnostics</Button>
 			<Button variant="outlined" onclick={submitParsedDiagnostics} disabled={!parsedDiag}>Submit parsed diagnostics</Button>
 		</div>
 		{#if parseError}
@@ -2156,14 +2184,14 @@ pre.diag {
 		</div>
 		{#if Object.keys(endpointResults).length}
 			<div class="controls">
-				<Button variant="tonal" iconType="left" onclick={async ()=>{ try { await navigator.clipboard.writeText(JSON.stringify(endpointResults, null, 2)); alert('Copied endpoint results'); addLog('info',['copied endpointResults']); } catch(e){ alert('Copy failed: '+String(e)); } }}>
-					<Icon icon={iconCopy} />
-					Copy endpoint results
-				</Button>
-				<Button variant="outlined" iconType="left" onclick={async ()=>{ const full = { endpointResults, profileResult, parsedDiag, logs: logs.slice(-200) }; try { await navigator.clipboard.writeText(JSON.stringify(full, null, 2)); alert('Copied full guided report'); addLog('info',['copied full guided report']); } catch(e){ alert('Copy failed: '+String(e)); } }}>
-					<Icon icon={iconCopy} />
-					Copy full guided report
-				</Button>
+			<Button variant="tonal" iconType="left" onclick={async ()=>{ try { await navigator.clipboard.writeText(JSON.stringify(endpointResults, null, 2)); showSnackbar({ message: 'Copied endpoint results', closable: true }); addLog('info',['copied endpointResults']); } catch(e){ showSnackbar({ message: 'Copy failed: '+String(e), closable: true }); } }}>
+				<Icon icon={iconCopy} />
+				Copy endpoint results
+			</Button>
+			<Button variant="outlined" iconType="left" onclick={async ()=>{ const full = { endpointResults, profileResult, parsedDiag, logs: logs.slice(-200) }; try { await navigator.clipboard.writeText(JSON.stringify(full, null, 2)); showSnackbar({ message: 'Copied full guided report', closable: true }); addLog('info',['copied full guided report']); } catch(e){ showSnackbar({ message: 'Copy failed: '+String(e), closable: true }); } }}>
+				<Icon icon={iconCopy} />
+				Copy full guided report
+			</Button>
 			</div>
 			<pre class="diag">{JSON.stringify(endpointResults, null, 2)}</pre>
 		{/if}

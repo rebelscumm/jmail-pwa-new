@@ -12,6 +12,7 @@
   import Card from '$lib/containers/Card.svelte';
   import LoadingIndicator from '$lib/forms/LoadingIndicator.svelte';
   import SessionStatus from '$lib/components/SessionStatus.svelte';
+  import SessionRefreshButton from '$lib/components/SessionRefreshButton.svelte';
   import { sessionManager } from '$lib/auth/session-manager';
   
   import Checkbox from '$lib/forms/Checkbox.svelte';
@@ -1540,6 +1541,7 @@
           Load more
         {/if}
       </Button>
+      <SessionRefreshButton variant="outlined" compact />
       {#if authoritativeSyncProgress.running}
         <Card variant="outlined" style="display:flex; align-items:center; gap:0.5rem; padding:0.25rem 0.5rem;">
           <span class="m3-font-body-small">

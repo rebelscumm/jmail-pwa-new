@@ -128,8 +128,9 @@
     
     // Install global auth interceptor for automatic session refresh
     try {
-      installGlobalAuthInterceptor();
-      console.log('[Init] Global auth interceptor installed');
+      // Temporarily disabled to prevent infinite recursion - will be re-enabled after testing
+      // installGlobalAuthInterceptor();
+      console.log('[Init] Global auth interceptor temporarily disabled');
     } catch (err) {
       console.warn('[Init] Global auth interceptor failed:', err);
     }

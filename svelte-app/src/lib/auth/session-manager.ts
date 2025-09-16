@@ -19,6 +19,21 @@ class SessionManager {
 
 	private refreshPromise: Promise<boolean> | null = null;
 	private callbacks: ((state: SessionState) => void)[] = [];
+	private originalFetch: typeof fetch | null = null;
+
+	/**
+	 * Set the original fetch function to avoid recursion
+	 */
+	setOriginalFetch(originalFetch: typeof fetch) {
+		this.originalFetch = originalFetch;
+	}
+
+	/**
+	 * Get fetch function (original if available, otherwise global)
+	 */
+	private getFetch(): typeof fetch {
+		return this.originalFetch || fetch;
+	}
 
 	/**
 	 * Subscribe to session state changes
@@ -90,7 +105,8 @@ class SessionManager {
 	 */
 	private async performRefresh(): Promise<boolean> {
 		try {
-			const response = await fetch('/api/google-refresh', {
+			const fetchFn = this.getFetch();
+			const response = await fetchFn('/api/google-refresh', {
 				method: 'POST',
 				credentials: 'include'
 			});
@@ -113,9 +129,10 @@ class SessionManager {
 	 * Check session status by probing endpoints
 	 */
 	async checkSessionStatus(): Promise<{ gmailWorking: boolean; oauthWorking: boolean }> {
+		const fetchFn = this.getFetch();
 		const results = await Promise.allSettled([
-			fetch('/api/gmail/profile', { method: 'GET', credentials: 'include' }),
-			fetch('/api/google-me', { method: 'GET', credentials: 'include' })
+			fetchFn('/api/gmail/profile', { method: 'GET', credentials: 'include' }),
+			fetchFn('/api/google-me', { method: 'GET', credentials: 'include' })
 		]);
 
 		const gmailWorking = results[0].status === 'fulfilled' && results[0].value.ok;
@@ -215,28 +232,6 @@ class SessionManager {
 export const sessionManager = new SessionManager();
 
 /**
- * Enhanced fetch wrapper that automatically handles 401s
- */
-export async function fetchWithAuth(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-	const response = await fetch(input, init);
-	
-	// Handle 401 responses automatically
-	if (response.status === 401) {
-		const url = typeof input === 'string' ? input : input.toString();
-		console.log('[fetchWithAuth] 🚨 401 detected for:', url);
-		const canRetry = await sessionManager.handle401(url);
-		
-		if (canRetry) {
-			// Retry the request once
-			console.log('[fetchWithAuth] 🔄 Retrying request after session refresh');
-			return fetch(input, init);
-		}
-	}
-	
-	return response;
-}
-
-/**
  * Install global fetch interceptor for automatic 401 handling
  */
 export function installGlobalAuthInterceptor(): () => void {
@@ -244,16 +239,38 @@ export function installGlobalAuthInterceptor(): () => void {
 	
 	const originalFetch = window.fetch;
 	
+	// Give session manager access to original fetch to avoid recursion
+	sessionManager.setOriginalFetch(originalFetch);
+	
 	// @ts-ignore
 	window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
 		// Only intercept API calls
 		const url = typeof input === 'string' ? input : input.toString();
-		if (url.startsWith('/api/')) {
-			return fetchWithAuth(input, init);
+		if (!url.startsWith('/api/')) {
+			// Pass through non-API calls
+			return originalFetch(input, init);
 		}
 		
-		// Pass through non-API calls
-		return originalFetch(input, init);
+		// Check if this is already a retry to prevent infinite loops
+		const isRetry = (init as any)?.__isRetry === true;
+		
+		// Use original fetch for the initial request
+		const response = await originalFetch(input, init);
+		
+		// Handle 401 responses automatically (but only on first attempt)
+		if (response.status === 401 && !isRetry) {
+			console.log('[fetchWithAuth] 🚨 401 detected for:', url);
+			const canRetry = await sessionManager.handle401(url);
+			
+			if (canRetry) {
+				// Retry the request once using original fetch to avoid recursion
+				console.log('[fetchWithAuth] 🔄 Retrying request after session refresh');
+				const retryInit = { ...init, __isRetry: true };
+				return originalFetch(input, retryInit);
+			}
+		}
+		
+		return response;
 	};
 
 	return () => {
