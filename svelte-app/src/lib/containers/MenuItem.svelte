@@ -19,6 +19,8 @@
 </script>
 
 <button type="button" class="item m3-font-label-large" {disabled} onclick={(e) => {
+  // Prevent clicks inside menu items from bubbling to parent row anchors/buttons
+  e.stopPropagation();
   onclick(e);
 }} {...extra}>
   <Layer />
