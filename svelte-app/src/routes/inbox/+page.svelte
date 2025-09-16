@@ -81,6 +81,20 @@
     if (lastRemoteCheckAtMs && (nowMs - lastRemoteCheckAtMs) < minIntervalMs) return;
     if (typeof document !== 'undefined' && (document as any).visibilityState === 'hidden') return;
     if (typeof navigator !== 'undefined' && !navigator.onLine) return;
+    
+    // Check for pending operations - skip refresh if there are any to avoid overwriting optimistic changes
+    try {
+      const db = await getDB();
+      const pendingOps = await db.getAll('ops');
+      if (pendingOps.length > 0) {
+        try { if (import.meta.env.DEV) console.debug('[InboxUI] remoteCheck skipped due to', pendingOps.length, 'pending operations'); } catch {}
+        return;
+      }
+    } catch (_) {
+      // If we can't check pending ops, be conservative and skip refresh
+      return;
+    }
+    
     remoteCheckInFlight = true;
     try {
       const inboxLabel = await getLabel('INBOX');
