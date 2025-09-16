@@ -436,6 +436,189 @@ function clearAuthCache() {
 	}
 }
 
+async function refreshServerSession() {
+	try {
+		addLog('info', ['Attempting to refresh server session...']);
+		
+		// Try to refresh the session using the refresh endpoint
+		const response = await fetch('/api/google-refresh', {
+			method: 'POST',
+			credentials: 'include'
+		});
+		
+		if (response.ok) {
+			const result = await response.text();
+			addLog('info', ['Session refresh successful', result]);
+			alert('Server session refreshed successfully! The session should now be valid for another hour.');
+			
+			// Verify the refresh worked by checking the profile
+			setTimeout(async () => {
+				try {
+					const profileCheck = await fetch('/api/gmail/profile', { 
+						method: 'GET', 
+						credentials: 'include' 
+					});
+					if (profileCheck.ok) {
+						const profile = await profileCheck.text();
+						addLog('info', ['Profile verification after refresh', profile]);
+					} else {
+						addLog('warn', ['Profile check failed after refresh', profileCheck.status]);
+					}
+				} catch (e) {
+					addLog('error', ['Profile verification failed', e]);
+				}
+			}, 1000);
+			
+		} else {
+			const errorText = await response.text();
+			addLog('error', ['Session refresh failed', { status: response.status, error: errorText }]);
+			alert(`Session refresh failed: ${response.status} - ${errorText}\n\nThis usually means:\n1. Your refresh token has expired (need to re-login)\n2. The server is not configured properly\n3. Network connectivity issues`);
+		}
+	} catch (e) {
+		addLog('error', ['refreshServerSession failed', e]);
+		alert('Failed to refresh server session: ' + String(e));
+	}
+}
+
+async function checkSessionExpiry() {
+	try {
+		addLog('info', ['Checking session expiry status...']);
+		
+		// Check various endpoints to understand session state
+		const endpoints = [
+			'/api/google-me',
+			'/api/google-tokeninfo', 
+			'/api/gmail/profile'
+		];
+		
+		const results: Record<string, any> = {};
+		
+		for (const endpoint of endpoints) {
+			try {
+				const response = await fetch(endpoint, {
+					method: 'GET',
+					credentials: 'include'
+				});
+				
+				let body = '';
+				try {
+					body = await response.text();
+				} catch (_) {
+					body = '<<unreadable>>';
+				}
+				
+				results[endpoint] = {
+					status: response.status,
+					ok: response.ok,
+					body: body.length > 500 ? body.substring(0, 500) + '...' : body
+				};
+			} catch (e) {
+				results[endpoint] = { error: String(e) };
+			}
+		}
+		
+		// Analyze the results
+		const analysis = {
+			timestamp: new Date().toISOString(),
+			endpoints: results,
+			diagnosis: analyzeSessionState(results)
+		};
+		
+		addLog('info', ['Session expiry check completed', analysis]);
+		
+		const message = `Session Status Analysis:
+${analysis.diagnosis.summary}
+
+Details:
+- Google OAuth endpoints: ${analysis.diagnosis.oauthWorking ? '✓ Working' : '✗ Not working'}  
+- Gmail API: ${analysis.diagnosis.gmailWorking ? '✓ Working' : '✗ Not working'}
+- Likely issue: ${analysis.diagnosis.likelyIssue}
+
+${analysis.diagnosis.recommendation}`;
+		
+		alert(message);
+		
+	} catch (e) {
+		addLog('error', ['checkSessionExpiry failed', e]);
+		alert('Failed to check session expiry: ' + String(e));
+	}
+}
+
+function analyzeSessionState(results: Record<string, any>) {
+	const gmailWorking = results['/api/gmail/profile']?.ok === true;
+	const googleMeWorking = results['/api/google-me']?.ok === true;
+	const tokenInfoWorking = results['/api/google-tokeninfo']?.ok === true;
+	
+	const oauthWorking = googleMeWorking || tokenInfoWorking;
+	
+	let summary = '';
+	let likelyIssue = '';
+	let recommendation = '';
+	
+	if (gmailWorking && oauthWorking) {
+		summary = 'All authentication systems working normally';
+		likelyIssue = 'No issues detected';
+		recommendation = 'No action needed';
+	} else if (gmailWorking && !oauthWorking) {
+		summary = 'Gmail API working but OAuth endpoints failing';
+		likelyIssue = 'Session cookie expired (1 hour limit) but refresh token still valid';
+		recommendation = 'Click "Refresh server session" to extend the session for another hour';
+	} else if (!gmailWorking && oauthWorking) {
+		summary = 'OAuth working but Gmail API failing';  
+		likelyIssue = 'Unexpected state - OAuth tokens present but Gmail proxy failing';
+		recommendation = 'Check server logs and try refreshing session';
+	} else {
+		summary = 'Both Gmail API and OAuth endpoints failing';
+		likelyIssue = 'Complete authentication failure - refresh token may have expired';
+		recommendation = 'Try refreshing session first, then re-login if that fails';
+	}
+	
+	return {
+		summary,
+		likelyIssue,
+		recommendation,
+		gmailWorking,
+		oauthWorking
+	};
+}
+
+async function forceReauth() {
+	try {
+		const confirmed = confirm(`This will force a complete re-authentication by clearing all local auth data and redirecting to login.
+
+Current session will be lost. Continue?`);
+		
+		if (!confirmed) return;
+		
+		addLog('info', ['Starting forced re-authentication...']);
+		
+		// Clear all local auth data
+		clearAuthCache();
+		
+		// Clear any client-side cookies we can access
+		try {
+			const raw = document.cookie || '';
+			raw.split(';').forEach((p) => {
+				const i = p.indexOf('='); 
+				if (i === -1) return;
+				const k = p.slice(0,i).trim();
+				document.cookie = k + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/';
+			});
+		} catch (_) {}
+		
+		// Redirect to server login
+		const loginUrl = new URL('/api/google-login', window.location.origin);
+		loginUrl.searchParams.set('return_to', window.location.href);
+		
+		addLog('info', ['Redirecting to forced login', loginUrl.toString()]);
+		window.location.href = loginUrl.toString();
+		
+	} catch (e) {
+		addLog('error', ['forceReauth failed', e]);
+		alert('Failed to force re-authentication: ' + String(e));
+	}
+}
+
 function openAuthSettings() {
 	try {
 		window.location.href = '/settings?tab=auth';
@@ -1757,10 +1940,18 @@ pre.diag {
 				Copy Section
 			</Button>
 		</div>
+		<p style="color: rgb(var(--m3-scheme-on-surface-variant)); margin-bottom: 1rem;">
+			<strong>Session Expiration Issue:</strong> Server-side sessions expire after 1 hour for security. 
+			If Gmail API works but Google OAuth endpoints fail, your session cookie expired but refresh token is still valid. 
+			Use "Refresh server session" to extend for another hour without re-logging in.
+		</p>
 		<div class="controls">
-			<Button variant="tonal" onclick={clearAuthCache}>Clear authentication cache</Button>
+			<Button variant="filled" onclick={checkSessionExpiry}>Check session status</Button>
+			<Button variant="tonal" onclick={refreshServerSession}>Refresh server session</Button>
+			<Button variant="outlined" onclick={clearAuthCache}>Clear authentication cache</Button>
 			<Button variant="outlined" onclick={openAuthSettings}>Open authentication settings</Button>
 			<Button variant="outlined" onclick={resetAuthRateLimit}>Reset authentication rate limits</Button>
+			<Button variant="text" color="error" onclick={forceReauth}>Force re-authentication</Button>
 		</div>
 	</Card>
 

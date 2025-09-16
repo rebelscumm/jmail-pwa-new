@@ -29,6 +29,7 @@
   import PrecomputeProgress from "$lib/components/PrecomputeProgress.svelte";
   import RecipientBadges from "$lib/utils/RecipientBadges.svelte";
   import { loadUserProfile } from "$lib/stores/user";
+  import { installGlobalAuthInterceptor, sessionManager } from "$lib/auth/session-manager";
   
   let onKeyDownRef: ((e: KeyboardEvent) => void) | null = null;
   
@@ -123,6 +124,22 @@
       startFlushLoop();
     } catch (err) {
       console.warn('[Init] startFlushLoop failed:', err);
+    }
+    
+    // Install global auth interceptor for automatic session refresh
+    try {
+      installGlobalAuthInterceptor();
+      console.log('[Init] Global auth interceptor installed');
+    } catch (err) {
+      console.warn('[Init] Global auth interceptor failed:', err);
+    }
+    
+    // Start session monitoring
+    try {
+      sessionManager.startMonitoring();
+      console.log('[Init] Session monitoring started');
+    } catch (err) {
+      console.warn('[Init] Session monitoring failed:', err);
     }
     
     // Load settings at app start

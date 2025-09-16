@@ -11,6 +11,8 @@
   import Button from '$lib/buttons/Button.svelte';
   import Card from '$lib/containers/Card.svelte';
   import LoadingIndicator from '$lib/forms/LoadingIndicator.svelte';
+  import SessionStatus from '$lib/components/SessionStatus.svelte';
+  import { sessionManager } from '$lib/auth/session-manager';
   
   import Checkbox from '$lib/forms/Checkbox.svelte';
   
@@ -521,6 +523,7 @@
 
   onMount(() => {
     const unsub = authState.subscribe((s) => (ready = s.ready));
+    
     if (($threadsStore || []).length) loading = false;
     (async () => {
       let hadCache = false;
@@ -635,7 +638,11 @@
     // Expose for debugging/manual trigger
     try { (window as any).__jmailRefresh = () => window.dispatchEvent(new CustomEvent('jmail:refresh')); } catch {}
     window.addEventListener('keydown', onKeyDown);
-    return () => { window.removeEventListener('jmail:refresh', handleGlobalRefresh); window.removeEventListener('keydown', onKeyDown); unsub(); };
+    return () => { 
+      window.removeEventListener('jmail:refresh', handleGlobalRefresh); 
+      window.removeEventListener('keydown', onKeyDown); 
+      unsub(); 
+    };
   });
 
   function setApiError(e: unknown) {
@@ -1502,6 +1509,11 @@
       </div>
     </Card>
   {/if}
+
+  <!-- Session Status Component -->
+  <div style="margin-bottom: 1rem;">
+    <SessionStatus />
+  </div>
 
   <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.5rem; gap:0.5rem;">
     <h3 class="m3-font-title-medium" style="margin:0">Inbox</h3>
