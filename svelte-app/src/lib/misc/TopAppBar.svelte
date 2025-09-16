@@ -799,21 +799,31 @@ import { precomputeStatus } from '$lib/stores/precompute';
   let renderedUnreadCount = $state(0);
   $effect(() => {
     try {
+      // If the user is actively viewing the inbox route, prefer the local
+      // thread-derived counts (matches diagnostics page behavior) so numbers
+      // displayed in the topbar align with the inbox view.
+      const onInbox = typeof window !== 'undefined' && typeof window.location !== 'undefined' && String(window.location.pathname || '').startsWith('/inbox');
+      if (onInbox) {
+        try { renderedInboxCount = Number(baseInboxCount() || 0); } catch { renderedInboxCount = 0; }
+        try { renderedUnreadCount = Number(baseUnreadCount() || 0); } catch { renderedUnreadCount = 0; }
+        return;
+      }
+
+      // Otherwise prefer authoritative label stats when available, falling
+      // back to optimistic counters.
       if (typeof inboxMessagesTotal === 'number') {
         renderedInboxCount = inboxMessagesTotal;
       } else {
         try { renderedInboxCount = Number(optimisticInboxCount() || 0); } catch { renderedInboxCount = 0; }
       }
-    } catch {
-      renderedInboxCount = 0;
-    }
-    try {
+
       if (typeof inboxMessagesUnread === 'number') {
         renderedUnreadCount = inboxMessagesUnread;
       } else {
         try { renderedUnreadCount = Number(optimisticUnreadCount() || 0); } catch { renderedUnreadCount = 0; }
       }
     } catch {
+      renderedInboxCount = 0;
       renderedUnreadCount = 0;
     }
   });
