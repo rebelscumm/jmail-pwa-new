@@ -214,6 +214,18 @@ class SessionManager {
 	}
 
 	/**
+	 * Apply a server-managed session state so UI treats user as authenticated
+	 */
+	applyServerSession(email?: string, expiryMs?: number) {
+		this.setState({
+			authenticated: true,
+			lastRefresh: Date.now(),
+			sessionExpiry: typeof expiryMs === 'number' ? expiryMs : Date.now() + (60 * 60 * 1000)
+		});
+		console.log('[SessionManager] Applied server-managed session for', email || 'unknown');
+	}
+
+	/**
 	 * Start periodic session monitoring
 	 */
 	startMonitoring(intervalMs: number = 5 * 60 * 1000): () => void {

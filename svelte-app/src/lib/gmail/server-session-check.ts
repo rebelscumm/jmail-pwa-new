@@ -108,6 +108,13 @@ export async function storeServerSessionInDB(sessionInfo: ServerSessionInfo): Pr
     
     await db.put('auth', account, 'me');
     pushGmailDiag({ type: 'server_session_stored_in_db', email: sessionInfo.email });
+    // Notify session manager so UI updates to authenticated state
+    try {
+      const { sessionManager } = await import('$lib/auth/session-manager');
+      sessionManager.applyServerSession(sessionInfo.email, sessionInfo.exp ? sessionInfo.exp * 1000 : undefined);
+    } catch (e) {
+      pushGmailDiag({ type: 'apply_server_session_failed', error: e instanceof Error ? e.message : String(e) });
+    }
   } catch (error) {
     pushGmailDiag({ 
       type: 'server_session_store_error', 
