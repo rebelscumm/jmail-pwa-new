@@ -81,20 +81,6 @@
     if (lastRemoteCheckAtMs && (nowMs - lastRemoteCheckAtMs) < minIntervalMs) return;
     if (typeof document !== 'undefined' && (document as any).visibilityState === 'hidden') return;
     if (typeof navigator !== 'undefined' && !navigator.onLine) return;
-    
-    // Check for pending operations - skip refresh if there are any to avoid overwriting optimistic changes
-    try {
-      const db = await getDB();
-      const pendingOps = await db.getAll('ops');
-      if (pendingOps.length > 0) {
-        try { if (import.meta.env.DEV) console.debug('[InboxUI] remoteCheck skipped due to', pendingOps.length, 'pending operations'); } catch {}
-        return;
-      }
-    } catch (_) {
-      // If we can't check pending ops, be conservative and skip refresh
-      return;
-    }
-    
     remoteCheckInFlight = true;
     try {
       const inboxLabel = await getLabel('INBOX');
@@ -1010,8 +996,16 @@
           const prevUpdatedAt = (prev as any).aiSubjectUpdatedAt || 0;
           const newDate = base.lastMsgMeta?.date || 0;
           const changed = (!!lastPrevId && !!lastNewId && lastPrevId !== lastNewId) || (newDate > prevUpdatedAt);
+          
+          // Check if the local thread has been optimistically modified (e.g., archived/deleted)
+          const localHasInbox = Array.isArray(prev.labelIds) && prev.labelIds.includes('INBOX');
+          const serverHasInbox = Array.isArray(base.labelIds) && base.labelIds.includes('INBOX');
+          const wasOptimisticallyModified = !localHasInbox && serverHasInbox;
+          
           const carry: import('$lib/types').GmailThread = {
             ...base,
+            // Preserve local labelIds if they were optimistically modified
+            labelIds: wasOptimisticallyModified ? prev.labelIds : base.labelIds,
             summary: prev.summary,
             summaryStatus: prev.summaryStatus,
             // drop legacy summaryVersion preservation
@@ -1039,12 +1033,32 @@
         newlyArrived.push(pending);
       }
     }
-    // Persist
+    // Persist messages
     const txMsgs = db.transaction('messages', 'readwrite');
     for (const m of msgs) await txMsgs.store.put(m);
     await txMsgs.done;
+    
+    // Persist threads, but don't overwrite optimistically modified ones
     const txThreads = db.transaction('threads', 'readwrite');
-    for (const t of threadList) await txThreads.store.put(t);
+    for (const t of threadList) {
+      const existing = await txThreads.store.get(t.threadId);
+      if (existing) {
+        const localHasInbox = Array.isArray(existing.labelIds) && existing.labelIds.includes('INBOX');
+        const serverHasInbox = Array.isArray(t.labelIds) && t.labelIds.includes('INBOX');
+        const wasOptimisticallyModified = !localHasInbox && serverHasInbox;
+        
+        // Only update if not optimistically modified, or preserve the optimistic changes
+        if (!wasOptimisticallyModified) {
+          await txThreads.store.put(t);
+        } else {
+          // Update everything except labelIds to preserve optimistic changes
+          const preserved = { ...t, labelIds: existing.labelIds };
+          await txThreads.store.put(preserved);
+        }
+      } else {
+        await txThreads.store.put(t);
+      }
+    }
     await txThreads.done;
 
     // Offline-first, non-disruptive merge: update the in-memory store using
