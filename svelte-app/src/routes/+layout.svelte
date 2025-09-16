@@ -293,6 +293,20 @@
             if (location.pathname !== target) {
               location.href = target;
             }
+          } else {
+            // If there's a server-managed session stored in IndexedDB, apply it to the session manager
+            try {
+              if ((account as any).serverManaged) {
+                try {
+                  sessionManager.applyServerSession((account as any).email, (account as any).tokenExpiry);
+                  console.log('[Layout] Applied server-managed session to sessionManager for', (account as any).email);
+                } catch (e) {
+                  console.warn('[Layout] Failed to apply server session to sessionManager:', e);
+                }
+              }
+            } catch (e) {
+              console.warn('[Layout] Error while applying server session:', e);
+            }
           }
         } catch (dbErr) {
           console.warn('[Layout] Database check failed:', dbErr);
@@ -404,7 +418,9 @@
   
   $effect(() => { 
     try {
-      if (snackbar && typeof snackbar.show === 'function') {
+      if (snackbar && typeof snackbar.show === 'function' && typeof snackbar.dismiss === 'function') {
+        registerSnackbar(snackbar.show, snackbar.dismiss);
+      } else if (snackbar && typeof snackbar.show === 'function') {
         registerSnackbar(snackbar.show);
       }
     } catch (err) {

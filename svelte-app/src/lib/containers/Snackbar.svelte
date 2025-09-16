@@ -41,6 +41,12 @@
       }, timeout);
   };
 
+  // Expose a dismiss method on the component instance so registrants can hide the current snackbar
+  export function dismiss(): void {
+    snackbar = undefined;
+    clearTimeout(timeoutId);
+  }
+
   async function copyMessageToClipboard() {
     if (!snackbar) return;
     try {
@@ -90,17 +96,20 @@
           >
             <Icon icon={iconCopy} />
           </button>
-          <button
-            type="button"
-            class="close"
-            title={closeButtonTitle}
-            onclick={() => {
-              snackbar = undefined;
-            }}
-          >
-            <Layer />
-            <Icon icon={iconX} class="close-icon" />
-          </button>
+          {#if snackbar.closable}
+            <button
+              type="button"
+              class="close"
+              title={closeButtonTitle}
+              aria-label={closeButtonTitle}
+              onclick={() => {
+                snackbar = undefined;
+              }}
+            >
+              <Layer />
+              <Icon icon={iconX} class="close-icon" />
+            </button>
+          {/if}
         </div>
       </SnackbarItem>
     {/key}
@@ -152,7 +161,15 @@
   .actions { display:flex; align-items:center; gap:0.25rem; }
   .close {
     color: var(--m3-scheme-inverse-on-surface);
-    padding: 0 0.75rem;
+    padding: 0 0.5rem;
     margin-right: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.5rem; /* MD3 small icon button */
+    height: 2.5rem;
+    border-radius: 0.5rem;
   }
+  .close:focus-visible { outline: 2px solid rgb(var(--m3-scheme-primary) / 0.6); outline-offset: 2px; }
+  .close-icon :global(svg) { width: 1.25rem; height: 1.25rem; }
 </style>

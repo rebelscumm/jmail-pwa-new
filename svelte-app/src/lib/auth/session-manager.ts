@@ -138,9 +138,29 @@ class SessionManager {
 		const gmailWorking = results[0].status === 'fulfilled' && results[0].value.ok;
 		const oauthWorking = results[1].status === 'fulfilled' && results[1].value.ok;
 
-		this.setState({ 
-			authenticated: gmailWorking || oauthWorking 
-		});
+		// If oauthWorking is true, set an estimated expiry using tokeninfo call
+		if (oauthWorking) {
+			try {
+				const tokenInfoResp = await fetchFn('/api/google-tokeninfo', { method: 'GET', credentials: 'include' });
+				if (tokenInfoResp.ok) {
+					const info = await tokenInfoResp.json().catch(() => null);
+					const expiresIn = info && info.expires_in ? Number(info.expires_in) : null;
+					this.setState({
+						authenticated: true,
+						lastRefresh: Date.now(),
+						sessionExpiry: expiresIn ? Date.now() + (expiresIn * 1000) : this.state.sessionExpiry
+					});
+				} else {
+					this.setState({ authenticated: true });
+				}
+			} catch (_) {
+				this.setState({ authenticated: true });
+			}
+		} else {
+			this.setState({ 
+				authenticated: gmailWorking || oauthWorking 
+			});
+		}
 
 		return { gmailWorking, oauthWorking };
 	}

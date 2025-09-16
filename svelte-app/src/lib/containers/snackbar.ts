@@ -1,10 +1,18 @@
 import type { SnackbarIn } from './Snackbar.svelte';
 
 let showImpl: ((opts: SnackbarIn) => void) | null = null;
+let dismissImpl: (() => void) | null = null;
 let history: SnackbarIn[] = [];
 
-export function register(showFn: (opts: SnackbarIn) => void): void {
+export function dismissCurrent(): void {
+  try {
+    if (showImpl) showImpl({ message: '', closable: true, timeout: 0 });
+  } catch {}
+}
+
+export function register(showFn: (opts: SnackbarIn) => void, dismissFn?: () => void): void {
   showImpl = showFn;
+  dismissImpl = dismissFn || null;
 }
 
 export function show(opts: SnackbarIn): void {
@@ -29,6 +37,12 @@ export function getHistory(): SnackbarIn[] {
 
 export function clearHistory(): void {
   history = [];
+}
+
+export function dismiss(): void {
+  try {
+    if (dismissImpl) dismissImpl();
+  } catch {}
 }
 
 

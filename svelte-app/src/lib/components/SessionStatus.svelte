@@ -38,7 +38,15 @@ onDestroy(() => {
 async function checkSessionStatus() {
 	checkingStatus = true;
 	try {
-		const status = await sessionManager.checkSessionStatus();
+		// Prefer local sessionManager state when available to avoid transient snackbars
+		const localState = sessionManager.getState();
+		let status = { gmailWorking: false, oauthWorking: false } as any;
+		try {
+			status = await sessionManager.checkSessionStatus();
+		} catch (e) {
+			// If the probe fails, fall back to local state
+			status = { gmailWorking: !!localState.authenticated, oauthWorking: !!localState.authenticated };
+		}
 		
 		if (status.gmailWorking && !status.oauthWorking) {
 			showSnackbar({

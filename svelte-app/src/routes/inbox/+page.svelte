@@ -1295,6 +1295,35 @@
     return copiedDiagOk;
   }
 
+  // Dev helper: compare local DB threads with Gmail's authoritative INBOX thread list
+  async function compareLocalToGmail() {
+    try {
+      const db = await getDB();
+      const local = await db.getAll('threads');
+      const localIds = new Set((local || []).map((t: any) => t.threadId));
+      const gmailIds: string[] = [];
+      let pageToken: string | undefined = undefined;
+      // Page through thread ids (small safety cap)
+      for (let i = 0; i < 20; i++) {
+        const page = await listThreadIdsByLabelId('INBOX', 500, pageToken);
+        if (!page || !Array.isArray(page.ids) || !page.ids.length) break;
+        for (const id of page.ids) gmailIds.push(id);
+        if (!page.nextPageToken) break;
+        pageToken = page.nextPageToken;
+      }
+      const gmailSet = new Set(gmailIds);
+      const inLocalNotGmail = Array.from(localIds).filter(id => !gmailSet.has(id));
+      const inGmailNotLocal = gmailIds.filter(id => !localIds.has(id));
+      console.log('[Compare] localCount=', localIds.size, 'gmailCountSample=', gmailIds.length, 'inLocalNotGmail=', inLocalNotGmail.slice(0,20), 'inGmailNotLocal=', inGmailNotLocal.slice(0,20));
+      try { showSnackbar({ message: `Compare complete — local:${localIds.size} gmailSample:${gmailIds.length}`, timeout: 4000 }); } catch (_) {}
+      return { localCount: localIds.size, gmailSampleCount: gmailIds.length, inLocalNotGmail: inLocalNotGmail.slice(0,200), inGmailNotLocal: inGmailNotLocal.slice(0,200) };
+    } catch (e) {
+      console.error('[Compare] failed', e);
+      try { showSnackbar({ message: `Compare failed: ${e instanceof Error ? e.message : String(e)}`, timeout: 4000 }); } catch (_) {}
+      throw e;
+    }
+  }
+
   if (typeof window !== 'undefined') {
     (window as any).__copyPageDiagnostics = async () => { await copyDiagnostics(); };
   }
@@ -1542,6 +1571,9 @@
         {/if}
       </Button>
       <SessionRefreshButton variant="outlined" compact />
+      {#if import.meta.env.DEV}
+        <Button variant="outlined" onclick={compareLocalToGmail}>Compare DB ↔ Gmail</Button>
+      {/if}
       {#if authoritativeSyncProgress.running}
         <Card variant="outlined" style="display:flex; align-items:center; gap:0.5rem; padding:0.25rem 0.5rem;">
           <span class="m3-font-body-small">
