@@ -1373,7 +1373,21 @@ async function debugInboxSync() {
 				activeThreadIds: activeHolds.map(([threadId]) => threadId)
 			}
 		};
-		
+		// Enrich diagnostics with additional context useful for debugging sync issues
+		let lastHistoryId: string | null = null;
+		try {
+			const meta = (await db.get('settings', 'lastHistoryId')) as any || {};
+			lastHistoryId = meta?.value || null;
+		} catch (_) { lastHistoryId = null; }
+		inboxDiagnostics = {
+			...inboxDiagnostics,
+			gmailData: {
+				...(inboxDiagnostics.gmailData || {}),
+				firstPageSampleIds: gmailMessageIds.slice(0, 10),
+				inboxLabelStats: inboxDiagnostics.gmailData && inboxDiagnostics.gmailData.inboxLabelStats ? { ...inboxDiagnostics.gmailData.inboxLabelStats, _raw: gmailInboxLabel } : inboxDiagnostics.gmailData?.inboxLabelStats
+			},
+			storage: { lastHistoryId }
+		};
 		addLog('info', ['Inbox sync debug completed', inboxDiagnostics]);
 	} catch (e) {
 		addLog('error', ['debugInboxSync failed', e]);
