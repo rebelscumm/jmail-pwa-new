@@ -309,21 +309,50 @@ async function runFullDiagnostics() {
 		await runDiagnosticStep('Cookie Configuration', async () => {
 			try {
 				const raw = document.cookie || '';
-				const cookies: Record<string, string> = {};
+				const clientCookies: Record<string, string> = {};
 				raw.split(';').forEach((p) => { 
 					const i = p.indexOf('='); 
 					if (i === -1) return; 
 					const k = p.slice(0, i).trim(); 
 					const v = p.slice(i + 1).trim(); 
-					cookies[k] = v; 
+					clientCookies[k] = v; 
 				});
 				
-				const hasCookies = Object.keys(cookies).length > 0;
+				// Check if server session is working (indicates HttpOnly cookies are present)
+				let serverCookiesPresent = false;
+				try {
+					const r = await fetch('/api/google-me', { method: 'GET', credentials: 'include' });
+					serverCookiesPresent = r.ok && r.status === 200;
+				} catch (_) {
+					serverCookiesPresent = false;
+				}
+				
+				const clientCookieCount = Object.keys(clientCookies).length;
+				let status: 'success' | 'warning' | 'error' = 'success';
+				let message = '';
+				
+				if (serverCookiesPresent && clientCookieCount === 0) {
+					status = 'success';
+					message = 'Server authentication cookies present (HttpOnly)';
+				} else if (serverCookiesPresent && clientCookieCount > 0) {
+					status = 'success';
+					message = `Server auth cookies + ${clientCookieCount} client cookies`;
+				} else if (!serverCookiesPresent && clientCookieCount > 0) {
+					status = 'warning';
+					message = `${clientCookieCount} client cookies, no server auth`;
+				} else {
+					status = 'warning';
+					message = 'No cookies detected';
+				}
 				
 				return {
-					status: hasCookies ? 'success' : 'warning',
-					message: hasCookies ? `${Object.keys(cookies).length} cookies found` : 'No cookies found',
-					data: cookies
+					status,
+					message,
+					data: {
+						clientCookies,
+						serverAuthCookiesPresent: serverCookiesPresent,
+						note: 'HttpOnly server cookies cannot be read by JavaScript'
+					}
 				};
 			} catch (e) {
 				return {
@@ -632,7 +661,7 @@ async function probeServer() {
 
 	for (const ep of endpoints) {
 		try {
-			const res = await fetch(ep, { method: 'GET', credentials: 'include' });
+			const res = await fetch(ep, { method: 'GET', credentials: 'include', redirect: 'manual' });
 			let body: any = null;
 			try { body = await res.text(); body = tryParseJson(body); } catch (e) { body = `<<unreadable: ${e}>>`; }
 			// capture response headers and status
