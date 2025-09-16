@@ -13,12 +13,14 @@
   }: {
     icon?: IconifyIcon | "space" | undefined;
     disabled?: boolean;
-    onclick: () => void;
+    onclick: (e?: MouseEvent) => void;
     children: Snippet;
   } & Record<string, any> = $props();
 </script>
 
-<button type="button" class="item m3-font-label-large" {disabled} {onclick} {...extra}>
+<button type="button" class="item m3-font-label-large" {disabled} onclick={(e) => {
+  onclick(e);
+}} {...extra}>
   <Layer />
   {#if icon == "space"}
     <span class="icon"></span>

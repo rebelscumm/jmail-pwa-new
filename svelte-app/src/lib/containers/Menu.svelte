@@ -18,7 +18,13 @@
   aria-orientation="vertical"
   aria-label="Menu"
   tabindex="0"
-  onclick={(e) => { e.preventDefault(); e.stopPropagation(); }}
+  onclick={(e) => { 
+    // Only prevent default if the click is directly on the menu container, not on menu items
+    if (e.target === e.currentTarget) {
+      e.preventDefault(); 
+      e.stopPropagation(); 
+    }
+  }}
   onpointerdown={(e) => e.stopPropagation()}
   onmousedown={(e) => e.stopPropagation()}
   onmouseup={(e) => e.stopPropagation()}

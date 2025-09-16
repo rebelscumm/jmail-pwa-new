@@ -127,7 +127,15 @@ import iconOpenInNew from "@ktibow/iconset-material-symbols/open-in-new";
       }
     };
   }
-  function copyText(text: string) { navigator.clipboard.writeText(text); }
+  async function copyText(text: string) { 
+    try {
+      await navigator.clipboard.writeText(text);
+      showSnackbar({ message: 'Copied to clipboard', closable: true });
+    } catch (e) {
+      console.error('[Viewer] Failed to copy text:', e);
+      showSnackbar({ message: 'Failed to copy text', closable: true });
+    }
+  }
   let loadingMap: Record<string, boolean> = $state({});
   let errorMap: Record<string, string> = $state({});
   let autoTried: Record<string, boolean> = $state({});
@@ -937,14 +945,19 @@ onMount(() => {
       <!-- Secondary Actions Menu -->
       <div class="action-group secondary-actions">
         <details class="more-menu">
-          <summary>
-            <Button variant="text" iconType="full" aria-label="More actions">
-              <Icon icon={iconMore} />
-            </Button>
+          <summary class="more-menu-button" aria-label="More actions">
+            <Icon icon={iconMore} />
           </summary>
           <div class="menu-container">
             <Menu>
-              <MenuItem onclick={() => copyText(currentThread.lastMsgMeta.subject || '')}>
+              <MenuItem onclick={(e) => {
+                copyText(currentThread.lastMsgMeta.subject || '');
+                // Close the details menu
+                if (e?.target && e.target instanceof HTMLElement) {
+                  const details = e.target.closest('details');
+                  if (details) details.open = false;
+                }
+              }}>
                 <Icon icon={iconSubject} />
                 Copy Subject
               </MenuItem>
@@ -969,7 +982,14 @@ onMount(() => {
                 <Icon icon={iconLogin} />
                 Re-login
               </MenuItem>
-              <MenuItem onclick={scrollToBottom}>
+              <MenuItem onclick={(e) => {
+                scrollToBottom();
+                // Close the details menu
+                if (e?.target && e.target instanceof HTMLElement) {
+                  const details = e.target.closest('details');
+                  if (details) details.open = false;
+                }
+              }}>
                 <Icon icon={iconScrollDown} />
                 Scroll to Bottom
               </MenuItem>
@@ -1262,14 +1282,19 @@ onMount(() => {
       <!-- Secondary Actions Menu -->
       <div class="action-group secondary-actions">
         <details class="more-menu">
-          <summary>
-            <Button variant="text" iconType="full" aria-label="More actions">
-              <Icon icon={iconMore} />
-            </Button>
+          <summary class="more-menu-button" aria-label="More actions">
+            <Icon icon={iconMore} />
           </summary>
           <div class="menu-container">
             <Menu>
-              <MenuItem onclick={() => copyText(currentThread.lastMsgMeta.subject || '')}>
+              <MenuItem onclick={(e) => {
+                copyText(currentThread.lastMsgMeta.subject || '');
+                // Close the details menu
+                if (e?.target && e.target instanceof HTMLElement) {
+                  const details = e.target.closest('details');
+                  if (details) details.open = false;
+                }
+              }}>
                 <Icon icon={iconSubject} />
                 Copy Subject
               </MenuItem>
@@ -1294,7 +1319,14 @@ onMount(() => {
                 <Icon icon={iconLogin} />
                 Re-login
               </MenuItem>
-              <MenuItem onclick={scrollToBottom}>
+              <MenuItem onclick={(e) => {
+                scrollToBottom();
+                // Close the details menu
+                if (e?.target && e.target instanceof HTMLElement) {
+                  const details = e.target.closest('details');
+                  if (details) details.open = false;
+                }
+              }}>
                 <Icon icon={iconScrollDown} />
                 Scroll to Bottom
               </MenuItem>
@@ -1620,6 +1652,30 @@ onMount(() => {
 
   .more-menu summary::-webkit-details-marker {
     display: none;
+  }
+
+  .more-menu-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.5rem;
+    height: 2.5rem;
+    border-radius: var(--m3-util-rounding-full);
+    background: transparent;
+    color: rgb(var(--m3-scheme-on-surface));
+    border: none;
+    cursor: pointer;
+    transition: background-color 150ms cubic-bezier(0.4, 0.0, 0.2, 1);
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .more-menu-button:hover {
+    background: rgb(var(--m3-scheme-on-surface) / 0.08);
+  }
+
+  .more-menu-button:focus-visible {
+    outline: 2px solid rgb(var(--m3-scheme-primary) / 0.6);
+    outline-offset: -2px;
   }
 
   .menu-container {
