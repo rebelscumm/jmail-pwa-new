@@ -552,6 +552,10 @@
               try {
                 syncing = true;
                 await hydrate(); // Load first page quickly for immediate UX
+                
+                // Notify session manager that authentication is working
+                const { sessionManager } = await import('$lib/auth/session-manager');
+                sessionManager.applyServerSession(serverSession.email);
               } catch (e) {
                 console.error('[Inbox] Server session API call failed:', e);
                 setApiError(e);
@@ -623,6 +627,10 @@
         try {
           syncing = true;
           await hydrate(); // Load first page quickly
+          
+          // Notify session manager that authentication is working
+          const { sessionManager } = await import('$lib/auth/session-manager');
+          sessionManager.applyServerSession();
         } catch (e) {
           setApiError(e);
         } finally {
@@ -985,6 +993,12 @@
     for (const l of remoteLabels) await tx.store.put(l);
     await tx.done;
     labelsStore.set(remoteLabels);
+    
+    // Notify session manager that Gmail API is working
+    try {
+      const { sessionManager } = await import('$lib/auth/session-manager');
+      sessionManager.applyServerSession();
+    } catch (_) {}
 
     // Messages + Threads (first N) and label stats for accurate counts
     // Attempt profile ping to capture the latest historyId for incremental syncs

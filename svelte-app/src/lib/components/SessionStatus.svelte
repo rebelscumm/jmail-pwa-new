@@ -70,7 +70,12 @@ async function checkSessionStatus() {
 							 window.location.pathname.startsWith('/outbox') ||
 							 window.location.pathname.startsWith('/viewer');
 			
-			if (needsAuth) {
+			// Check if the session manager thinks we're authenticated (from successful operations)
+			const sessionAuthenticated = sessionManager.getState().authenticated;
+			
+			if (needsAuth && !sessionAuthenticated) {
+				// Only show this warning if the session manager also thinks we're not authenticated
+				// This prevents false positives when endpoint probes fail but actual operations work
 				showSnackbar({
 					message: 'Authentication required - please sign in',
 					timeout: 8000,
