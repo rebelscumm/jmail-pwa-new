@@ -48,28 +48,42 @@ async function checkSessionStatus() {
 			status = { gmailWorking: !!localState.authenticated, oauthWorking: !!localState.authenticated };
 		}
 		
+		// Only show warnings if there are actual problems that affect user functionality
+		// If Gmail API is working, the user can successfully use the app even if OAuth probe fails
 		if (status.gmailWorking && !status.oauthWorking) {
-			showSnackbar({
-				message: 'Session expired but refresh token valid - consider refreshing',
-				timeout: 5000,
-				closable: true,
-				actions: {
-					'Refresh': refreshSession
-				}
-			});
-		} else if (!status.gmailWorking && !status.oauthWorking) {
-			showSnackbar({
-				message: 'Authentication required - please sign in',
-				timeout: 8000,
-				closable: true,
-				actions: {
-					'Sign In': () => {
-						const loginUrl = new URL('/api/google-login', window.location.origin);
-						loginUrl.searchParams.set('return_to', window.location.href);
-						window.location.href = loginUrl.toString();
+			// Only show this if the user might actually need to refresh soon
+			const needsRefresh = sessionManager.needsRefresh();
+			if (needsRefresh) {
+				showSnackbar({
+					message: 'Session will expire soon - consider refreshing',
+					timeout: 5000,
+					closable: true,
+					actions: {
+						'Refresh': refreshSession
 					}
-				}
-			});
+				});
+			}
+		} else if (!status.gmailWorking && !status.oauthWorking) {
+			// Only show authentication required if we're on a page that actually needs auth
+			const needsAuth = window.location.pathname.startsWith('/inbox') || 
+							 window.location.pathname.startsWith('/snoozed') || 
+							 window.location.pathname.startsWith('/outbox') ||
+							 window.location.pathname.startsWith('/viewer');
+			
+			if (needsAuth) {
+				showSnackbar({
+					message: 'Authentication required - please sign in',
+					timeout: 8000,
+					closable: true,
+					actions: {
+						'Sign In': () => {
+							const loginUrl = new URL('/api/google-login', window.location.origin);
+							loginUrl.searchParams.set('return_to', window.location.href);
+							window.location.href = loginUrl.toString();
+						}
+					}
+				});
+			}
 		}
 	} catch (error) {
 		console.error('[SessionStatus] Failed to check session status:', error);

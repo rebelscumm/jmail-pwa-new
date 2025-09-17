@@ -52,6 +52,7 @@
   let nextPageToken: string | undefined = $state();
   let syncing = $state(false);
   let authoritativeSyncProgress = $state({ running: false, pagesCompleted: 0, pagesTotal: 0 });
+  let backgroundSyncing = $state(false);
   let copiedDiagOk = $state(false);
   let debouncedQuery = $state('');
   $effect(() => { const id = setTimeout(() => debouncedQuery = $searchQuery, 300); return () => clearTimeout(id); });
@@ -550,13 +551,27 @@
               // Use server APIs for data loading
               try {
                 syncing = true;
-                await hydrate(); // This will use server APIs automatically
+                await hydrate(); // Load first page quickly for immediate UX
               } catch (e) {
                 console.error('[Inbox] Server session API call failed:', e);
                 setApiError(e);
               } finally {
                 syncing = false;
               }
+              
+              // Start background authoritative sync to match Gmail exactly (non-blocking)
+              void (async () => {
+                try {
+                  backgroundSyncing = true;
+                  console.log('[Inbox] Starting background full sync to match Gmail');
+                  await performAuthoritativeInboxSync();
+                  console.log('[Inbox] Background full sync completed');
+                } catch (e) {
+                  console.warn('[Inbox] Background full sync failed:', e);
+                } finally {
+                  backgroundSyncing = false;
+                }
+              })();
               return; // Skip client auth initialization
             } catch (e) {
               console.warn('[Inbox] Server session hydration failed:', e);
@@ -607,12 +622,26 @@
         // Attempt initial remote hydrate without blocking UI if cache exists
         try {
           syncing = true;
-          await hydrate();
+          await hydrate(); // Load first page quickly
         } catch (e) {
           setApiError(e);
         } finally {
           syncing = false;
         }
+        
+        // Start background authoritative sync to match Gmail exactly (non-blocking)
+        void (async () => {
+          try {
+            backgroundSyncing = true;
+            console.log('[Inbox] Starting background full sync to match Gmail');
+            await performAuthoritativeInboxSync();
+            console.log('[Inbox] Background full sync completed');
+          } catch (e) {
+            console.warn('[Inbox] Background full sync failed:', e);
+          } finally {
+            backgroundSyncing = false;
+          }
+        })();
       } catch (e) {
         setApiError(e);
       } finally {
@@ -1546,7 +1575,15 @@
   </div>
 
   <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.5rem; gap:0.5rem;">
-    <h3 class="m3-font-title-medium" style="margin:0">Inbox</h3>
+    <div style="display:flex; align-items:center; gap:1rem;">
+      <h3 class="m3-font-title-medium" style="margin:0">Inbox</h3>
+      {#if inboxLabelStats}
+        <div style="display:flex; gap:0.75rem; align-items:center; color:rgb(var(--m3-scheme-on-surface-variant)); font-size:0.875rem;">
+          <span>Total: <strong style="color:rgb(var(--m3-scheme-on-surface))">{inboxLabelStats.threadsTotal ?? 0}</strong></span>
+          <span>Unread: <strong style="color:rgb(var(--m3-scheme-on-surface))">{inboxLabelStats.threadsUnread ?? 0}</strong></span>
+        </div>
+      {/if}
+    </div>
     <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
       
       <details class="sort">
@@ -1563,13 +1600,19 @@
           {/each}
         </Menu>
       </details>
-      <Button variant="outlined" disabled={!nextPageToken || syncing} onclick={loadMore}>
-        {#if syncing}
-          Loading…
-        {:else}
-          Load more
-        {/if}
-      </Button>
+      {#if backgroundSyncing}
+        <Button variant="outlined" disabled={true}>
+          Syncing all emails…
+        </Button>
+      {:else if nextPageToken && !backgroundSyncing}
+        <Button variant="outlined" disabled={syncing} onclick={loadMore}>
+          {#if syncing}
+            Loading…
+          {:else}
+            Load more
+          {/if}
+        </Button>
+      {/if}
       <SessionRefreshButton variant="outlined" compact />
       {#if import.meta.env.DEV}
         <Button variant="outlined" onclick={compareLocalToGmail}>Compare DB ↔ Gmail</Button>
