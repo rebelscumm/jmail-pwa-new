@@ -49,10 +49,13 @@ import iconTask from "@ktibow/iconset-material-symbols/task-alt";
 import iconSubject from "@ktibow/iconset-material-symbols/subject";
 import iconScrollDown from "@ktibow/iconset-material-symbols/keyboard-arrow-down";
 import iconOpenInNew from "@ktibow/iconset-material-symbols/open-in-new";
+import iconExpand from "@ktibow/iconset-material-symbols/keyboard-arrow-down";
   import Dialog from "$lib/containers/Dialog.svelte";
   import { searchQuery } from "$lib/stores/search";
   import RecipientBadges from "$lib/utils/RecipientBadges.svelte";
   import { getGmailMessageUrl, getGmailThreadUrl, openGmailPopup, openGmailMessagePopup } from "$lib/utils/gmail-links";
+  import SnoozePanel from "$lib/snooze/SnoozePanel.svelte";
+  import Layer from "$lib/misc/Layer.svelte";
   // Derive threadId defensively in case params are briefly undefined during navigation
   const threadId = $derived((() => {
     try { const id = $page?.params?.threadId; if (id) return id; } catch {}
@@ -152,6 +155,9 @@ import iconOpenInNew from "@ktibow/iconset-material-symbols/open-in-new";
   let attBusy: Record<string, boolean> = $state({});
   // Filter popup state
   let filterPopupOpen: boolean = $state(false);
+  // Snooze menu state
+  let snoozeMenuOpen: boolean = $state(false);
+  let snoozeDetails: HTMLDetailsElement | null = $state(null);
   // Derive adjacent thread navigation using Inbox context + global search/filter/sort
   const inboxThreads = $derived((allThreads || []).filter((t) => (t.labelIds || []).includes('INBOX')));
   const visibleCandidates = $derived((() => {
@@ -737,6 +743,47 @@ import iconOpenInNew from "@ktibow/iconset-material-symbols/open-in-new";
     (window as any).__copyViewerDiagnostics = async () => { await copyDiagnostics('viewer_toolbar_copy'); };
   }
 
+  // Snooze functionality
+  async function onSnoozeSelect(ruleKey: string) {
+    if (!currentThread) return;
+    try {
+      await snoozeThreadByRule(currentThread.threadId, ruleKey);
+      showSnackbar({ 
+        message: `Snoozed ${ruleKey}`, 
+        actions: { Undo: () => undoLast(1) },
+        closable: true 
+      });
+      // Close the snooze menu
+      if (snoozeDetails) snoozeDetails.open = false;
+      // Navigate back to inbox
+      await navigateToInbox();
+    } catch (error) {
+      console.error('Failed to snooze thread:', error);
+      showSnackbar({ message: 'Failed to snooze thread', closable: true });
+    }
+  }
+
+  // Local autoclose action for details menus
+  const autoclose = (node: HTMLDetailsElement) => {
+    const close = (e: Event) => {
+      const target = e.target as Element | null;
+      if (!target) { node.open = false; return; }
+      if (target.closest('summary')) return;
+      const inside = node.contains(target);
+      if (inside) {
+        if (target.closest('.picker')) return;
+        if (target.closest('button, [role="menuitem"], a[href]')) {
+          node.open = false;
+          return;
+        }
+        return;
+      }
+      node.open = false;
+    };
+    window.addEventListener('click', close, true);
+    return { destroy() { window.removeEventListener('click', close, true); } };
+  };
+
 function scrollToTop() {
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
@@ -920,6 +967,23 @@ onMount(() => {
               1d
             </Button>
           {/if}
+          <!-- Snooze Menu Button -->
+          <div class="snooze-menu-wrapper">
+            <details class="snooze-menu-toggle" bind:this={snoozeDetails} use:autoclose ontoggle={(e) => { const isOpen = (e.currentTarget as HTMLDetailsElement).open; snoozeMenuOpen = isOpen; }}>
+              <summary aria-label="Snooze menu" aria-haspopup="menu" aria-expanded={snoozeMenuOpen} onclick={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); const d = snoozeDetails; if (!d) return; d.open = !d.open; }}>
+                <Button variant="text">
+                  <Icon icon={iconSnooze} />
+                  Snooze
+                  <Icon icon={iconExpand} />
+                </Button>
+              </summary>
+              <div class="snooze-menu-content">
+                <Menu>
+                  <SnoozePanel onSelect={onSnoozeSelect} />
+                </Menu>
+              </div>
+            </details>
+          </div>
         </div>
       {/if}
 
@@ -1257,6 +1321,23 @@ onMount(() => {
               1d
             </Button>
           {/if}
+          <!-- Snooze Menu Button -->
+          <div class="snooze-menu-wrapper">
+            <details class="snooze-menu-toggle" bind:this={snoozeDetails} use:autoclose ontoggle={(e) => { const isOpen = (e.currentTarget as HTMLDetailsElement).open; snoozeMenuOpen = isOpen; }}>
+              <summary aria-label="Snooze menu" aria-haspopup="menu" aria-expanded={snoozeMenuOpen} onclick={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); const d = snoozeDetails; if (!d) return; d.open = !d.open; }}>
+                <Button variant="text">
+                  <Icon icon={iconSnooze} />
+                  Snooze
+                  <Icon icon={iconExpand} />
+                </Button>
+              </summary>
+              <div class="snooze-menu-content">
+                <Menu>
+                  <SnoozePanel onSelect={onSnoozeSelect} />
+                </Menu>
+              </div>
+            </details>
+          </div>
         </div>
       {/if}
 
@@ -1720,6 +1801,73 @@ onMount(() => {
     padding: 0.25rem;
     border-radius: var(--m3-util-rounding-small);
     background: rgb(var(--m3-scheme-surface-container-lowest));
+  }
+
+  /* Snooze Menu Styles */
+  .snooze-menu-wrapper {
+    display: inline-flex;
+    align-items: center;
+    position: relative;
+  }
+
+  .snooze-menu-toggle {
+    position: relative;
+  }
+
+  .snooze-menu-toggle > summary {
+    list-style: none;
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent;
+    border: none;
+    padding: 0;
+    margin: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .snooze-menu-toggle summary::-webkit-details-marker {
+    display: none;
+  }
+
+  /* Hide the menu content when closed */
+  .snooze-menu-toggle > :global(:not(summary)) {
+    display: none;
+  }
+
+  /* When the details element is open, display/position the popover as an overlay */
+  .snooze-menu-toggle[open] > :global(:not(summary)) {
+    display: block;
+    position: fixed !important;
+    z-index: 1000;
+    left: 50%;
+    top: 50%;
+    pointer-events: auto;
+    transform: translate(-50%, -50%);
+    margin: 0;
+  }
+
+  .snooze-menu-content :global(.m3-container) {
+    padding: 0.75rem;
+    max-width: 24rem;
+    max-height: min(95vh, 44rem);
+    box-shadow: var(--m3-util-elevation-3);
+  }
+
+  .snooze-menu-toggle[open] .snooze-menu-content {
+    animation: menuFadeIn 150ms cubic-bezier(0.4, 0.0, 0.2, 1);
+  }
+
+  @keyframes menuFadeIn {
+    from {
+      opacity: 0;
+      transform: translate(-50%, -50%) translateY(-0.5rem);
+    }
+    to {
+      opacity: 1;
+      transform: translate(-50%, -50%) translateY(0);
+    }
   }
 </style>
 
