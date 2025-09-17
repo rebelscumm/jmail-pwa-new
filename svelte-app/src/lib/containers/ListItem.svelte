@@ -88,7 +88,16 @@
   </button>
 {:else if "href" in props}
   {@const { leading, overline = "", headline = "", headlineSnippet, supporting = "", supportingSnippet, trailing, unread = false, ...extra } = props}
-  <a class="m3-container lines-{_lines}" class:unread={unread} {...extra}>
+  <a class="m3-container lines-{_lines}" class:unread={unread} onclick={(e) => {
+    const t = e.target as Element | null;
+    // If the click came from an interactive child (menu, menuitem, summary, button, input, etc.),
+    // prevent the anchor navigation and stop propagation so the row doesn't open.
+    if (t?.closest('summary,button,input,select,textarea,a,[role="menu"],[role="menuitem"],[data-no-row-nav]')) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+  }} {...extra}>
     <Layer />
     {@render content(leading, overline, headline, headlineSnippet, supporting, trailing, supportingSnippet)}
   </a>

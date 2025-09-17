@@ -274,13 +274,23 @@ import iconExpand from "@ktibow/iconset-material-symbols/keyboard-arrow-down";
     try {
       const ct = currentThread;
       if (!ct) return;
+      
+      // Don't override local state if we're currently summarizing or have just set new values
+      if (summarizing) return;
+      
       if (ct.summary && ct.summaryStatus === 'ready') {
-        aiBodySummary = ct.summary;
+        // Only set if we don't already have a local value (to avoid overriding fresh regenerations)
+        if (!aiBodySummary) {
+          aiBodySummary = ct.summary;
+        }
       }
       const subj = (ct as any).aiSubject as string | undefined;
       const subjStatus = (ct as any).aiSubjectStatus as ('none'|'pending'|'ready'|'error') | undefined;
       if (subj && subjStatus === 'ready') {
-        aiSubjectSummary = subj;
+        // Only set if we don't already have a local value (to avoid overriding fresh regenerations)
+        if (!aiSubjectSummary) {
+          aiSubjectSummary = subj;
+        }
       }
     } catch (_) {}
   });
@@ -567,7 +577,13 @@ import iconExpand from "@ktibow/iconset-material-symbols/keyboard-arrow-down";
           });
         }
       } catch (_) {}
-      showSnackbar({ message: 'AI summary ready', closable: true });
+      showSnackbar({ 
+        message: 'AI summary ready', 
+        actions: {
+          Regenerate: () => { void summarize(mid, true); }
+        },
+        closable: true 
+      });
     } catch (e) {
       const { message, retryAfterSeconds } = getFriendlyAIErrorMessage(e, 'Summarize');
       const rootCauses = 'Possible root causes: missing summary field, precompute disabled, missing Gmail body scopes, filtered threads, previous precompute failure.';
