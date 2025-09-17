@@ -572,10 +572,53 @@
                 try {
                   backgroundSyncing = true;
                   console.log('[Inbox] Starting background full sync to match Gmail');
-                  await performAuthoritativeInboxSync();
+                  
+                  // Check if we need sync by comparing local vs Gmail thread counts
+                  const db = await getDB();
+                  const localThreads = await db.getAll('threads');
+                  const localInboxThreads = localThreads.filter((t: any) => 
+                    Array.isArray(t.labelIds) && t.labelIds.includes('INBOX')
+                  );
+                  
+                  try {
+                    const inboxLabel = await getLabel('INBOX');
+                    const gmailThreadCount = inboxLabel.threadsTotal || 0;
+                    const localThreadCount = localInboxThreads.length;
+                    
+                    if (import.meta.env.DEV) {
+                      console.log(`[Inbox] Sync check: Gmail has ${gmailThreadCount} threads, local has ${localThreadCount} threads`);
+                    }
+                    
+                    // Always run authoritative sync if there's a significant discrepancy or if we have no local threads
+                    if (localThreadCount === 0 || Math.abs(gmailThreadCount - localThreadCount) > 2) {
+                      console.log(`[Inbox] Significant sync discrepancy detected, running full authoritative sync`);
+                      await performAuthoritativeInboxSync();
+                    } else {
+                      console.log(`[Inbox] Thread counts are close, running quick sync check`);
+                      await performAuthoritativeInboxSync({ perPageTimeoutMs: 10000, maxRetries: 1 });
+                    }
+                  } catch (e) {
+                    console.warn('[Inbox] Label check failed, running full sync anyway:', e);
+                    await performAuthoritativeInboxSync();
+                  }
+                  
                   console.log('[Inbox] Background full sync completed');
                 } catch (e) {
-                  console.warn('[Inbox] Background full sync failed:', e);
+                  console.error('[Inbox] Background full sync failed:', e);
+                  // Show user-facing error for critical sync failures
+                  if (e instanceof Error && (e.message.includes('403') || e.message.includes('401'))) {
+                    setApiError(new Error('Gmail sync failed - please refresh the page or check your authentication'));
+                  } else {
+                    // Try one more time with reduced parameters for robustness
+                    try {
+                      console.log('[Inbox] Retrying sync with reduced parameters...');
+                      await performAuthoritativeInboxSync({ perPageTimeoutMs: 30000, maxRetries: 3 });
+                      console.log('[Inbox] Retry sync completed successfully');
+                    } catch (retryE) {
+                      console.error('[Inbox] Retry sync also failed:', retryE);
+                      setApiError(new Error('Gmail sync failed after retry - please use the refresh button'));
+                    }
+                  }
                 } finally {
                   backgroundSyncing = false;
                 }
@@ -625,6 +668,11 @@
             void performBackgroundHistorySync();
             void hydrateFromCache();
             void maybeRemoteRefresh();
+            
+            // Periodically verify sync integrity (every ~10 sync ticks)
+            if (Math.random() < 0.1) {
+              void verifySyncIntegrity();
+            }
           }
         });
         // Attempt initial remote hydrate without blocking UI if cache exists
@@ -646,10 +694,53 @@
           try {
             backgroundSyncing = true;
             console.log('[Inbox] Starting background full sync to match Gmail');
-            await performAuthoritativeInboxSync();
+            
+            // Check if we need sync by comparing local vs Gmail thread counts
+            const db = await getDB();
+            const localThreads = await db.getAll('threads');
+            const localInboxThreads = localThreads.filter((t: any) => 
+              Array.isArray(t.labelIds) && t.labelIds.includes('INBOX')
+            );
+            
+            try {
+              const inboxLabel = await getLabel('INBOX');
+              const gmailThreadCount = inboxLabel.threadsTotal || 0;
+              const localThreadCount = localInboxThreads.length;
+              
+              if (import.meta.env.DEV) {
+                console.log(`[Inbox] Sync check: Gmail has ${gmailThreadCount} threads, local has ${localThreadCount} threads`);
+              }
+              
+              // Always run authoritative sync if there's a significant discrepancy or if we have no local threads
+              if (localThreadCount === 0 || Math.abs(gmailThreadCount - localThreadCount) > 2) {
+                console.log(`[Inbox] Significant sync discrepancy detected, running full authoritative sync`);
+                await performAuthoritativeInboxSync();
+              } else {
+                console.log(`[Inbox] Thread counts are close, running quick sync check`);
+                await performAuthoritativeInboxSync({ perPageTimeoutMs: 10000, maxRetries: 1 });
+              }
+            } catch (e) {
+              console.warn('[Inbox] Label check failed, running full sync anyway:', e);
+              await performAuthoritativeInboxSync();
+            }
+            
             console.log('[Inbox] Background full sync completed');
           } catch (e) {
-            console.warn('[Inbox] Background full sync failed:', e);
+            console.error('[Inbox] Background full sync failed:', e);
+            // Show user-facing error for critical sync failures
+            if (e instanceof Error && (e.message.includes('403') || e.message.includes('401'))) {
+              setApiError(new Error('Gmail sync failed - please refresh the page or check your authentication'));
+            } else {
+              // Try one more time with reduced parameters for robustness
+              try {
+                console.log('[Inbox] Retrying sync with reduced parameters...');
+                await performAuthoritativeInboxSync({ perPageTimeoutMs: 30000, maxRetries: 3 });
+                console.log('[Inbox] Retry sync completed successfully');
+              } catch (retryE) {
+                console.error('[Inbox] Retry sync also failed:', retryE);
+                setApiError(new Error('Gmail sync failed after retry - please use the refresh button'));
+              }
+            }
           } finally {
             backgroundSyncing = false;
           }
@@ -663,15 +754,58 @@
     // Listen for global refresh requests
     async function handleGlobalRefresh() {
       try {
-        showSnackbar({ message: 'Refreshing inbox…' });
+        showSnackbar({ message: 'Force refreshing inbox from Gmail…' });
         syncing = true;
-        // Perform a full authoritative INBOX sync (pages through all messages)
-        // to reconcile removals performed on other devices.
-        await performAuthoritativeInboxSync();
-        showSnackbar({ message: 'Inbox up to date', timeout: 3000 });
+        
+        console.log('[Inbox] Force refresh triggered - clearing cache and performing full sync');
+        
+        // Clear any cached data that might be stale
+        const db = await getDB();
+        
+        // Get current thread count for comparison
+        const localThreads = await db.getAll('threads');
+        const localInboxThreads = localThreads.filter((t: any) => 
+          Array.isArray(t.labelIds) && t.labelIds.includes('INBOX')
+        );
+        
+        console.log(`[Inbox] Before refresh: ${localInboxThreads.length} local inbox threads`);
+        
+        // Perform a full authoritative INBOX sync with extended timeouts for reliability
+        await performAuthoritativeInboxSync({ 
+          perPageTimeoutMs: 30000, // 30 seconds per page for refresh
+          maxRetries: 3 // More retries for manual refresh
+        });
+        
+        // Verify sync worked by checking thread count again
+        const refreshedThreads = await db.getAll('threads');
+        const refreshedInboxThreads = refreshedThreads.filter((t: any) => 
+          Array.isArray(t.labelIds) && t.labelIds.includes('INBOX')
+        );
+        
+        console.log(`[Inbox] After refresh: ${refreshedInboxThreads.length} local inbox threads`);
+        
+        // Try to get Gmail's reported count for comparison
+        let gmailThreadCount = 'unknown';
+        try {
+          const inboxLabel = await getLabel('INBOX');
+          gmailThreadCount = String(inboxLabel.threadsTotal || 0);
+        } catch (_) {}
+        
+        showSnackbar({ 
+          message: `Inbox refreshed: ${refreshedInboxThreads.length} threads (Gmail: ${gmailThreadCount})`, 
+          timeout: 4000 
+        });
+        
       } catch (e) {
+        console.error('[Inbox] Force refresh failed:', e);
         setApiError(e);
-        showSnackbar({ message: `Refresh failed: ${e instanceof Error ? e.message : e}`, closable: true });
+        showSnackbar({ 
+          message: `Force refresh failed: ${e instanceof Error ? e.message : e}. Try the diagnostics page for troubleshooting.`, 
+          closable: true,
+          actions: {
+            'Diagnostics': () => { window.location.href = '/diagnostics'; }
+          }
+        });
       } finally {
         syncing = false;
       }
@@ -920,6 +1054,53 @@
       // Surface a subtle telemetry snackbar so user can retry if needed
       try { showSnackbar({ message: 'Full sync failed', timeout: 5000, actions: { 'Retry': () => { void performAuthoritativeInboxSync(); } } }); } catch (_) {}
       throw e;
+    }
+  }
+
+  // Periodic sync integrity verification to catch and fix drift
+  async function verifySyncIntegrity() {
+    try {
+      const db = await getDB();
+      const localThreads = await db.getAll('threads');
+      const localInboxThreads = localThreads.filter((t: any) => 
+        Array.isArray(t.labelIds) && t.labelIds.includes('INBOX')
+      );
+      
+      // Check Gmail's reported inbox count
+      const inboxLabel = await getLabel('INBOX');
+      const gmailThreadCount = inboxLabel.threadsTotal || 0;
+      const localThreadCount = localInboxThreads.length;
+      
+      if (import.meta.env.DEV) {
+        console.log(`[SyncVerify] Integrity check: Gmail=${gmailThreadCount}, Local=${localThreadCount}`);
+      }
+      
+      // If there's a significant discrepancy, trigger background sync
+      if (localThreadCount === 0 || Math.abs(gmailThreadCount - localThreadCount) > 3) {
+        console.log(`[SyncVerify] Integrity issue detected, triggering background resync`);
+        
+        // Don't run if already syncing
+        if (backgroundSyncing || syncing) return;
+        
+        void (async () => {
+          try {
+            backgroundSyncing = true;
+            await performAuthoritativeInboxSync({ 
+              perPageTimeoutMs: 15000, 
+              maxRetries: 2 
+            });
+            console.log(`[SyncVerify] Integrity fix completed`);
+          } catch (e) {
+            console.warn(`[SyncVerify] Integrity fix failed:`, e);
+          } finally {
+            backgroundSyncing = false;
+          }
+        })();
+      }
+    } catch (e) {
+      if (import.meta.env.DEV) {
+        console.warn('[SyncVerify] Integrity check failed:', e);
+      }
     }
   }
 
