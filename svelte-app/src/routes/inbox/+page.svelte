@@ -1587,10 +1587,12 @@
     </Card>
   {/if}
 
-  <!-- Session Status Component -->
-  <div style="margin-bottom: 1rem;">
-    <SessionStatus />
-  </div>
+  <!-- Session Status Component - only show if there are actual auth issues -->
+  {#if apiErrorStatus === 401 || apiErrorStatus === 403}
+    <div style="margin-bottom: 1rem;">
+      <SessionStatus />
+    </div>
+  {/if}
 
   <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.5rem; gap:0.5rem;">
     <div style="display:flex; align-items:center; gap:1rem;">

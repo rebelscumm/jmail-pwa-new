@@ -24,6 +24,10 @@ onMount(() => {
 	// Subscribe to session state changes
 	unsubscribe = sessionManager.subscribe((state) => {
 		sessionState = state;
+		// When session manager reports authenticated, we've confirmed auth is working
+		if (state.authenticated) {
+			hasCheckedStatus = true;
+		}
 	});
 
 	// Don't do initial status check - let the session manager state drive everything
