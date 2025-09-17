@@ -269,7 +269,7 @@
     window.addEventListener('keydown', onKeyDown);
     onKeyDownRef = onKeyDown;
 
-    // Ensure first-run shows connect wizard at root
+    // Comprehensive authentication check with server session support
     // Skip redirect for debug and test pages
     (async () => {
       try {
@@ -284,33 +284,59 @@
           return; // Skip authentication check for debug pages
         }
 
+        // First check for server session (most reliable for authenticated users)
+        let hasValidAuth = false;
         try {
-          const { getDB } = await import('$lib/db/indexeddb');
-          const db = await getDB();
-          const account = await db.get('auth', 'me');
-          if (!account) {
-            const target = (base || '') + '/';
-            if (location.pathname !== target) {
-              location.href = target;
-            }
-          } else {
-            // If there's a server-managed session stored in IndexedDB, apply it to the session manager
+          const { checkServerSession } = await import('$lib/gmail/server-session-check');
+          const serverSession = await checkServerSession();
+          if (serverSession.authenticated) {
+            console.log('[Layout] Found valid server session, user is authenticated');
+            hasValidAuth = true;
+            
+            // Store server session for consistency
             try {
-              if ((account as any).serverManaged) {
-                try {
-                  sessionManager.applyServerSession((account as any).email, (account as any).tokenExpiry);
-                  console.log('[Layout] Applied server-managed session to sessionManager for', (account as any).email);
-                } catch (e) {
-                  console.warn('[Layout] Failed to apply server session to sessionManager:', e);
-                }
-              }
+              const { storeServerSessionInDB } = await import('$lib/gmail/server-session-check');
+              await storeServerSessionInDB(serverSession);
             } catch (e) {
-              console.warn('[Layout] Error while applying server session:', e);
+              console.warn('[Layout] Failed to store server session:', e);
             }
           }
-        } catch (dbErr) {
-          console.warn('[Layout] Database check failed:', dbErr);
+        } catch (e) {
+          console.warn('[Layout] Server session check failed:', e);
         }
+
+        // If no server session, check local database
+        if (!hasValidAuth) {
+          try {
+            const { getDB } = await import('$lib/db/indexeddb');
+            const db = await getDB();
+            const account = await db.get('auth', 'me');
+            if (account) {
+              hasValidAuth = true;
+              // Apply server session to session manager if applicable
+              try {
+                if ((account as any).serverManaged) {
+                  sessionManager.applyServerSession((account as any).email, (account as any).tokenExpiry);
+                  console.log('[Layout] Applied server-managed session to sessionManager for', (account as any).email);
+                }
+              } catch (e) {
+                console.warn('[Layout] Failed to apply server session to sessionManager:', e);
+              }
+            }
+          } catch (dbErr) {
+            console.warn('[Layout] Database check failed:', dbErr);
+          }
+        }
+
+        // Only redirect to connect screen if we're not already there and no auth found
+        if (!hasValidAuth) {
+          const target = (base || '') + '/';
+          if (location.pathname !== target) {
+            console.log('[Layout] No authentication found, redirecting to connect screen');
+            location.href = target;
+          }
+        }
+        
       } catch (err) {
         console.warn('[Layout] Auth check failed:', err);
       }

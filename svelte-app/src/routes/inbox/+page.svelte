@@ -577,12 +577,26 @@
                   // Check if we need sync by comparing local vs Gmail thread counts
                   console.log('[Inbox] Starting background sync analysis...');
                   const db = await getDB();
+                  
+                  // Check for pending operations that might conflict with sync
+                  const pendingOps = await db.getAll('ops');
+                  const pendingLabelOps = pendingOps.filter(op => 
+                    op.op.type === 'batchModify' && 
+                    (op.op.addLabelIds.includes('INBOX') || op.op.removeLabelIds.includes('INBOX'))
+                  );
+                  
+                  if (pendingLabelOps.length > 0) {
+                    console.log(`[Inbox] Delaying sync - ${pendingLabelOps.length} pending INBOX operations found`);
+                    // Wait a bit for operations to flush before syncing
+                    await new Promise(resolve => setTimeout(resolve, 5000));
+                  }
+                  
                   const localThreads = await db.getAll('threads');
                   const localInboxThreads = localThreads.filter((t: any) => 
                     Array.isArray(t.labelIds) && t.labelIds.includes('INBOX')
                   );
                   
-                  console.log(`[Inbox] Local analysis: ${localThreads.length} total threads, ${localInboxThreads.length} with INBOX label`);
+                  console.log(`[Inbox] Local analysis: ${localThreads.length} total threads, ${localInboxThreads.length} with INBOX label, ${pendingLabelOps.length} pending INBOX ops`);
                   
                   try {
                     const inboxLabel = await getLabel('INBOX');
@@ -719,6 +733,20 @@
             
             // Check if we need sync by comparing local vs Gmail thread counts
             const db = await getDB();
+            
+            // Check for pending operations that might conflict with sync
+            const pendingOps = await db.getAll('ops');
+            const pendingLabelOps = pendingOps.filter(op => 
+              op.op.type === 'batchModify' && 
+              (op.op.addLabelIds.includes('INBOX') || op.op.removeLabelIds.includes('INBOX'))
+            );
+            
+            if (pendingLabelOps.length > 0) {
+              console.log(`[Inbox] Delaying sync - ${pendingLabelOps.length} pending INBOX operations found`);
+              // Wait a bit for operations to flush before syncing
+              await new Promise(resolve => setTimeout(resolve, 5000));
+            }
+            
             const localThreads = await db.getAll('threads');
             const localInboxThreads = localThreads.filter((t: any) => 
               Array.isArray(t.labelIds) && t.labelIds.includes('INBOX')
@@ -1064,9 +1092,20 @@
                 }
               }
               try { 
-                await txThreads.store.put(f.thread); 
-                storedThreads++;
-                console.log(`[AuthSync] Stored thread ${f.thread.threadId} with labels: ${f.thread.labelIds.join(',')}`);
+                // Check for pending operations before storing thread
+                const pendingOps = await db.getAllFromIndex('ops', 'by_scopeKey', f.thread.threadId);
+                const hasPendingLabelChanges = pendingOps.some(op => 
+                  op.op.type === 'batchModify' && 
+                  (op.op.addLabelIds.includes('INBOX') || op.op.removeLabelIds.includes('INBOX'))
+                );
+                
+                if (hasPendingLabelChanges) {
+                  console.log(`[AuthSync] Skipping thread ${f.thread.threadId} storage - has pending operations`);
+                } else {
+                  await txThreads.store.put(f.thread); 
+                  storedThreads++;
+                  console.log(`[AuthSync] Stored thread ${f.thread.threadId} with labels: ${f.thread.labelIds.join(',')}`);
+                }
               } catch (e) {
                 console.error(`[AuthSync] Failed to store thread ${f.thread.threadId}:`, e);
               }
@@ -1127,6 +1166,23 @@
           
           for (const {threadId, existing} of toUpdateLabelsOnly) {
             try {
+              // Check if this thread was optimistically modified (e.g., archived/deleted locally)
+              const localHasInbox = Array.isArray(existing.labelIds) && existing.labelIds.includes('INBOX');
+              
+              // If the local thread doesn't have INBOX but Gmail says it should, this might be an optimistic change
+              // Check if there are pending operations for this thread
+              const pendingOps = await db.getAllFromIndex('ops', 'by_scopeKey', threadId);
+              const hasPendingLabelChanges = pendingOps.some(op => 
+                op.op.type === 'batchModify' && 
+                (op.op.addLabelIds.includes('INBOX') || op.op.removeLabelIds.includes('INBOX'))
+              );
+              
+              if (hasPendingLabelChanges) {
+                console.log(`[AuthSync] Phase 1a: Skipping thread ${threadId} - has pending label operations`);
+                continue;
+              }
+              
+              // Only add INBOX if not optimistically removed
               const labels = new Set<string>(existing.labelIds || []);
               labels.add('INBOX');
               const updatedThread = { ...existing, labelIds: Array.from(labels) };
@@ -1177,7 +1233,19 @@
                     console.error(`[AuthSync] Phase 1b: Failed to store message ${m.id}:`, e);
                   } 
                 }
-                // Ensure INBOX label is set for fetched threads
+                // Check for pending operations before storing 
+                const pendingOps = await db.getAllFromIndex('ops', 'by_scopeKey', f.thread.threadId);
+                const hasPendingLabelChanges = pendingOps.some(op => 
+                  op.op.type === 'batchModify' && 
+                  (op.op.addLabelIds.includes('INBOX') || op.op.removeLabelIds.includes('INBOX'))
+                );
+                
+                if (hasPendingLabelChanges) {
+                  console.log(`[AuthSync] Phase 1b: Skipping new thread ${f.thread.threadId} - has pending label operations`);
+                  continue;
+                }
+                
+                // Store new thread with INBOX label if no pending operations
                 const labels = new Set<string>(f.thread.labelIds || []);
                 labels.add('INBOX');
                 const threadWithInbox = { ...f.thread, labelIds: Array.from(labels) } as any;
@@ -1219,6 +1287,15 @@
         try {
           const labels = Array.isArray(t.labelIds) ? t.labelIds.slice() : [];
           if (labels.includes('INBOX') && !seenThreadIds.has(t.threadId)) {
+            // Check if this thread has pending operations before removing INBOX
+            const pendingOps = await db.getAllFromIndex('ops', 'by_scopeKey', t.threadId);
+            const hasPendingOperations = pendingOps.length > 0;
+            
+            if (hasPendingOperations) {
+              console.log(`[AuthSync] Phase 2: Skipping INBOX removal from thread ${t.threadId} - has pending operations`);
+              continue;
+            }
+            
             const next = { ...t, labelIds: labels.filter((l) => l !== 'INBOX') } as any;
             await txThreads.store.put(next);
             threadsUpdated++;
