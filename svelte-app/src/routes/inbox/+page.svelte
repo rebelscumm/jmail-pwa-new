@@ -1004,11 +1004,46 @@
         if (!pageToken) break;
       }
 
-      // Reconcile threads in DB: remove INBOX label from threads not seen
+      // Reconcile threads in DB:
+      // 1) Ensure all seen threads are present locally with correct INBOX label
+      // 2) Remove INBOX label from threads not seen
       if (import.meta.env.DEV) {
         console.log(`[AuthSync] Reconciliation: ${seenThreadIds.size} threads seen from Gmail`);
       }
       
+      // Pass 1: fetch any missing seen threads and ensure INBOX label is present
+      try {
+        const toEnsure: string[] = [];
+        for (const tid of seenThreadIds) {
+          try {
+            const existing = await db.get('threads', tid) as any | undefined;
+            if (!existing || !Array.isArray(existing.labelIds) || !existing.labelIds.includes('INBOX')) {
+              toEnsure.push(tid);
+            }
+          } catch (_) {
+            toEnsure.push(tid);
+          }
+        }
+        if (toEnsure.length) {
+          const fetched = await mapWithConcurrency(toEnsure, 4, async (tid) => {
+            try { return await getThreadSummary(tid); } catch (_) { return null; }
+          });
+          const txMsgsA = db.transaction('messages', 'readwrite');
+          const txThreadsA = db.transaction('threads', 'readwrite');
+          for (const f of fetched) {
+            if (!f) continue;
+            try {
+              for (const m of f.messages) { try { await txMsgsA.store.put(m); } catch (_) {} }
+              // Ensure INBOX label is set for seen threads
+              const labels = new Set<string>(f.thread.labelIds || []);
+              labels.add('INBOX');
+              await txThreadsA.store.put({ ...f.thread, labelIds: Array.from(labels) } as any);
+            } catch (_) {}
+          }
+          await txMsgsA.done; await txThreadsA.done;
+        }
+      } catch (_) {}
+
       const txThreads = db.transaction('threads', 'readwrite');
       const allThreads = await txThreads.store.getAll();
       let threadsUpdated = 0;
