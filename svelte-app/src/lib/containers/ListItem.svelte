@@ -90,9 +90,10 @@
   {@const { leading, overline = "", headline = "", headlineSnippet, supporting = "", supportingSnippet, trailing, unread = false, ...extra } = props}
   <a class="m3-container lines-{_lines}" class:unread={unread} onclick={(e) => {
     const t = e.target as Element | null;
-    // If the click came from an interactive child (menu, menuitem, summary, button, input, etc.),
-    // prevent the anchor navigation and stop propagation so the row doesn't open.
-    if (t?.closest('summary,button,input,select,textarea,a,[role="menu"],[role="menuitem"],[data-no-row-nav]')) {
+    // Only prevent navigation if the click came from interactive elements in trailing actions
+    // or elements explicitly marked with data-no-row-nav
+    if (t?.closest('[data-no-row-nav]') || 
+        (t?.closest('.trailing') && t?.closest('summary,button,input,select,textarea,[role="menu"],[role="menuitem"]'))) {
       e.preventDefault();
       e.stopPropagation();
       return;
