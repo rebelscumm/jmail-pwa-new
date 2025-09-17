@@ -568,38 +568,59 @@
               }
               
               // Start background authoritative sync to match Gmail exactly (non-blocking)
+              console.log('[Inbox] ===== SCHEDULING BACKGROUND SYNC (SERVER SESSION) =====');
               void (async () => {
                 try {
                   backgroundSyncing = true;
-                  console.log('[Inbox] Starting background full sync to match Gmail');
+                  console.log('[Inbox] BACKGROUND SYNC STARTED (server session path)');
                   
                   // Check if we need sync by comparing local vs Gmail thread counts
+                  console.log('[Inbox] Starting background sync analysis...');
                   const db = await getDB();
                   const localThreads = await db.getAll('threads');
                   const localInboxThreads = localThreads.filter((t: any) => 
                     Array.isArray(t.labelIds) && t.labelIds.includes('INBOX')
                   );
                   
+                  console.log(`[Inbox] Local analysis: ${localThreads.length} total threads, ${localInboxThreads.length} with INBOX label`);
+                  
                   try {
                     const inboxLabel = await getLabel('INBOX');
                     const gmailThreadCount = inboxLabel.threadsTotal || 0;
                     const localThreadCount = localInboxThreads.length;
                     
-                    if (import.meta.env.DEV) {
-                      console.log(`[Inbox] Sync check: Gmail has ${gmailThreadCount} threads, local has ${localThreadCount} threads`);
-                    }
+                    console.log(`[Inbox] Gmail label stats: ${gmailThreadCount} threads in INBOX`);
+                    console.log(`[Inbox] Sync decision: Gmail=${gmailThreadCount}, Local=${localThreadCount}, Diff=${Math.abs(gmailThreadCount - localThreadCount)}`);
                     
                     // Always run authoritative sync if there's a significant discrepancy or if we have no local threads
                     if (localThreadCount === 0 || Math.abs(gmailThreadCount - localThreadCount) > 2) {
-                      console.log(`[Inbox] Significant sync discrepancy detected, running full authoritative sync`);
+                      console.log(`[Inbox] TRIGGERING FULL AUTHORITATIVE SYNC - Major discrepancy detected`);
                       await performAuthoritativeInboxSync();
+                      console.log(`[Inbox] Full authoritative sync completed`);
                     } else {
-                      console.log(`[Inbox] Thread counts are close, running quick sync check`);
+                      console.log(`[Inbox] TRIGGERING QUICK SYNC CHECK - Thread counts are close`);
                       await performAuthoritativeInboxSync({ perPageTimeoutMs: 10000, maxRetries: 1 });
+                      console.log(`[Inbox] Quick sync check completed`);
                     }
                   } catch (e) {
                     console.warn('[Inbox] Label check failed, running full sync anyway:', e);
+                    console.log(`[Inbox] TRIGGERING FALLBACK FULL SYNC due to error`);
                     await performAuthoritativeInboxSync();
+                    console.log(`[Inbox] Fallback full sync completed`);
+                  }
+                  
+                  // Verify sync results
+                  console.log('[Inbox] Verifying sync results...');
+                  const postSyncThreads = await db.getAll('threads');
+                  const postSyncInboxThreads = postSyncThreads.filter((t: any) => 
+                    Array.isArray(t.labelIds) && t.labelIds.includes('INBOX')
+                  );
+                  console.log(`[Inbox] POST-SYNC: ${postSyncThreads.length} total threads, ${postSyncInboxThreads.length} with INBOX label`);
+                  
+                  if (postSyncInboxThreads.length === 0) {
+                    console.error('[Inbox] CRITICAL: Sync completed but still 0 threads with INBOX label!');
+                  } else {
+                    console.log(`[Inbox] SUCCESS: Sync resulted in ${postSyncInboxThreads.length} inbox threads`);
                   }
                   
                   console.log('[Inbox] Background full sync completed');
@@ -690,10 +711,11 @@
         }
         
         // Start background authoritative sync to match Gmail exactly (non-blocking)
+        console.log('[Inbox] ===== SCHEDULING BACKGROUND SYNC (CLIENT AUTH) =====');
         void (async () => {
           try {
             backgroundSyncing = true;
-            console.log('[Inbox] Starting background full sync to match Gmail');
+            console.log('[Inbox] BACKGROUND SYNC STARTED (client auth path)');
             
             // Check if we need sync by comparing local vs Gmail thread counts
             const db = await getDB();
@@ -856,9 +878,18 @@
       let MAX_PAGES_SAFETY_LIMIT = 50; // Default safety limit; will adjust dynamically when possible
       authoritativeSyncProgress = { running: true, pagesCompleted: 0, pagesTotal: 0 };
 
-      if (import.meta.env.DEV) {
-        console.log(`[AuthSync] Starting authoritative inbox sync with pageSize: ${pageSize}`);
-      }
+      console.log(`[AuthSync] ===== STARTING AUTHORITATIVE INBOX SYNC =====`);
+      console.log(`[AuthSync] Config: pageSize=${pageSize}, timeout=${perPageTimeoutMs}ms, maxRetries=${maxRetries}`);
+      
+      // Log current local state
+      const preSyncThreads = await db.getAll('threads');
+      const preSyncInboxThreads = preSyncThreads.filter((t: any) => 
+        Array.isArray(t.labelIds) && t.labelIds.includes('INBOX')
+      );
+      console.log(`[AuthSync] PRE-SYNC STATE: ${preSyncThreads.length} total threads, ${preSyncInboxThreads.length} with INBOX`);
+
+      console.log(`[AuthSync] Starting authoritative inbox sync with pageSize: ${pageSize}`);
+      console.log(`[AuthSync] Database has ${preSyncThreads.length} threads, ${preSyncInboxThreads.length} with INBOX label`);
 
       // Try to compute a dynamic page limit based on INBOX size to avoid premature stop for large inboxes
       try {
@@ -925,8 +956,10 @@
         pageToken = page.nextPageToken;
         
         // Debug logging for each page
-        if (import.meta.env.DEV) {
-          console.log(`[AuthSync] Page ${authoritativeSyncProgress.pagesCompleted + 1}: ${page.ids?.length || 0} threads, nextToken: ${!!page.nextPageToken}`);
+        console.log(`[AuthSync] ===== PAGE ${authoritativeSyncProgress.pagesCompleted + 1} RESULTS =====`);
+        console.log(`[AuthSync] Page returned ${page.ids?.length || 0} threads, hasNextToken: ${!!page.nextPageToken}`);
+        if (page.ids?.length) {
+          console.log(`[AuthSync] First 5 thread IDs: ${page.ids.slice(0, 5).join(', ')}`);
         }
         
         // Check if this page is empty or making no progress
@@ -976,77 +1009,162 @@
         // For threads on this page, fetch summaries only for those missing or
         // needing update in local DB to keep network usage reasonable.
         const toFetch: string[] = [];
+        console.log(`[AuthSync] Checking which of ${ids.length} threads need to be fetched...`);
+        
         for (const tid of ids) {
           try {
             const existing = await db.get('threads', tid) as any | undefined;
-            if (!existing) toFetch.push(tid);
+            if (!existing) {
+              toFetch.push(tid);
+            } else {
+              // Check if existing thread has INBOX label
+              const hasInbox = Array.isArray(existing.labelIds) && existing.labelIds.includes('INBOX');
+              console.log(`[AuthSync] Thread ${tid}: exists=${!!existing}, hasINBOX=${hasInbox}, labels=${existing.labelIds?.join(',') || 'none'}`);
+            }
           } catch (_) { 
             toFetch.push(tid); 
           }
         }
+        
+        console.log(`[AuthSync] Need to fetch ${toFetch.length} threads: ${toFetch.slice(0, 5).join(', ')}${toFetch.length > 5 ? '...' : ''}`);
+        
         // Fetch thread summaries with modest concurrency
         const fetched = await mapWithConcurrency(toFetch, 4, async (tid) => {
-          try { return await getThreadSummary(tid); } catch (e) { return null; }
+          try { 
+            console.log(`[AuthSync] Fetching thread summary for ${tid}...`);
+            const result = await getThreadSummary(tid);
+            console.log(`[AuthSync] Successfully fetched thread ${tid}, has ${result.messages.length} messages, labels: ${result.thread.labelIds.join(',')}`);
+            return result;
+          } catch (e) { 
+            console.error(`[AuthSync] Failed to fetch thread ${tid}:`, e);
+            return null; 
+          }
         });
+        
+        console.log(`[AuthSync] Successfully fetched ${fetched.filter(f => !!f).length} out of ${toFetch.length} threads`);
+        
+        // Store fetched threads and messages
         const txMsgs = db.transaction('messages', 'readwrite');
         const txThreads = db.transaction('threads', 'readwrite');
+        let storedThreads = 0;
+        let storedMessages = 0;
+        
         for (const f of fetched) {
           if (!f) continue;
           try {
             for (const m of f.messages) {
-              try { await txMsgs.store.put(m); } catch (_) {}
+              try { 
+                await txMsgs.store.put(m); 
+                storedMessages++;
+              } catch (e) {
+                console.error(`[AuthSync] Failed to store message ${m.id}:`, e);
+              }
             }
-            try { await txThreads.store.put(f.thread); } catch (_) {}
-          } catch (_) {}
+            try { 
+              await txThreads.store.put(f.thread); 
+              storedThreads++;
+              console.log(`[AuthSync] Stored thread ${f.thread.threadId} with labels: ${f.thread.labelIds.join(',')}`);
+            } catch (e) {
+              console.error(`[AuthSync] Failed to store thread ${f.thread.threadId}:`, e);
+            }
+          } catch (e) {
+            console.error(`[AuthSync] Failed to process fetched thread:`, e);
+          }
         }
         await txMsgs.done;
         await txThreads.done;
+        
+        console.log(`[AuthSync] Database storage complete: ${storedThreads} threads, ${storedMessages} messages stored`);
         if (!pageToken) break;
       }
 
       // Reconcile threads in DB:
       // 1) Ensure all seen threads are present locally with correct INBOX label
       // 2) Remove INBOX label from threads not seen
-      if (import.meta.env.DEV) {
-        console.log(`[AuthSync] Reconciliation: ${seenThreadIds.size} threads seen from Gmail`);
-      }
+      console.log(`[AuthSync] ===== STARTING RECONCILIATION PHASE =====`);
+      console.log(`[AuthSync] Reconciliation: ${seenThreadIds.size} threads seen from Gmail`);
       
       // Pass 1: fetch any missing seen threads and ensure INBOX label is present
+      console.log(`[AuthSync] Phase 1: Ensuring all seen threads have INBOX label...`);
       try {
         const toEnsure: string[] = [];
         for (const tid of seenThreadIds) {
           try {
             const existing = await db.get('threads', tid) as any | undefined;
-            if (!existing || !Array.isArray(existing.labelIds) || !existing.labelIds.includes('INBOX')) {
+            if (!existing) {
+              console.log(`[AuthSync] Thread ${tid} missing from database, will fetch`);
+              toEnsure.push(tid);
+            } else if (!Array.isArray(existing.labelIds) || !existing.labelIds.includes('INBOX')) {
+              console.log(`[AuthSync] Thread ${tid} exists but missing INBOX label, current labels: ${existing.labelIds?.join(',') || 'none'}`);
               toEnsure.push(tid);
             }
-          } catch (_) {
+          } catch (e) {
+            console.error(`[AuthSync] Error checking thread ${tid}:`, e);
             toEnsure.push(tid);
           }
         }
+        
+        console.log(`[AuthSync] Phase 1: Need to ensure ${toEnsure.length} threads have INBOX label`);
+        
         if (toEnsure.length) {
+          console.log(`[AuthSync] Fetching ${toEnsure.length} threads to ensure INBOX label...`);
           const fetched = await mapWithConcurrency(toEnsure, 4, async (tid) => {
-            try { return await getThreadSummary(tid); } catch (_) { return null; }
+            try { 
+              const result = await getThreadSummary(tid);
+              console.log(`[AuthSync] Phase 1: Fetched ${tid}, original labels: ${result.thread.labelIds.join(',')}`);
+              return result;
+            } catch (e) {
+              console.error(`[AuthSync] Phase 1: Failed to fetch ${tid}:`, e);
+              return null;
+            }
           });
+          
+          console.log(`[AuthSync] Phase 1: Successfully fetched ${fetched.filter(f => !!f).length} threads for INBOX labeling`);
+          
           const txMsgsA = db.transaction('messages', 'readwrite');
           const txThreadsA = db.transaction('threads', 'readwrite');
+          let inboxLabelsAdded = 0;
+          
           for (const f of fetched) {
             if (!f) continue;
             try {
-              for (const m of f.messages) { try { await txMsgsA.store.put(m); } catch (_) {} }
+              for (const m of f.messages) { 
+                try { await txMsgsA.store.put(m); } catch (e) {
+                  console.error(`[AuthSync] Phase 1: Failed to store message ${m.id}:`, e);
+                } 
+              }
               // Ensure INBOX label is set for seen threads
               const labels = new Set<string>(f.thread.labelIds || []);
+              const hadInbox = labels.has('INBOX');
               labels.add('INBOX');
-              await txThreadsA.store.put({ ...f.thread, labelIds: Array.from(labels) } as any);
-            } catch (_) {}
+              const threadWithInbox = { ...f.thread, labelIds: Array.from(labels) } as any;
+              await txThreadsA.store.put(threadWithInbox);
+              
+              if (!hadInbox) {
+                inboxLabelsAdded++;
+                console.log(`[AuthSync] Phase 1: Added INBOX label to thread ${f.thread.threadId}, final labels: ${Array.from(labels).join(',')}`);
+              }
+            } catch (e) {
+              console.error(`[AuthSync] Phase 1: Failed to process thread ${f.thread.threadId}:`, e);
+            }
           }
-          await txMsgsA.done; await txThreadsA.done;
+          await txMsgsA.done; 
+          await txThreadsA.done;
+          
+          console.log(`[AuthSync] Phase 1: Added INBOX label to ${inboxLabelsAdded} threads`);
+        } else {
+          console.log(`[AuthSync] Phase 1: All seen threads already have INBOX label, skipping`);
         }
-      } catch (_) {}
+      } catch (e) {
+        console.error(`[AuthSync] Phase 1 failed:`, e);
+      }
 
+      console.log(`[AuthSync] Phase 2: Removing INBOX label from threads not seen in Gmail...`);
       const txThreads = db.transaction('threads', 'readwrite');
       const allThreads = await txThreads.store.getAll();
       let threadsUpdated = 0;
+      
+      console.log(`[AuthSync] Phase 2: Checking ${allThreads.length} local threads for stale INBOX labels`);
       
       for (const t of (allThreads || [])) {
         try {
@@ -1055,16 +1173,14 @@
             const next = { ...t, labelIds: labels.filter((l) => l !== 'INBOX') } as any;
             await txThreads.store.put(next);
             threadsUpdated++;
-            if (import.meta.env.DEV) {
-              console.log(`[AuthSync] Removed INBOX label from thread: ${t.threadId}`);
-            }
+            console.log(`[AuthSync] Phase 2: Removed INBOX label from stale thread: ${t.threadId}`);
           }
-        } catch (_) {}
+        } catch (e) {
+          console.error(`[AuthSync] Phase 2: Error processing thread ${t.threadId}:`, e);
+        }
       }
       
-      if (import.meta.env.DEV) {
-        console.log(`[AuthSync] Reconciliation complete: ${threadsUpdated} threads updated`);
-      }
+      console.log(`[AuthSync] Phase 2: Reconciliation complete - removed INBOX from ${threadsUpdated} stale threads`);
       await txThreads.done;
       authoritativeSyncProgress = { ...authoritativeSyncProgress, running: false };
 
@@ -1081,10 +1197,29 @@
         setThreadsWithReset(refreshed as any);
       } catch (_) {}
       
-      // Log sync completion with stats
-      if (import.meta.env.DEV) {
-        console.log(`[AuthSync] Completed: ${totalThreadsProcessed} threads processed, ${authoritativeSyncProgress.pagesCompleted} pages fetched, ${totalPagesAttempted} total attempts`);
+      // Final verification and summary
+      console.log(`[AuthSync] ===== FINAL VERIFICATION =====`);
+      const finalThreads = await db.getAll('threads');
+      const finalInboxThreads = finalThreads.filter((t: any) => 
+        Array.isArray(t.labelIds) && t.labelIds.includes('INBOX')
+      );
+      
+      console.log(`[AuthSync] FINAL STATE: ${finalThreads.length} total threads, ${finalInboxThreads.length} with INBOX label`);
+      console.log(`[AuthSync] SYNC SUMMARY:`);
+      console.log(`[AuthSync]   - Pages processed: ${authoritativeSyncProgress.pagesCompleted}`);
+      console.log(`[AuthSync]   - Total pages attempted: ${totalPagesAttempted}`);
+      console.log(`[AuthSync]   - Threads seen from Gmail: ${seenThreadIds.size}`);
+      console.log(`[AuthSync]   - Threads processed: ${totalThreadsProcessed}`);
+      console.log(`[AuthSync]   - Final inbox threads: ${finalInboxThreads.length}`);
+      console.log(`[AuthSync]   - Stale threads cleaned: ${threadsUpdated}`);
+      
+      if (finalInboxThreads.length === 0 && seenThreadIds.size > 0) {
+        console.error(`[AuthSync] CRITICAL ERROR: Sync completed but 0 inbox threads despite seeing ${seenThreadIds.size} from Gmail!`);
+      } else if (finalInboxThreads.length > 0) {
+        console.log(`[AuthSync] SUCCESS: Sync resulted in ${finalInboxThreads.length} inbox threads`);
       }
+      
+      console.log(`[AuthSync] ===== AUTHORITATIVE SYNC COMPLETE =====`);
     } catch (e) {
       // Surface a subtle telemetry snackbar so user can retry if needed
       try { showSnackbar({ message: 'Full sync failed', timeout: 5000, actions: { 'Retry': () => { void performAuthoritativeInboxSync(); } } }); } catch (_) {}
