@@ -540,6 +540,10 @@
             // Store server session in DB so the app recognizes the user
             await storeServerSessionInDB(serverSession);
             
+            // Immediately notify session manager that we're authenticated
+            const { sessionManager } = await import('$lib/auth/session-manager');
+            sessionManager.applyServerSession(serverSession.email);
+            
             ready = true;
             // Continue with inbox loading using server session
             try {

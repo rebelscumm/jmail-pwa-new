@@ -18,6 +18,7 @@ let sessionState: SessionState = {
 
 let unsubscribe: (() => void) | null = null;
 let checkingStatus = false;
+let hasCheckedStatus = false;
 
 onMount(() => {
 	// Subscribe to session state changes
@@ -25,8 +26,8 @@ onMount(() => {
 		sessionState = state;
 	});
 
-	// Initial status check
-	checkSessionStatus();
+	// Don't do initial status check - let the session manager state drive everything
+	// Only check status when explicitly requested by user clicking the "Check" button
 });
 
 onDestroy(() => {
@@ -37,6 +38,7 @@ onDestroy(() => {
 
 async function checkSessionStatus() {
 	checkingStatus = true;
+	hasCheckedStatus = true;
 	try {
 		// Prefer local sessionManager state when available to avoid transient snackbars
 		const localState = sessionManager.getState();
@@ -159,6 +161,8 @@ function getStatusText() {
 			return `Session active (refreshed ${ago}m ago)`;
 		}
 		return 'Session active';
+	} else if (!hasCheckedStatus) {
+		return 'Loading...';
 	} else {
 		return 'Authentication required';
 	}
@@ -290,7 +294,7 @@ $: if (sessionState.sessionExpiry && !sessionState.refreshInProgress) {
 	</div>
 	
 	<div class="status-actions">
-		{#if !sessionState.authenticated}
+		{#if !sessionState.authenticated && hasCheckedStatus}
 			<Button 
 				variant="filled" 
 				onclick={() => sessionManager.forceReauth()}
