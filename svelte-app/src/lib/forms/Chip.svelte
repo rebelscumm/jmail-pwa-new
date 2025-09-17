@@ -27,6 +27,15 @@
   class:elevated
   class:selected
   {disabled}
+  onclick={(e) => {
+    // Prevent chip clicks from bubbling to parent rows
+    e.preventDefault();
+    e.stopPropagation();
+    // Call the original onclick if provided
+    if (extra.onclick) {
+      extra.onclick(e);
+    }
+  }}
   {...extra}
   role="menuitem"
 >

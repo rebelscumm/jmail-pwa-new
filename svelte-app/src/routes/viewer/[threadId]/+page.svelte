@@ -726,7 +726,8 @@ import iconExpand from "@ktibow/iconset-material-symbols/keyboard-arrow-down";
   async function createTask(mid: string) {
     const m = $messages[mid]; if (!m) return;
     const link = `https://mail.google.com/mail/u/0/#inbox/${m.threadId}`;
-    const line = `- [ ] ${m.headers?.Subject || 'Email'}  (${link})`;
+    const subject = aiSubjectSummary || m.headers?.Subject || 'Email';
+    const line = `[${subject}](${link})`;
     try {
       // Desktop: copy; user can paste into their task file
       await navigator.clipboard.writeText(line);

@@ -19,17 +19,16 @@
   aria-label="Menu"
   tabindex="0"
   onclick={(e) => { 
-    // Only prevent default if the click is directly on the menu container, not on menu items
-    if (e.target === e.currentTarget) {
-      e.preventDefault(); 
-      e.stopPropagation(); 
-    }
+    // Always prevent clicks from bubbling out of the menu to parent rows
+    e.preventDefault(); 
+    e.stopPropagation(); 
   }}
-  onpointerdown={(e) => e.stopPropagation()}
-  onmousedown={(e) => e.stopPropagation()}
-  onmouseup={(e) => e.stopPropagation()}
-  ontouchstart={(e) => e.stopPropagation()}
-  ontouchend={(e) => e.stopPropagation()}
+  onpointerdown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+  onpointerup={(e) => { e.preventDefault(); e.stopPropagation(); }}
+  onmousedown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+  onmouseup={(e) => { e.preventDefault(); e.stopPropagation(); }}
+  ontouchstart={(e) => { e.preventDefault(); e.stopPropagation(); }}
+  ontouchend={(e) => { e.preventDefault(); e.stopPropagation(); }}
   onkeydown={(e) => { if (e.key === 'Escape') { (e.currentTarget as HTMLElement).blur(); } }}
 >
   {@render children()}
