@@ -10,6 +10,8 @@ import iconWarning from '@ktibow/iconset-material-symbols/warning';
 import iconPlayArrow from '@ktibow/iconset-material-symbols/play-arrow';
 import Icon from '$lib/misc/_icon.svelte';
 import { show as showSnackbar } from '$lib/containers/snackbar';
+import { checkForUpdateOnce } from '$lib/update/checker';
+import { aiSummarizeEmail, aiSummarizeSubject } from '$lib/ai/providers';
 
 type LogEntry = { level: 'log' | 'warn' | 'error' | 'info'; msg: any[]; ts: string };
 
@@ -68,6 +70,16 @@ let fullDiagnostics: {
 	running: false,
 	results: []
 };
+
+// App Update check state
+let updateCheckResult: any = null;
+let checkingUpdate = false;
+
+// AI Summary testing state
+let testSubject = 'Service is Complete for Your 2022 Ford Mustang Mach-E';
+let testBodyText = 'Dear Customer,\n\nYour vehicle service appointment has been completed. Here are the details:\n\n• Oil change service completed\n• Tire rotation performed\n• Battery check passed\n• Brake inspection completed - all good\n• Next service due in 6 months\n\nTotal cost: $127.50\n\nThank you for choosing our service center!';
+let aiSummaryTestResult: any = null;
+let testingAiSummary = false;
 
 // Comprehensive diagnostics runner
 async function runFullDiagnostics() {
@@ -1864,6 +1876,118 @@ async function testPaginationHealth() {
 	}
 }
 
+async function testAppUpdate() {
+	checkingUpdate = true;
+	updateCheckResult = null;
+	try {
+		addLog('info', ['Testing app update check...']);
+		const result = await checkForUpdateOnce();
+		updateCheckResult = {
+			timestamp: new Date().toISOString(),
+			checkResult: result,
+			success: true
+		};
+		addLog('info', ['App update check completed', result]);
+		showSnackbar({
+			message: `Update check result: ${result.status}`,
+			timeout: 3000,
+			closable: true
+		});
+	} catch (e) {
+		updateCheckResult = {
+			timestamp: new Date().toISOString(),
+			error: e instanceof Error ? e.message : String(e),
+			success: false
+		};
+		addLog('error', ['testAppUpdate failed', e]);
+		showSnackbar({
+			message: 'Update check failed',
+			timeout: 3000,
+			closable: true
+		});
+	} finally {
+		checkingUpdate = false;
+	}
+}
+
+async function testAiSummary() {
+	testingAiSummary = true;
+	aiSummaryTestResult = null;
+	try {
+		addLog('info', ['Testing AI summary sequence...']);
+		showSnackbar({ message: 'Testing AI summary sequence...', timeout: 3000, closable: true });
+		
+		const startTime = Date.now();
+		
+		// Step 1: Generate detailed bullet-point summary (should always be detailed now)
+		addLog('info', ['Step 1: Generating detailed summary from subject + body']);
+		const detailedSummary = await aiSummarizeEmail(testSubject, testBodyText);
+		const step1Time = Date.now() - startTime;
+		
+		// Step 2: Generate short subject from the detailed summary
+		addLog('info', ['Step 2: Generating short subject from detailed summary']);
+		const shortSubject = await aiSummarizeSubject(testSubject, undefined, undefined, detailedSummary);
+		const totalTime = Date.now() - startTime;
+		
+		aiSummaryTestResult = {
+			timestamp: new Date().toISOString(),
+			success: true,
+			inputData: {
+				subject: testSubject,
+				bodyText: testBodyText
+			},
+			step1Result: {
+				detailedSummary,
+				timeMs: step1Time,
+				isDetailedBullets: detailedSummary.includes('•') || detailedSummary.includes('-'),
+				wordCount: detailedSummary.split(/\s+/).length
+			},
+			step2Result: {
+				shortSubject,
+				timeMs: totalTime - step1Time,
+				wordCount: shortSubject.split(/\s+/).length,
+				isDifferentFromDetailed: shortSubject !== detailedSummary
+			},
+			analysis: {
+				correctSequence: detailedSummary !== shortSubject,
+				detailedSummaryType: detailedSummary.includes('•') || detailedSummary.includes('-') ? 'bullet-points' : 'paragraph',
+				shortSubjectType: shortSubject.split(/\s+/).length <= 15 ? 'short-subject' : 'too-long',
+				totalTimeMs: totalTime
+			}
+		};
+		
+		addLog('info', ['AI summary test completed', aiSummaryTestResult]);
+		
+		// Show results summary
+		const isWorking = aiSummaryTestResult.analysis.correctSequence;
+		showSnackbar({
+			message: isWorking ? 'AI summary sequence working correctly!' : 'Issue detected: Both summaries are identical',
+			timeout: 5000,
+			closable: true,
+			actions: {
+				'View Details': () => {
+					// Details already shown in the UI below
+				}
+			}
+		});
+		
+	} catch (e) {
+		aiSummaryTestResult = {
+			timestamp: new Date().toISOString(),
+			error: e instanceof Error ? e.message : String(e),
+			success: false
+		};
+		addLog('error', ['AI summary test failed', e]);
+		showSnackbar({
+			message: 'AI summary test failed',
+			timeout: 5000,
+			closable: true
+		});
+	} finally {
+		testingAiSummary = false;
+	}
+}
+
 loadApiBaseOverride();
 
 </script>
@@ -2434,6 +2558,129 @@ pre.diag {
 			</Button>
 			</div>
 			<pre class="diag">{JSON.stringify(endpointResults, null, 2)}</pre>
+		{/if}
+	</Card>
+
+	<Card variant="outlined">
+		<div class="section-header">
+			<div class="section-title">
+				<h2>App Update Check</h2>
+			</div>
+			<Button variant="text" iconType="left" class="copy-button" onclick={() => copySection('App Update Check', updateCheckResult)}>
+				<Icon icon={iconCopy} />
+				Copy Section
+			</Button>
+		</div>
+		<p style="color: rgb(var(--m3-scheme-on-surface-variant)); margin-bottom: 1rem;">Test the app update checking functionality to verify it can fetch and compare version information.</p>
+		<div class="controls">
+			<Button variant="filled" onclick={testAppUpdate} disabled={checkingUpdate}>
+				{checkingUpdate ? 'Checking...' : 'Test Update Check'}
+			</Button>
+		</div>
+		{#if updateCheckResult}
+			<div class="summary">
+				<strong>Update Check Result</strong>
+				<pre style="white-space:pre-wrap">{JSON.stringify(updateCheckResult, null, 2)}</pre>
+			</div>
+		{/if}
+	</Card>
+
+	<Card variant="filled">
+		<div class="section-header">
+			<div class="section-title">
+				<h2>AI Summary Testing</h2>
+			</div>
+			<Button variant="text" iconType="left" class="copy-button" onclick={() => copySection('AI Summary Testing', aiSummaryTestResult)}>
+				<Icon icon={iconCopy} />
+				Copy Section
+			</Button>
+		</div>
+		<p style="color: rgb(var(--m3-scheme-on-surface-variant)); margin-bottom: 1rem;">Test the AI summary sequence to verify that step 1 generates detailed bullet-point summaries and step 2 generates short subject replacements.</p>
+		
+		<div style="margin-bottom: 1rem;">
+			<label for="test-subject-input" style="display: block; margin-bottom: 0.5rem; font-weight: 500; color: rgb(var(--m3-scheme-on-surface));">Test Subject:</label>
+			<input 
+				id="test-subject-input"
+				bind:value={testSubject}
+				placeholder="Enter email subject to test"
+				style="
+					width: 100%;
+					padding: 0.75rem 1rem;
+					border: 1px solid rgb(var(--m3-scheme-outline));
+					border-radius: var(--m3-util-rounding-small);
+					background: rgb(var(--m3-scheme-surface));
+					color: rgb(var(--m3-scheme-on-surface));
+					font-family: inherit;
+					margin-bottom: 1rem;
+				" />
+			
+			<label for="test-body-textarea" style="display: block; margin-bottom: 0.5rem; font-weight: 500; color: rgb(var(--m3-scheme-on-surface));">Test Email Body:</label>
+			<textarea 
+				id="test-body-textarea"
+				bind:value={testBodyText}
+				placeholder="Enter email body content to test"
+				rows="6"
+				style="
+					width: 100%;
+					padding: 0.75rem 1rem;
+					border: 1px solid rgb(var(--m3-scheme-outline));
+					border-radius: var(--m3-util-rounding-small);
+					background: rgb(var(--m3-scheme-surface));
+					color: rgb(var(--m3-scheme-on-surface));
+					font-family: inherit;
+					resize: vertical;
+				"></textarea>
+		</div>
+
+		<div class="controls">
+			<Button variant="filled" onclick={testAiSummary} disabled={testingAiSummary}>
+				<Icon icon={iconPlayArrow} />
+				{testingAiSummary ? 'Testing AI Summary Sequence...' : 'Test AI Summary Sequence'}
+			</Button>
+		</div>
+		
+		{#if aiSummaryTestResult}
+			<div class="summary">
+				<strong>AI Summary Test Results</strong>
+				{#if aiSummaryTestResult.success}
+					<div style="margin-top: 1rem;">
+						<div style="background: rgb(var(--m3-scheme-{aiSummaryTestResult.analysis.correctSequence ? 'tertiary' : 'error'}-container)); padding: 1rem; border-radius: var(--m3-util-rounding-small); margin-bottom: 1rem;">
+							<strong style="color: rgb(var(--m3-scheme-{aiSummaryTestResult.analysis.correctSequence ? 'on-tertiary' : 'on-error'}-container));">
+								{aiSummaryTestResult.analysis.correctSequence ? '✓ AI Summary Sequence Working Correctly' : '⚠ Issue: Both summaries are identical'}
+							</strong>
+						</div>
+						
+						<div style="display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); margin-bottom: 1rem;">
+							<div style="background: rgb(var(--m3-scheme-surface-container-high)); padding: 1rem; border-radius: var(--m3-util-rounding-medium);">
+								<h4 style="margin: 0 0 0.5rem; color: rgb(var(--m3-scheme-on-surface));">Step 1: Detailed Summary</h4>
+								<div style="font-size: 0.875rem; color: rgb(var(--m3-scheme-on-surface-variant)); margin-bottom: 0.5rem;">
+									Type: {aiSummaryTestResult.analysis.detailedSummaryType} • Words: {aiSummaryTestResult.step1Result.wordCount} • Time: {aiSummaryTestResult.step1Result.timeMs}ms
+								</div>
+								<div style="background: rgb(var(--m3-scheme-surface-container)); padding: 0.75rem; border-radius: var(--m3-util-rounding-small); font-family: monospace; font-size: 0.875rem; white-space: pre-wrap; max-height: 200px; overflow-y: auto;">{aiSummaryTestResult.step1Result.detailedSummary}</div>
+							</div>
+							
+							<div style="background: rgb(var(--m3-scheme-surface-container-high)); padding: 1rem; border-radius: var(--m3-util-rounding-medium);">
+								<h4 style="margin: 0 0 0.5rem; color: rgb(var(--m3-scheme-on-surface));">Step 2: Short Subject</h4>
+								<div style="font-size: 0.875rem; color: rgb(var(--m3-scheme-on-surface-variant)); margin-bottom: 0.5rem;">
+									Type: {aiSummaryTestResult.analysis.shortSubjectType} • Words: {aiSummaryTestResult.step2Result.wordCount} • Time: {aiSummaryTestResult.step2Result.timeMs}ms
+								</div>
+								<div style="background: rgb(var(--m3-scheme-surface-container)); padding: 0.75rem; border-radius: var(--m3-util-rounding-small); font-family: monospace; font-size: 0.875rem; white-space: pre-wrap; max-height: 200px; overflow-y: auto;">{aiSummaryTestResult.step2Result.shortSubject}</div>
+							</div>
+						</div>
+						
+						<details style="background: rgb(var(--m3-scheme-surface-container)); border-radius: var(--m3-util-rounding-small);">
+							<summary style="cursor: pointer; padding: 1rem; color: rgb(var(--m3-scheme-primary)); font-weight: 500;">Show Full Test Results</summary>
+							<div style="padding: 0 1rem 1rem;">
+								<pre class="diag" style="margin: 0;">{JSON.stringify(aiSummaryTestResult, null, 2)}</pre>
+							</div>
+						</details>
+					</div>
+				{:else}
+					<div style="color: rgb(var(--m3-scheme-error)); background: rgb(var(--m3-scheme-error-container) / 0.1); padding: 1rem; border-radius: var(--m3-util-rounding-small); margin-top: 1rem;">
+						<strong>Test Failed:</strong> {aiSummaryTestResult.error}
+					</div>
+				{/if}
+			</div>
 		{/if}
 	</Card>
 

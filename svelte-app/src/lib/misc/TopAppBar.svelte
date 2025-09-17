@@ -56,33 +56,67 @@ import { precomputeStatus } from '$lib/stores/precompute';
     if (d) d.open = !d.open;
   }
   async function doSync() {
+    console.log('[TopAppBar] ===== SYNC BUTTON CLICKED =====');
     try {
       showSnackbar({ message: 'Syncing…' });
     } catch {}
     try {
+      console.log('[TopAppBar] Step 1: Importing and calling syncNow()...');
       const { syncNow } = await import('$lib/stores/queue');
       await syncNow();
+      console.log('[TopAppBar] Step 1: syncNow() completed');
+      
       // After flushing, immediately clear any trailing holds and reload inbox cache
       try {
+        console.log('[TopAppBar] Step 2: Clearing holds...');
         const { clearAllHolds } = await import('$lib/stores/holds');
         clearAllHolds();
-      } catch {}
+        console.log('[TopAppBar] Step 2: Holds cleared');
+      } catch (e) {
+        console.error('[TopAppBar] Step 2: Failed to clear holds:', e);
+      }
+      
       // Ensure we don't show stale threads after server sync
       try {
+        console.log('[TopAppBar] Step 3: Trying resetInboxCache...');
         const mod = await import('../../routes/inbox/+page.svelte');
-        if (typeof (mod as any).resetInboxCache === 'function') await (mod as any).resetInboxCache();
-      } catch {}
+        if (typeof (mod as any).resetInboxCache === 'function') {
+          await (mod as any).resetInboxCache();
+          console.log('[TopAppBar] Step 3: resetInboxCache() called');
+        } else {
+          console.log('[TopAppBar] Step 3: resetInboxCache function not found');
+        }
+      } catch (e) {
+        console.error('[TopAppBar] Step 3: Failed to call resetInboxCache:', e);
+      }
+      
       try {
+        console.log('[TopAppBar] Step 4: Trying reloadFromCache...');
         const mod = await import('../../routes/inbox/+page.svelte');
-        if (typeof (mod as any).reloadFromCache === 'function') await (mod as any).reloadFromCache();
-      } catch {}
-    } catch {}
+        if (typeof (mod as any).reloadFromCache === 'function') {
+          await (mod as any).reloadFromCache();
+          console.log('[TopAppBar] Step 4: reloadFromCache() called');
+        } else {
+          console.log('[TopAppBar] Step 4: reloadFromCache function not found');
+        }
+      } catch (e) {
+        console.error('[TopAppBar] Step 4: Failed to call reloadFromCache:', e);
+      }
+    } catch (e) {
+      console.error('[TopAppBar] Sync process failed:', e);
+    }
+    
     try {
+      console.log('[TopAppBar] Step 5: Dispatching jmail:refresh event...');
       // Ask pages (e.g., inbox) to re-hydrate from server
       window.dispatchEvent(new CustomEvent('jmail:refresh'));
+      console.log('[TopAppBar] Step 5: jmail:refresh event dispatched');
       showSnackbar({ message: 'Sync complete', timeout: 2500 });
-    } catch {}
+    } catch (e) {
+      console.error('[TopAppBar] Failed to dispatch refresh event:', e);
+    }
     onSyncNow && onSyncNow();
+    console.log('[TopAppBar] ===== SYNC BUTTON PROCESS COMPLETE =====');
   }
 
   function handleBack() {

@@ -803,11 +803,18 @@
     })();
     // Listen for global refresh requests
     async function handleGlobalRefresh() {
+      console.log('[Inbox] ===== REFRESH BUTTON CLICKED =====');
       try {
         showSnackbar({ message: 'Force refreshing inbox from Gmail…' });
         syncing = true;
         
         console.log('[Inbox] Force refresh triggered - clearing cache and performing full sync');
+        
+        // Check if we're in a valid state to refresh
+        if (!ready) {
+          console.error('[Inbox] Cannot refresh - inbox not ready');
+          throw new Error('Inbox not ready for refresh');
+        }
         
         // Clear any cached data that might be stale
         const db = await getDB();
@@ -860,9 +867,18 @@
         syncing = false;
       }
     }
+    console.log('[Inbox] Setting up refresh event listeners...');
     window.addEventListener('jmail:refresh', handleGlobalRefresh);
     // Expose for debugging/manual trigger
-    try { (window as any).__jmailRefresh = () => window.dispatchEvent(new CustomEvent('jmail:refresh')); } catch {}
+    try { 
+      (window as any).__jmailRefresh = () => {
+        console.log('[Debug] Manual refresh triggered via __jmailRefresh()');
+        window.dispatchEvent(new CustomEvent('jmail:refresh'));
+      };
+      console.log('[Inbox] __jmailRefresh() function exposed for debugging');
+    } catch (e) {
+      console.error('[Inbox] Failed to expose debug refresh function:', e);
+    }
     window.addEventListener('keydown', onKeyDown);
     return () => { 
       window.removeEventListener('jmail:refresh', handleGlobalRefresh); 
