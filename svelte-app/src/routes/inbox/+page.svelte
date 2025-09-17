@@ -1043,36 +1043,46 @@
         
         console.log(`[AuthSync] Successfully fetched ${fetched.filter(f => !!f).length} out of ${toFetch.length} threads`);
         
-        // Store fetched threads and messages
-        const txMsgs = db.transaction('messages', 'readwrite');
-        const txThreads = db.transaction('threads', 'readwrite');
+        // Store fetched threads and messages with fresh transactions
         let storedThreads = 0;
         let storedMessages = 0;
         
-        for (const f of fetched) {
-          if (!f) continue;
-          try {
-            for (const m of f.messages) {
-              try { 
-                await txMsgs.store.put(m); 
-                storedMessages++;
-              } catch (e) {
-                console.error(`[AuthSync] Failed to store message ${m.id}:`, e);
+        if (fetched.some(f => !!f)) {
+          console.log(`[AuthSync] Creating fresh transactions for database storage...`);
+          const txMsgs = db.transaction('messages', 'readwrite');
+          const txThreads = db.transaction('threads', 'readwrite');
+          
+          for (const f of fetched) {
+            if (!f) continue;
+            try {
+              for (const m of f.messages) {
+                try { 
+                  await txMsgs.store.put(m); 
+                  storedMessages++;
+                } catch (e) {
+                  console.error(`[AuthSync] Failed to store message ${m.id}:`, e);
+                }
               }
-            }
-            try { 
-              await txThreads.store.put(f.thread); 
-              storedThreads++;
-              console.log(`[AuthSync] Stored thread ${f.thread.threadId} with labels: ${f.thread.labelIds.join(',')}`);
+              try { 
+                await txThreads.store.put(f.thread); 
+                storedThreads++;
+                console.log(`[AuthSync] Stored thread ${f.thread.threadId} with labels: ${f.thread.labelIds.join(',')}`);
+              } catch (e) {
+                console.error(`[AuthSync] Failed to store thread ${f.thread.threadId}:`, e);
+              }
             } catch (e) {
-              console.error(`[AuthSync] Failed to store thread ${f.thread.threadId}:`, e);
+              console.error(`[AuthSync] Failed to process fetched thread:`, e);
             }
+          }
+          
+          try {
+            await txMsgs.done;
+            await txThreads.done;
+            console.log(`[AuthSync] Transactions completed successfully`);
           } catch (e) {
-            console.error(`[AuthSync] Failed to process fetched thread:`, e);
+            console.error(`[AuthSync] Transaction completion failed:`, e);
           }
         }
-        await txMsgs.done;
-        await txThreads.done;
         
         console.log(`[AuthSync] Database storage complete: ${storedThreads} threads, ${storedMessages} messages stored`);
         if (!pageToken) break;
@@ -1087,73 +1097,112 @@
       // Pass 1: fetch any missing seen threads and ensure INBOX label is present
       console.log(`[AuthSync] Phase 1: Ensuring all seen threads have INBOX label...`);
       try {
-        const toEnsure: string[] = [];
+        const toFetch: string[] = [];
+        const toUpdateLabelsOnly: Array<{threadId: string, existing: any}> = [];
+        
         for (const tid of seenThreadIds) {
           try {
             const existing = await db.get('threads', tid) as any | undefined;
             if (!existing) {
               console.log(`[AuthSync] Thread ${tid} missing from database, will fetch`);
-              toEnsure.push(tid);
+              toFetch.push(tid);
             } else if (!Array.isArray(existing.labelIds) || !existing.labelIds.includes('INBOX')) {
               console.log(`[AuthSync] Thread ${tid} exists but missing INBOX label, current labels: ${existing.labelIds?.join(',') || 'none'}`);
-              toEnsure.push(tid);
+              toUpdateLabelsOnly.push({threadId: tid, existing});
             }
           } catch (e) {
             console.error(`[AuthSync] Error checking thread ${tid}:`, e);
-            toEnsure.push(tid);
+            toFetch.push(tid);
           }
         }
         
-        console.log(`[AuthSync] Phase 1: Need to ensure ${toEnsure.length} threads have INBOX label`);
+        console.log(`[AuthSync] Phase 1a: Need to fetch ${toFetch.length} missing threads`);
+        console.log(`[AuthSync] Phase 1b: Need to add INBOX label to ${toUpdateLabelsOnly.length} existing threads`);
         
-        if (toEnsure.length) {
-          console.log(`[AuthSync] Fetching ${toEnsure.length} threads to ensure INBOX label...`);
-          const fetched = await mapWithConcurrency(toEnsure, 4, async (tid) => {
+        // Phase 1a: Update existing threads with INBOX label (fast path)
+        if (toUpdateLabelsOnly.length > 0) {
+          console.log(`[AuthSync] Phase 1a: Adding INBOX labels to existing threads...`);
+          const txThreadsUpdate = db.transaction('threads', 'readwrite');
+          let quickUpdates = 0;
+          
+          for (const {threadId, existing} of toUpdateLabelsOnly) {
+            try {
+              const labels = new Set<string>(existing.labelIds || []);
+              labels.add('INBOX');
+              const updatedThread = { ...existing, labelIds: Array.from(labels) };
+              await txThreadsUpdate.store.put(updatedThread);
+              quickUpdates++;
+              console.log(`[AuthSync] Phase 1a: Added INBOX to existing thread ${threadId}, labels: ${Array.from(labels).join(',')}`);
+            } catch (e) {
+              console.error(`[AuthSync] Phase 1a: Failed to update thread ${threadId}:`, e);
+            }
+          }
+          
+          try {
+            await txThreadsUpdate.done;
+            console.log(`[AuthSync] Phase 1a: Quick INBOX label updates completed: ${quickUpdates} threads`);
+          } catch (e) {
+            console.error(`[AuthSync] Phase 1a: Transaction completion failed:`, e);
+          }
+        }
+        
+        // Phase 1b: Fetch completely missing threads
+        if (toFetch.length) {
+          console.log(`[AuthSync] Phase 1b: Fetching ${toFetch.length} missing threads from Gmail...`);
+          const fetched = await mapWithConcurrency(toFetch, 4, async (tid) => {
             try { 
               const result = await getThreadSummary(tid);
-              console.log(`[AuthSync] Phase 1: Fetched ${tid}, original labels: ${result.thread.labelIds.join(',')}`);
+              console.log(`[AuthSync] Phase 1b: Fetched ${tid}, original labels: ${result.thread.labelIds.join(',')}`);
               return result;
             } catch (e) {
-              console.error(`[AuthSync] Phase 1: Failed to fetch ${tid}:`, e);
+              console.error(`[AuthSync] Phase 1b: Failed to fetch ${tid}:`, e);
               return null;
             }
           });
           
-          console.log(`[AuthSync] Phase 1: Successfully fetched ${fetched.filter(f => !!f).length} threads for INBOX labeling`);
+          console.log(`[AuthSync] Phase 1b: Successfully fetched ${fetched.filter(f => !!f).length} missing threads`);
           
-          const txMsgsA = db.transaction('messages', 'readwrite');
-          const txThreadsA = db.transaction('threads', 'readwrite');
-          let inboxLabelsAdded = 0;
+          let newThreadsStored = 0;
           
-          for (const f of fetched) {
-            if (!f) continue;
+          if (fetched.some(f => !!f)) {
+            console.log(`[AuthSync] Phase 1b: Creating fresh transactions for storing missing threads...`);
+            const txMsgsA = db.transaction('messages', 'readwrite');
+            const txThreadsA = db.transaction('threads', 'readwrite');
+            
+            for (const f of fetched) {
+              if (!f) continue;
+              try {
+                for (const m of f.messages) { 
+                  try { await txMsgsA.store.put(m); } catch (e) {
+                    console.error(`[AuthSync] Phase 1b: Failed to store message ${m.id}:`, e);
+                  } 
+                }
+                // Ensure INBOX label is set for fetched threads
+                const labels = new Set<string>(f.thread.labelIds || []);
+                labels.add('INBOX');
+                const threadWithInbox = { ...f.thread, labelIds: Array.from(labels) } as any;
+                await txThreadsA.store.put(threadWithInbox);
+                
+                newThreadsStored++;
+                console.log(`[AuthSync] Phase 1b: Stored new thread ${f.thread.threadId} with INBOX label, labels: ${Array.from(labels).join(',')}`);
+                
+              } catch (e) {
+                console.error(`[AuthSync] Phase 1b: Failed to process thread ${f.thread.threadId}:`, e);
+              }
+            }
+            
             try {
-              for (const m of f.messages) { 
-                try { await txMsgsA.store.put(m); } catch (e) {
-                  console.error(`[AuthSync] Phase 1: Failed to store message ${m.id}:`, e);
-                } 
-              }
-              // Ensure INBOX label is set for seen threads
-              const labels = new Set<string>(f.thread.labelIds || []);
-              const hadInbox = labels.has('INBOX');
-              labels.add('INBOX');
-              const threadWithInbox = { ...f.thread, labelIds: Array.from(labels) } as any;
-              await txThreadsA.store.put(threadWithInbox);
-              
-              if (!hadInbox) {
-                inboxLabelsAdded++;
-                console.log(`[AuthSync] Phase 1: Added INBOX label to thread ${f.thread.threadId}, final labels: ${Array.from(labels).join(',')}`);
-              }
+              await txMsgsA.done; 
+              await txThreadsA.done;
+              console.log(`[AuthSync] Phase 1b: Missing threads storage transactions completed successfully`);
             } catch (e) {
-              console.error(`[AuthSync] Phase 1: Failed to process thread ${f.thread.threadId}:`, e);
+              console.error(`[AuthSync] Phase 1b: Transaction completion failed:`, e);
             }
           }
-          await txMsgsA.done; 
-          await txThreadsA.done;
           
-          console.log(`[AuthSync] Phase 1: Added INBOX label to ${inboxLabelsAdded} threads`);
+          console.log(`[AuthSync] Phase 1b: Stored ${newThreadsStored} new threads with INBOX labels`);
         } else {
-          console.log(`[AuthSync] Phase 1: All seen threads already have INBOX label, skipping`);
+          console.log(`[AuthSync] Phase 1b: No missing threads to fetch`);
         }
       } catch (e) {
         console.error(`[AuthSync] Phase 1 failed:`, e);
