@@ -1503,6 +1503,230 @@ async function testGmailPagination() {
 	}
 }
 
+async function comprehensiveSyncAnalysis() {
+	try {
+		addLog('info', ['Starting comprehensive sync analysis...']);
+		
+		const { getDB } = await import('$lib/db/indexeddb');
+		const { listThreadIdsByLabelId, getLabel } = await import('$lib/gmail/api');
+		
+		const db = await getDB();
+		
+		// Get all local inbox threads
+		const localThreads = await db.getAll('threads');
+		const localInboxThreads = localThreads.filter((t: any) => 
+			Array.isArray(t.labelIds) && t.labelIds.includes('INBOX')
+		);
+		
+		// Get Gmail inbox label info
+		const gmailInboxLabel = await getLabel('INBOX');
+		
+		// Get all Gmail thread IDs using efficient thread listing
+		const gmailThreadIds = new Set<string>();
+		const allGmailPages: Array<{pageNum: number, idsCount: number, pageToken?: string}> = [];
+		let pageToken: string | undefined = undefined;
+		let pageCount = 0;
+		const maxPages = 50; // Increased limit to get full picture
+		
+		while (pageCount < maxPages) {
+			const page = await listThreadIdsByLabelId('INBOX', 100, pageToken);
+			pageCount++;
+			
+			allGmailPages.push({
+				pageNum: pageCount,
+				idsCount: page.ids?.length || 0,
+				pageToken: pageToken
+			});
+			
+			if (!page.ids?.length) {
+				if (!page.nextPageToken) break;
+				// Empty page but more pages - continue
+				pageToken = page.nextPageToken;
+				continue;
+			}
+			
+			page.ids.forEach(tid => gmailThreadIds.add(tid));
+			
+			if (!page.nextPageToken) break;
+			pageToken = page.nextPageToken;
+		}
+		
+		// Find threads that are in Gmail but not in local DB (missing threads)
+		const localThreadIds = new Set(localInboxThreads.map((t: any) => t.threadId));
+		const missingThreads = Array.from(gmailThreadIds).filter(tid => !localThreadIds.has(tid));
+		
+		// Find stale threads (in local DB but not in Gmail)
+		const staleThreads = localInboxThreads.filter((t: any) => 
+			!gmailThreadIds.has(t.threadId)
+		);
+		
+		const analysis = {
+			timestamp: new Date().toISOString(),
+			gmailInfo: {
+				totalThreadsInLabel: gmailInboxLabel.threadsTotal,
+				totalMessagesInLabel: gmailInboxLabel.messagesTotal,
+				unreadThreads: gmailInboxLabel.threadsUnread,
+				unreadMessages: gmailInboxLabel.messagesUnread
+			},
+			paginationInfo: {
+				totalPagesScanned: pageCount,
+				pagesWithData: allGmailPages.filter(p => p.idsCount > 0).length,
+				pagesEmpty: allGmailPages.filter(p => p.idsCount === 0).length,
+				detailsByPage: allGmailPages
+			},
+			localData: {
+				inboxThreadsCount: localInboxThreads.length,
+				totalThreadsCount: localThreads.length,
+				localInboxThreadIds: localInboxThreads.map((t: any) => t.threadId).slice(0, 20)
+			},
+			discrepancy: {
+				threadsInGmail: gmailThreadIds.size,
+				threadsInLocal: localInboxThreads.length,
+				threadCountDiff: localInboxThreads.length - gmailThreadIds.size,
+				missingFromLocal: missingThreads.length,
+				missingFromLocalIds: missingThreads.slice(0, 20),
+				staleInLocal: staleThreads.length,
+				staleInLocalIds: staleThreads.map((t: any) => t.threadId).slice(0, 20)
+			}
+		};
+		
+		inboxDiagnostics = { ...inboxDiagnostics, comprehensiveAnalysis: analysis };
+		addLog('info', ['Comprehensive sync analysis completed', analysis]);
+		
+		// Show summary in alert for immediate feedback
+		const summary = `Sync Analysis Results:
+Gmail Reports: ${analysis.gmailInfo.totalThreadsInLabel} threads in INBOX
+Gmail API Found: ${analysis.discrepancy.threadsInGmail} threads via pagination
+Local Database: ${analysis.discrepancy.threadsInLocal} threads
+Missing from local: ${analysis.discrepancy.missingFromLocal} threads
+Stale in local: ${analysis.discrepancy.staleInLocal} threads`;
+		alert(summary);
+		
+	} catch (e) {
+		addLog('error', ['comprehensiveSyncAnalysis failed', e]);
+	}
+}
+
+async function forcedInboxResync() {
+	try {
+		addLog('info', ['Starting forced inbox resync...']);
+		
+		const { getDB } = await import('$lib/db/indexeddb');
+		const { listThreadIdsByLabelId, getThreadSummary } = await import('$lib/gmail/api');
+		
+		const db = await getDB();
+		
+		// Get all Gmail thread IDs
+		const gmailThreadIds = new Set<string>();
+		let pageToken: string | undefined = undefined;
+		let pageCount = 0;
+		const maxPages = 50;
+		
+		addLog('info', ['Fetching all Gmail thread IDs...']);
+		
+		while (pageCount < maxPages) {
+			const page = await listThreadIdsByLabelId('INBOX', 100, pageToken);
+			pageCount++;
+			
+			if (!page.ids?.length) {
+				if (!page.nextPageToken) break;
+				pageToken = page.nextPageToken;
+				continue;
+			}
+			
+			page.ids.forEach(tid => gmailThreadIds.add(tid));
+			addLog('info', [`Page ${pageCount}: Found ${page.ids.length} threads, total so far: ${gmailThreadIds.size}`]);
+			
+			if (!page.nextPageToken) break;
+			pageToken = page.nextPageToken;
+		}
+		
+		addLog('info', [`Total Gmail threads found: ${gmailThreadIds.size}`]);
+		
+		// Get local threads to identify missing ones
+		const localThreads = await db.getAll('threads');
+		const localInboxThreads = localThreads.filter((t: any) => 
+			Array.isArray(t.labelIds) && t.labelIds.includes('INBOX')
+		);
+		const localThreadIds = new Set(localInboxThreads.map((t: any) => t.threadId));
+		
+		// Find missing threads
+		const missingThreadIds = Array.from(gmailThreadIds).filter(tid => !localThreadIds.has(tid));
+		addLog('info', [`Missing threads to fetch: ${missingThreadIds.length}`]);
+		
+		if (missingThreadIds.length === 0) {
+			alert('No missing threads found. Sync appears to be current.');
+			return;
+		}
+		
+		// Batch fetch missing threads with concurrency limit
+		const batchSize = 5;
+		let fetchedCount = 0;
+		let errorCount = 0;
+		
+		for (let i = 0; i < missingThreadIds.length; i += batchSize) {
+			const batch = missingThreadIds.slice(i, i + batchSize);
+			
+			const results = await Promise.allSettled(
+				batch.map(async (threadId) => {
+					try {
+						const threadSummary = await getThreadSummary(threadId);
+						
+						// Store thread and messages in database
+						const txMsgs = db.transaction('messages', 'readwrite');
+						const txThreads = db.transaction('threads', 'readwrite');
+						
+						for (const msg of threadSummary.messages) {
+							await txMsgs.store.put(msg);
+						}
+						await txMsgs.done;
+						
+						await txThreads.store.put(threadSummary.thread);
+						await txThreads.done;
+						
+						return { success: true, threadId };
+					} catch (e) {
+						return { success: false, threadId, error: String(e) };
+					}
+				})
+			);
+			
+			const successes = results.filter((r): r is PromiseFulfilledResult<{success: true, threadId: string}> => 
+				r.status === 'fulfilled' && r.value.success
+			).length;
+			
+			const failures = results.length - successes;
+			fetchedCount += successes;
+			errorCount += failures;
+			
+			addLog('info', [`Batch ${Math.floor(i/batchSize) + 1}: Fetched ${successes}/${batch.length} threads (${fetchedCount}/${missingThreadIds.length} total, ${errorCount} errors)`]);
+		}
+		
+		const resyncResult = {
+			timestamp: new Date().toISOString(),
+			totalGmailThreads: gmailThreadIds.size,
+			missingThreadsFound: missingThreadIds.length,
+			threadsFetched: fetchedCount,
+			fetchErrors: errorCount,
+			success: errorCount === 0
+		};
+		
+		inboxDiagnostics = { ...inboxDiagnostics, resyncResult };
+		addLog('info', ['Forced resync completed', resyncResult]);
+		
+		alert(`Forced Resync Complete:
+Found ${missingThreadIds.length} missing threads
+Successfully fetched: ${fetchedCount}
+Errors: ${errorCount}
+
+${errorCount === 0 ? 'All missing threads have been synced!' : 'Some threads failed to sync - check logs for details'}`);
+		
+	} catch (e) {
+		addLog('error', ['forcedInboxResync failed', e]);
+		alert(`Resync failed: ${e instanceof Error ? e.message : String(e)}`);
+	}
+}
+
 async function identifyStaleThreads() {
 	try {
 		addLog('info', ['Identifying stale threads...']);
@@ -2118,7 +2342,9 @@ pre.diag {
 		<p style="color: rgb(var(--m3-scheme-on-surface-variant)); margin-bottom: 1rem;">Debug inbox sync issues - excessive pages, wrong email counts, stale data.</p>
 		<div class="controls">
 			<Button variant="filled" onclick={debugInboxSync}>Debug inbox sync state</Button>
+			<Button variant="filled" onclick={comprehensiveSyncAnalysis}>🔍 Comprehensive sync analysis</Button>
 			<Button variant="tonal" onclick={compareInboxCounts}>Compare local vs Gmail counts</Button>
+			<Button variant="tonal" onclick={forcedInboxResync}>⬇️ Force resync missing emails</Button>
 			<Button variant="outlined" color="error" onclick={clearLocalInboxData}>Clear local inbox data</Button>
 			<Button variant="outlined" onclick={testGmailPagination}>Test Gmail API pagination</Button>
 			<Button variant="text" onclick={identifyStaleThreads}>Identify stale threads</Button>
