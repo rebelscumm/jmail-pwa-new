@@ -12,7 +12,10 @@ const config = {
     paths: {
       relative: false,
     },
-    prerender: { handleHttpError: "warn" },
+    prerender: { 
+      handleHttpError: "warn",
+      entries: ["/version.json"]
+    },
   },
 };
 
