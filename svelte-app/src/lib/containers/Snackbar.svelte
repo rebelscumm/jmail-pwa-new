@@ -1,4 +1,6 @@
 <script module lang="ts">
+  import type { AppSettings } from '$lib/stores/settings';
+
   export type SnackbarIn = {
     message: string;
     actions?: Record<string, () => void>;
@@ -9,6 +11,13 @@
     timeout: 2000 -> 2s timeout
     */
     timeout?: number | null;
+    // Settings-related properties
+    settingsConfig?: {
+      title: string;
+      settingKeys: (keyof AppSettings)[];
+      currentSettings: Partial<AppSettings>;
+      onSettingChange: (key: keyof AppSettings, value: any) => void;
+    };
   };
 </script>
 
@@ -18,9 +27,11 @@
   import { fade } from "svelte/transition";
   import iconX from "@ktibow/iconset-material-symbols/close";
   import iconCopy from "@ktibow/iconset-material-symbols/content-copy-outline";
+  import iconSettings from "@ktibow/iconset-material-symbols/settings";
   import Icon from "$lib/misc/_icon.svelte";
   import SnackbarItem from "./SnackbarItem.svelte";
   import Layer from "$lib/misc/Layer.svelte";
+  import SettingsPopupMenu from "./SettingsPopupMenu.svelte";
 
   type SnackbarConfig = Omit<ComponentProps<typeof SnackbarItem>, "children">;
 
@@ -32,8 +43,8 @@
     config?: SnackbarConfig;
     closeButtonTitle?: string;
   } & HTMLAttributes<HTMLDivElement> = $props();
-  export const show = ({ message, actions = {}, closable = true, timeout = 4000 }: SnackbarIn) => {
-    snackbar = { message, actions, closable, timeout };
+  export const show = ({ message, actions = {}, closable = true, timeout = 4000, settingsConfig }: SnackbarIn) => {
+    snackbar = { message, actions, closable, timeout, settingsConfig };
     clearTimeout(timeoutId);
     if (timeout)
       timeoutId = setTimeout(() => {
@@ -60,9 +71,31 @@
 
   let snackbar: Required<SnackbarIn> | undefined = $state();
   let timeoutId: number;
+  let settingsPopupVisible = $state(false);
+  
   onDestroy(() => {
     clearTimeout(timeoutId);
   });
+
+  function handleSettingsClick() {
+    if (snackbar?.settingsConfig) {
+      settingsPopupVisible = true;
+    }
+  }
+
+  function handleSettingUpdate(event: CustomEvent<{ key: keyof AppSettings; value: any }>) {
+    if (snackbar?.settingsConfig) {
+      snackbar.settingsConfig.onSettingChange(event.detail.key, event.detail.value);
+    }
+  }
+
+  function handleOpenFullSettings() {
+    settingsPopupVisible = false;
+    // Navigate to full settings page
+    if (typeof window !== 'undefined') {
+      window.location.href = '/settings';
+    }
+  }
 </script>
 
 {#if snackbar}
@@ -85,6 +118,17 @@
           </button>
         {/each}
         <div class="actions">
+          {#if snackbar.settingsConfig}
+            <button
+              type="button"
+              class="action m3-font-label-large settings"
+              title="Settings"
+              aria-label="Open related settings"
+              onclick={handleSettingsClick}
+            >
+              <Icon icon={iconSettings} />
+            </button>
+          {/if}
           <button
             type="button"
             class="action m3-font-label-large copy"
@@ -114,6 +158,19 @@
       </SnackbarItem>
     {/key}
   </div>
+{/if}
+
+<!-- Settings Popup Menu -->
+{#if snackbar?.settingsConfig}
+  <SettingsPopupMenu
+    visible={settingsPopupVisible}
+    title={snackbar.settingsConfig.title}
+    settingKeys={snackbar.settingsConfig.settingKeys}
+    settings={snackbar.settingsConfig.currentSettings}
+    onupdate={handleSettingUpdate}
+    onclose={() => settingsPopupVisible = false}
+    onopenFullSettings={handleOpenFullSettings}
+  />
 {/if}
 
 <style>

@@ -1705,7 +1705,38 @@
               if (!s?.precomputeSummaries) {
                 try {
                   const rootCauses = 'Possible root causes: missing summary field, precompute disabled, missing Gmail body scopes, filtered threads, previous precompute failure.';
-                  showSnackbar({ message: `AI precompute is disabled in Settings. Enable Precompute summaries to allow background AI processing.\n${rootCauses}`, timeout: 9000, actions: { 'Open Settings': () => { location.href = '/settings'; } } });
+                  showSnackbar({ 
+                    message: `AI precompute is disabled in Settings. Enable Precompute summaries to allow background AI processing.\n${rootCauses}`, 
+                    timeout: 9000, 
+                    actions: { 'Open Settings': () => { location.href = '/settings'; } },
+                    settingsConfig: {
+                      title: 'AI Precompute Settings',
+                      settingKeys: ['precomputeSummaries', 'precomputeAutoRun', 'precomputeUseBatch', 'precomputeUseContextCache'],
+                      currentSettings: {
+                        precomputeSummaries: s?.precomputeSummaries || false,
+                        precomputeAutoRun: s?.precomputeAutoRun || false,
+                        precomputeUseBatch: s?.precomputeUseBatch || false,
+                        precomputeUseContextCache: s?.precomputeUseContextCache || false
+                      },
+                      onSettingChange: async (key, value) => {
+                        try {
+                          await updateAppSettings({ [key]: value });
+                          // If precomputeSummaries was just enabled, automatically trigger precompute
+                          if (key === 'precomputeSummaries' && value === true) {
+                            try {
+                              showSnackbar({ message: 'Starting AI precompute…' });
+                              const precomputeModule = await import('$lib/ai/precompute');
+                              await precomputeModule.precomputeNow(25);
+                            } catch (e) {
+                              console.warn('Auto-precompute failed:', e);
+                            }
+                          }
+                        } catch (e) {
+                          console.error('Failed to update setting:', e);
+                        }
+                      }
+                    }
+                  });
                 } catch (_) {}
               } else {
                 try { showSnackbar({ message: 'Starting AI precompute…' }); } catch (_) {}
