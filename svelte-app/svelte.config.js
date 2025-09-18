@@ -14,7 +14,7 @@ const config = {
     },
     prerender: { 
       handleHttpError: "warn",
-      entries: ["/version.json"]
+      handleUnseenRoutes: 'ignore'
     },
   },
 };
