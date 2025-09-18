@@ -34,6 +34,48 @@
   import Icon from '$lib/misc/_icon.svelte';
   import iconDiagnostics from '@ktibow/iconset-material-symbols/bug-report-outline';
 
+  // Keyboard shortcut handling
+  function handleKeyboardShortcuts(event: KeyboardEvent) {
+    // Only handle shortcuts when not typing in inputs, textareas, or content-editable elements
+    const target = event.target as Element;
+    if (target.tagName === 'INPUT' || 
+        target.tagName === 'TEXTAREA' || 
+        (target as HTMLElement).isContentEditable ||
+        target.closest('[contenteditable="true"]')) {
+      return;
+    }
+
+    // Find the first visible thread that hasn't been acted upon
+    const firstAvailableThread = sortedVisibleThreads.find(thread => {
+      // Check if thread is in holds (meaning it's been acted upon)
+      const isHeld = (($trailingHolds || {})[thread.threadId] || 0) > Date.now();
+      return !isHeld;
+    });
+
+    if (!firstAvailableThread) return;
+
+    switch (event.key) {
+      case '#':
+        event.preventDefault();
+        trashThread(firstAvailableThread.threadId);
+        showSnackbar({ 
+          message: 'Deleted 1 conversation', 
+          actions: { Undo: () => undoLast(1) }, 
+          timeout: 5000 
+        });
+        break;
+      case 'e':
+        event.preventDefault();
+        archiveThread(firstAvailableThread.threadId);
+        showSnackbar({ 
+          message: 'Archived 1 conversation', 
+          actions: { Undo: () => undoLast(1) }, 
+          timeout: 5000 
+        });
+        break;
+    }
+  }
+
   type InboxSort = NonNullable<import('$lib/stores/settings').AppSettings['inboxSort']>;
   const sortOptions: { key: InboxSort; label: string }[] = [
     { key: 'date_desc', label: 'Date (newest first)' },
@@ -75,6 +117,12 @@
     };
     window.addEventListener('jmail:listLock', handler as EventListener);
     return () => window.removeEventListener('jmail:listLock', handler as EventListener);
+  });
+
+  // Keyboard shortcuts
+  onMount(() => {
+    window.addEventListener('keydown', handleKeyboardShortcuts);
+    return () => window.removeEventListener('keydown', handleKeyboardShortcuts);
   });
   // Lightweight remote change detection state
   let lastRemoteCheckAtMs: number | null = $state(null);
