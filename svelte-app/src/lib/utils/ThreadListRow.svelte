@@ -810,6 +810,17 @@
         }
       } catch {}
     }
+    function handleKeyboardSnooze(ev: Event) {
+      try {
+        const e = ev as CustomEvent<{ threadId: string; ruleKey: string }>;
+        const targetThreadId = e.detail?.threadId;
+        const ruleKey = e.detail?.ruleKey;
+        if (!targetThreadId || targetThreadId !== thread.threadId || !ruleKey) return;
+        if (committed) return;
+        // Perform snooze action with slide animation
+        void animateAndSnooze(ruleKey);
+      } catch {}
+    }
     function handleOpenSnoozeMenu(ev: Event) {
       try {
         const e = ev as CustomEvent<{ threadId: string }>;
@@ -827,11 +838,13 @@
     }
     window.addEventListener('jmail:groupSlide', handleGroupSlide as EventListener);
     window.addEventListener('jmail:keyboardAction', handleKeyboardAction as EventListener);
+    window.addEventListener('jmail:keyboardSnooze', handleKeyboardSnooze as EventListener);
     window.addEventListener('jmail:openSnoozeMenu', handleOpenSnoozeMenu as EventListener);
     window.addEventListener('jmail:disappearNow', handleDisappear);
     return () => { 
       window.removeEventListener('jmail:groupSlide', handleGroupSlide as EventListener); 
       window.removeEventListener('jmail:keyboardAction', handleKeyboardAction as EventListener);
+      window.removeEventListener('jmail:keyboardSnooze', handleKeyboardSnooze as EventListener);
       window.removeEventListener('jmail:openSnoozeMenu', handleOpenSnoozeMenu as EventListener);
       window.removeEventListener('jmail:disappearNow', handleDisappear); 
     };
