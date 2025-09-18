@@ -3,6 +3,14 @@ import { settings } from '$lib/stores/settings';
 import { redactPII, htmlToText } from './redact';
 import type { GmailAttachment } from '$lib/types';
 import { getDB } from '$lib/db';
+import {
+  getEmailSummaryPrompt,
+  getSubjectImprovementWithSummaryPrompt,
+  getSubjectImprovementWithContentPrompt,
+  getReplyDraftPrompt,
+  getAttachmentSummaryPrompt,
+  getUnsubscribeExtractionPrompt
+} from './prompts';
 
 export type AIResult = { text: string };
 
@@ -298,7 +306,7 @@ export async function aiSummarizeEmail(subject: string, bodyText?: string, bodyH
   }
   const redacted = redactPII(text ? `${subject}\n\n${text}` : `${subject}`);
   const attBlock = attLines.length ? `\n\nAttachments (summarize each):\n${attLines.join('\n\n')}` : '';
-  const prompt = `Summarize the email as plain-text '-' bullets, most important first. For attachments, add one bullet each. For app post notifications, include bullets for: App name, Poster's name, Message summary. Use only info explicitly in the email—no inference or added detail. If unclear/missing, omit. Output only the bullet list, no intro, closing, commentary, or code blocks.`;
+  const prompt = getEmailSummaryPrompt();
   const provider = s.aiProvider || 'gemini';
   // Prefer a multimodal Gemini for attachments; otherwise fallback
   const defaultGemini = attInline.length ? 'gemini-1.5-flash' : 'gemini-2.5-flash-lite';
@@ -364,8 +372,8 @@ export async function aiSummarizeSubject(subject: string, bodyText?: string, bod
     : (text ? `Subject: ${subject}\n\nEmail:\n${text}` : `Subject: ${subject}`);
   const redacted = redactPII(base);
   const prompt = hasSummary
-    ? `You improve email subjects using an AI message summary of the content below. Write a single-line subject that better summarizes the most important point(s). Use 15 words or fewer. Avoid prefixes like "Re:" or "Fwd:", avoid quotes, emojis, sender names, or dates. CRITICAL: Only use information that is explicitly stated in the provided content. Do not infer, assume, or add any details not directly written in the text. Return ONLY the subject text as plain text on one line.\n\n${redacted}`
-    : `You improve email subjects using the actual email content. Write a single-line subject that better summarizes the most important point(s). Use 15 words or fewer. Avoid prefixes like "Re:" or "Fwd:", avoid quotes, emojis, sender names, or dates. CRITICAL: Only use information that is explicitly stated in the email content provided. Do not infer, assume, or add any details not directly written in the text. Return ONLY the subject text as plain text on one line.\n\n${redacted}`;
+    ? `${getSubjectImprovementWithSummaryPrompt()}\n\n${redacted}`
+    : `${getSubjectImprovementWithContentPrompt()}\n\n${redacted}`;
   const provider = s.aiProvider || 'gemini';
   const model = s.aiSummaryModel || s.aiModel || (provider === 'gemini' ? 'gemini-2.5-flash-lite' : provider === 'anthropic' ? 'claude-3-haiku-20240307' : 'gpt-4o-mini');
   const out = provider === 'anthropic' ? await callAnthropic(prompt, model) : provider === 'gemini' ? await callGemini(prompt, model) : await callOpenAI(prompt, model);
@@ -381,7 +389,7 @@ export async function aiDraftReply(subject: string, bodyText?: string, bodyHtml?
   const s = get(settings);
   const text = bodyText || htmlToText(bodyHtml) || '';
   const redacted = redactPII(`${subject}\n\n${text}`);
-  const prompt = `Write a brief, polite email reply in plain text. Include a short greeting and a concise closing. Keep it under 120 words. Do not include the original message, disclaimers, markdown, or code blocks. Return ONLY the reply body.\nSubject: ${subject}\nEmail:\n${redacted}`;
+  const prompt = `${getReplyDraftPrompt()}\nSubject: ${subject}\nEmail:\n${redacted}`;
   const provider = s.aiProvider || 'gemini';
   const model = s.aiDraftModel || s.aiModel || (provider === 'gemini' ? 'gemini-2.5-pro' : provider === 'anthropic' ? 'claude-3-haiku-20240307' : 'gpt-4o-mini');
   const out = provider === 'anthropic' ? await callAnthropic(prompt, model) : provider === 'gemini' ? await callGemini(prompt, model) : await callOpenAI(prompt, model);
@@ -400,7 +408,7 @@ export async function aiSummarizeAttachment(subject: string | undefined, attachm
 
   const name = (attachment.filename || attachment.mimeType || 'attachment').slice(0, 200);
   const preface = name ? `Attachment: ${name}` : 'Attachment';
-  const prompt = `You are a concise assistant. Summarize this attachment with 3-6 short bullets (most important first). If the file content is not provided, summarize based on filename/type without inventing specifics. CRITICAL: Only include information that is explicitly present in the attachment content or filename. Do not infer, assume, or add any details that are not directly visible in the provided data. If information is unclear or missing, do not guess or fill in gaps. Return ONLY '-' bullets, no preamble, no code blocks.`;
+  const prompt = getAttachmentSummaryPrompt();
 
   // Gemini multimodal path when we have bytes
   if (provider === 'gemini' && attachment.dataBase64 && attachment.mimeType) {
@@ -450,7 +458,7 @@ export async function aiExtractUnsubscribeUrl(subject: string, bodyText?: string
   const s = get(settings);
   const text = bodyText || htmlToText(bodyHtml) || '';
   const redacted = redactPII(`${subject}\n\n${text}`);
-  const prompt = `From the following email content, extract a single unsubscribe URL or mailto link if present. Respond with ONLY the URL, nothing else. If none is present, respond with "NONE".\n\n${redacted}`;
+  const prompt = `${getUnsubscribeExtractionPrompt()}\n\n${redacted}`;
   const provider = s.aiProvider || 'gemini';
   const out = provider === 'anthropic' ? await callAnthropic(prompt) : provider === 'gemini' ? await callGemini(prompt) : await callOpenAI(prompt);
   const line = (out.text || '').trim();

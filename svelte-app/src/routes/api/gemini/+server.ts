@@ -2,6 +2,12 @@ export const prerender = false;
 
 import type { RequestHandler } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
+import {
+  getEmailSummaryBatchPrompt,
+  getSubjectImprovementBatchPrompt,
+  getEmailSummaryCombinedPrompt,
+  getSubjectImprovementCombinedPrompt
+} from '$lib/ai/prompts';
 
 type BatchItem = { id: string; text: string };
 
@@ -50,8 +56,8 @@ function hash(input: string): string {
 async function callGeminiGenerate(text: string, apiKey: string, model: string, useCache: boolean, mode: 'summary' | 'subject' = 'summary'): Promise<string> {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
   const style = mode === 'summary'
-    ? `You are a concise assistant. Provide a short bullet list of the most important points in this email, most important first. If attachments are included in the text, include 1-2 bullets for each attachment summarizing its key content. If an attachment's content is not provided, mention the attachment name/type without inventing details. Keep it under 8 bullets total. CRITICAL: Only include information that is explicitly stated in the email content provided. Do not infer, assume, or add any details that are not directly written in the text. If information is unclear or missing, do not guess or fill in gaps. Return ONLY the list as plain text with '-' bullets, no preamble or closing sentences, no code blocks, and no additional commentary.`
-    : `You improve email subjects using the actual email content. Write a single-line subject that better summarizes the most important point(s). Use 15 words or fewer. Avoid prefixes like "Re:" or "Fwd:", avoid quotes, emojis, sender names, or dates. CRITICAL: Only use information that is explicitly stated in the email content provided. Do not infer, assume, or add any details not directly written in the text. Return ONLY the subject text as plain text on one line.`;
+    ? getEmailSummaryBatchPrompt()
+    : getSubjectImprovementBatchPrompt();
   const cacheKey = mode === 'summary' ? 'jmail:summary-style' : 'jmail:subject-style';
   const cachedName = useCache ? await ensureCachedContent(cacheKey, style, apiKey, model, 14 * 24 * 60 * 60) : null;
   const parts: any[] = [];
@@ -122,8 +128,8 @@ export const POST: RequestHandler = async ({ request }) => {
       // Build an instruction that asks Gemini to return JSON: [{id: "...", text: "..."}, ...]
       const combinedPromptParts: string[] = [];
       combinedPromptParts.push(mode === 'summary'
-        ? `You are a concise assistant. For each entry in the input array, produce a short bullet-list summary (max 8 bullets) of the provided email content. Return a JSON array of objects with properties {"id":"<id>","text":"<summary>"}. Ensure JSON is the only output.`
-        : `You improve email subjects. For each entry in the input array, produce a single-line subject (<=15 words). Return a JSON array of objects with properties {"id":"<id>","text":"<subject>"}. Ensure JSON is the only output.`);
+        ? getEmailSummaryCombinedPrompt()
+        : getSubjectImprovementCombinedPrompt());
 
       // Append the items payload as a JSON string in the prompt so Gemini has context
       try {
