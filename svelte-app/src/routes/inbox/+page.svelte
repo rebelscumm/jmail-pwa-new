@@ -31,6 +31,8 @@
   import FilterBar from '$lib/utils/FilterBar.svelte';
   import { filters as filtersStore, applyFilterToThreads, loadFilters } from '$lib/stores/filters';
   import { aiSummarizeSubject, aiSummarizeEmail } from '$lib/ai/providers';
+  import Icon from '$lib/misc/_icon.svelte';
+  import iconDiagnostics from '@ktibow/iconset-material-symbols/bug-report-outline';
 
   type InboxSort = NonNullable<import('$lib/stores/settings').AppSettings['inboxSort']>;
   const sortOptions: { key: InboxSort; label: string }[] = [
@@ -1899,6 +1901,201 @@
     (window as any).__copyPageDiagnostics = async () => { await copyDiagnostics(); };
   }
 
+  async function copyInboxSyncDiagnostics(): Promise<boolean> {
+    try {
+      console.log('[Inbox] Collecting comprehensive sync diagnostics...');
+      
+      // Get local data from IndexedDB
+      const db = await getDB();
+      const localThreads = await db.getAll('threads');
+      const localMessages = await db.getAll('messages');
+      const localInboxThreads = localThreads.filter((t: any) => 
+        Array.isArray(t.labelIds) && t.labelIds.includes('INBOX')
+      );
+      
+      // Get Gmail data
+      let gmailInboxLabel: any = null;
+      let gmailMessageIds: string[] = [];
+      let gmailError: string | null = null;
+      
+      try {
+        gmailInboxLabel = await getLabel('INBOX');
+        const page = await listInboxMessageIds(50); // Sample first page
+        gmailMessageIds = page.ids || [];
+      } catch (e) {
+        gmailError = String(e);
+        console.error('[Inbox] Failed to fetch Gmail data for diagnostics:', e);
+      }
+      
+      // Get queue and journal data
+      let queueData: any = null;
+      try {
+        const ops = await db.getAll('ops');
+        const journal = await db.getAll('journal');
+        
+        const now = Date.now();
+        const pending = ops.filter(o => o.nextAttemptAt <= now);
+        const failed = ops.filter(o => o.attempts > 3);
+        
+        queueData = {
+          totalOps: ops.length,
+          pendingOps: pending.length,
+          failedOps: failed.length,
+          recentJournal: journal.slice(-10).map(entry => ({
+            id: entry.id,
+            type: entry.intent?.type,
+            threadId: entry.threadId,
+            createdAt: new Date(entry.createdAt).toISOString(),
+            ruleKey: entry.intent?.ruleKey
+          }))
+        };
+      } catch (e) {
+        queueData = { error: String(e) };
+      }
+      
+      // Get trailing holds
+      let holdData: any = null;
+      try {
+        const { trailingHolds } = await import('$lib/stores/holds');
+        let currentHolds: Record<string, number> = {};
+        trailingHolds.subscribe(holds => { currentHolds = holds; })();
+        
+        const now = Date.now();
+        const activeHolds = Object.entries(currentHolds).filter(([, timestamp]) => timestamp > now);
+        
+        holdData = {
+          totalHolds: Object.keys(currentHolds).length,
+          activeHolds: activeHolds.length,
+          activeThreadIds: activeHolds.map(([threadId]) => threadId)
+        };
+      } catch (e) {
+        holdData = { error: String(e) };
+      }
+      
+      // Get auth diagnostics
+      const authDiag = getAuthDiagnostics();
+      
+      // Get session status
+      let sessionStatus: any = null;
+      try {
+        sessionStatus = await sessionManager.checkSessionStatus();
+      } catch (e) {
+        sessionStatus = { error: String(e) };
+      }
+      
+      // Get app settings related to sync
+      const currentSettings = get(settings);
+      
+      // Compile comprehensive diagnostics
+      const diagnostics = {
+        timestamp: new Date().toISOString(),
+        issue: "Inbox sync problem - 75 emails on server but not loading in inbox",
+        
+        // Gmail server data
+        gmail: {
+          error: gmailError,
+          inboxLabel: gmailInboxLabel ? {
+            threadsTotal: gmailInboxLabel.threadsTotal,
+            threadsUnread: gmailInboxLabel.threadsUnread,
+            messagesTotal: gmailInboxLabel.messagesTotal,
+            messagesUnread: gmailInboxLabel.messagesUnread
+          } : null,
+          firstPageMessageIds: gmailMessageIds.length,
+          sampleMessageIds: gmailMessageIds.slice(0, 10)
+        },
+        
+        // Local database data
+        local: {
+          totalThreads: localThreads.length,
+          totalMessages: localMessages.length,
+          inboxThreads: localInboxThreads.length,
+          sampleInboxThreadIds: localInboxThreads.map((t: any) => t.threadId).slice(0, 10),
+          lastHistoryId: null as string | null // Will try to get this
+        },
+        
+        // Sync state
+        syncStatus: {
+          discrepancy: (gmailInboxLabel?.threadsTotal || 0) - localInboxThreads.length,
+          backgroundSyncing,
+          syncing,
+          ready,
+          loading,
+          nextPageToken: nextPageToken !== undefined,
+          authoritativeSync: {
+            running: authoritativeSyncProgress.running,
+            pagesCompleted: authoritativeSyncProgress.pagesCompleted,
+            totalPages: authoritativeSyncProgress.pagesTotal
+          }
+        },
+        
+        // Queue and operations
+        actionQueue: queueData,
+        
+        // Trailing holds (could prevent sync)
+        trailingHolds: holdData,
+        
+        // Authentication
+        auth: {
+          diagnostics: authDiag,
+          sessionStatus: sessionStatus
+        },
+        
+        // App settings that might affect sync
+        settings: {
+          inboxSort: currentSettings.inboxSort,
+          maxInboxThreads: (currentSettings as any).maxInboxThreads,
+          backgroundSyncEnabled: (currentSettings as any).backgroundSyncEnabled,
+          precomputeEnabled: (currentSettings as any).precomputeEnabled
+        },
+        
+        // Error states
+        errors: {
+          apiError: apiErrorMessage,
+          apiErrorStatus: apiErrorStatus,
+          apiErrorStack: apiErrorStack
+        },
+        
+        // Browser and environment
+        environment: {
+          userAgent: navigator.userAgent,
+          url: window.location.href,
+          isDev: import.meta.env.DEV,
+          timestamp: Date.now()
+        }
+      };
+      
+      // Try to get lastHistoryId from settings store
+      try {
+        const meta = (await db.get('settings', 'lastHistoryId')) as any || {};
+        diagnostics.local.lastHistoryId = meta?.value || null;
+      } catch (e) {
+        diagnostics.local.lastHistoryId = `Error: ${String(e)}`;
+      }
+      
+      // Copy to clipboard
+      const diagnosticsText = JSON.stringify(diagnostics, null, 2);
+      await navigator.clipboard.writeText(diagnosticsText);
+      
+      console.log('[Inbox] Inbox sync diagnostics copied to clipboard', diagnostics);
+      
+      showSnackbar({ 
+        message: 'Inbox sync diagnostics copied to clipboard! Paste in support chat or diagnostic tool.', 
+        timeout: 5000,
+        closable: true 
+      });
+      
+      return true;
+    } catch (e) {
+      console.error('[Inbox] Failed to copy sync diagnostics:', e);
+      showSnackbar({ 
+        message: `Failed to copy sync diagnostics: ${String(e)}`, 
+        timeout: 5000,
+        closable: true 
+      });
+      return false;
+    }
+  }
+
   async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
     const results: R[] = new Array(items.length);
     let idx = 0;
@@ -2158,6 +2355,15 @@
         </Button>
       {/if}
       <SessionRefreshButton variant="outlined" compact />
+      <Button 
+        variant="outlined" 
+        iconType="left" 
+        onclick={copyInboxSyncDiagnostics}
+        title="Copy inbox sync diagnostics to clipboard for troubleshooting"
+      >
+        <Icon icon={iconDiagnostics} />
+        Diagnostics
+      </Button>
       {#if import.meta.env.DEV}
         <Button variant="outlined" onclick={compareLocalToGmail}>Compare DB ↔ Gmail</Button>
       {/if}
