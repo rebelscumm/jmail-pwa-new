@@ -795,6 +795,30 @@
         void commitAction(action, { perform: false, suppressSnackbar: true, suppressReload: true, forceDirection: dir, ruleKey: e.detail?.ruleKey });
       } catch {}
     }
+    function handleKeyboardAction(ev: Event) {
+      try {
+        const e = ev as CustomEvent<{ action: 'archive' | 'delete'; threadId: string }>;
+        const targetThreadId = e.detail?.threadId;
+        const action = e.detail?.action;
+        if (!targetThreadId || targetThreadId !== thread.threadId || !action) return;
+        if (committed) return;
+        // Perform the full action with slide animation
+        if (action === 'archive') {
+          void animateAndArchive();
+        } else if (action === 'delete') {
+          void animateAndDelete();
+        }
+      } catch {}
+    }
+    function handleOpenSnoozeMenu(ev: Event) {
+      try {
+        const e = ev as CustomEvent<{ threadId: string }>;
+        const targetThreadId = e.detail?.threadId;
+        if (!targetThreadId || targetThreadId !== thread.threadId) return;
+        // Open the snooze menu for this thread
+        openSnoozeMenuAndShowPicker();
+      } catch {}
+    }
     function handleDisappear() {
       if (!committed || collapsing) return;
       animating = true;
@@ -802,8 +826,15 @@
       setTimeout(() => { animating = false; }, 160);
     }
     window.addEventListener('jmail:groupSlide', handleGroupSlide as EventListener);
+    window.addEventListener('jmail:keyboardAction', handleKeyboardAction as EventListener);
+    window.addEventListener('jmail:openSnoozeMenu', handleOpenSnoozeMenu as EventListener);
     window.addEventListener('jmail:disappearNow', handleDisappear);
-    return () => { window.removeEventListener('jmail:groupSlide', handleGroupSlide as EventListener); window.removeEventListener('jmail:disappearNow', handleDisappear); };
+    return () => { 
+      window.removeEventListener('jmail:groupSlide', handleGroupSlide as EventListener); 
+      window.removeEventListener('jmail:keyboardAction', handleKeyboardAction as EventListener);
+      window.removeEventListener('jmail:openSnoozeMenu', handleOpenSnoozeMenu as EventListener);
+      window.removeEventListener('jmail:disappearNow', handleDisappear); 
+    };
   });
 </script>
 

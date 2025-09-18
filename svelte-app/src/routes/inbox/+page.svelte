@@ -57,21 +57,24 @@
     switch (event.key) {
       case '#':
         event.preventDefault();
-        trashThread(firstAvailableThread.threadId);
-        showSnackbar({ 
-          message: 'Deleted 1 conversation', 
-          actions: { Undo: () => undoLast(1) }, 
-          timeout: 5000 
-        });
+        // Trigger slide animation with full action performance
+        window.dispatchEvent(new CustomEvent('jmail:keyboardAction', {
+          detail: { action: 'delete', threadId: firstAvailableThread.threadId }
+        }));
         break;
       case 'e':
         event.preventDefault();
-        archiveThread(firstAvailableThread.threadId);
-        showSnackbar({ 
-          message: 'Archived 1 conversation', 
-          actions: { Undo: () => undoLast(1) }, 
-          timeout: 5000 
-        });
+        // Trigger slide animation with full action performance
+        window.dispatchEvent(new CustomEvent('jmail:keyboardAction', {
+          detail: { action: 'archive', threadId: firstAvailableThread.threadId }
+        }));
+        break;
+      case 'b':
+        event.preventDefault();
+        // Trigger snooze menu for the first available thread
+        window.dispatchEvent(new CustomEvent('jmail:openSnoozeMenu', {
+          detail: { threadId: firstAvailableThread.threadId }
+        }));
         break;
     }
   }
