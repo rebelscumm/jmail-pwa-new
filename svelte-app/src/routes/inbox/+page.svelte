@@ -2359,7 +2359,7 @@
         variant="outlined" 
         iconType="left" 
         onclick={copyInboxSyncDiagnostics}
-        title="Copy inbox sync diagnostics to clipboard for troubleshooting"
+        aria-label="Copy inbox sync diagnostics to clipboard for troubleshooting"
       >
         <Icon icon={iconDiagnostics} />
         Diagnostics
