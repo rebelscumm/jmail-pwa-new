@@ -1952,196 +1952,226 @@
     (window as any).__copyPageDiagnostics = async () => { await copyDiagnostics(); };
   }
 
-  async function copyInboxSyncDiagnostics(): Promise<boolean> {
+  async function runInboxSyncDiagnostics(): Promise<boolean> {
     try {
-      console.log('[Inbox] Collecting comprehensive sync diagnostics...');
+      console.log('[Inbox] Starting comprehensive sync diagnostics and repair...');
       
-      // Get local data from IndexedDB
       const db = await getDB();
-      const localThreads = await db.getAll('threads');
-      const localMessages = await db.getAll('messages');
-      const localInboxThreads = localThreads.filter((t: any) => 
+      
+      // Step 1: Quick diagnosis
+      const currentThreads = get(threadsStore);
+      const inboxThreads = currentThreads.filter((t) => (t.labelIds || []).includes('INBOX'));
+      
+      // Get database state
+      const allLocalThreads = await db.getAll('threads');
+      const localInboxThreads = allLocalThreads.filter((t: any) => 
         Array.isArray(t.labelIds) && t.labelIds.includes('INBOX')
       );
       
-      // Get Gmail data
-      let gmailInboxLabel: any = null;
-      let gmailMessageIds: string[] = [];
-      let gmailError: string | null = null;
+      // Get Gmail state
+      const inboxLabel = await getLabel('INBOX');
+      const gmailThreadCount = inboxLabel.threadsTotal || 0;
       
-      try {
-        gmailInboxLabel = await getLabel('INBOX');
-        const page = await listInboxMessageIds(50); // Sample first page
-        gmailMessageIds = page.ids || [];
-      } catch (e) {
-        gmailError = String(e);
-        console.error('[Inbox] Failed to fetch Gmail data for diagnostics:', e);
-      }
+      const syncDiscrepancy = gmailThreadCount - localInboxThreads.length;
       
-      // Get queue and journal data
-      let queueData: any = null;
-      try {
-        const ops = await db.getAll('ops');
-        const journal = await db.getAll('journal');
-        
-        const now = Date.now();
-        const pending = ops.filter(o => o.nextAttemptAt <= now);
-        const failed = ops.filter(o => o.attempts > 3);
-        
-        queueData = {
-          totalOps: ops.length,
-          pendingOps: pending.length,
-          failedOps: failed.length,
-          recentJournal: journal.slice(-10).map(entry => ({
-            id: entry.id,
-            type: entry.intent?.type,
-            threadId: entry.threadId,
-            createdAt: new Date(entry.createdAt).toISOString(),
-            ruleKey: entry.intent?.ruleKey
-          }))
-        };
-      } catch (e) {
-        queueData = { error: String(e) };
-      }
+      console.log(`[Inbox] Sync Analysis: Gmail=${gmailThreadCount}, Local=${localInboxThreads.length}, Discrepancy=${syncDiscrepancy}`);
       
-      // Get trailing holds
-      let holdData: any = null;
-      try {
-        const { trailingHolds } = await import('$lib/stores/holds');
-        let currentHolds: Record<string, number> = {};
-        trailingHolds.subscribe(holds => { currentHolds = holds; })();
+      // If there's a major sync issue (0 local threads with Gmail having threads), run diagnostics + fix
+      if (localInboxThreads.length === 0 && gmailThreadCount > 0) {
+        console.log('[Inbox] CRITICAL: Zero local inbox threads detected - running comprehensive fix...');
         
-        const now = Date.now();
-        const activeHolds = Object.entries(currentHolds).filter(([, timestamp]) => timestamp > now);
+        showSnackbar({
+          message: `🔍 Critical sync issue: 0 local vs ${gmailThreadCount} Gmail threads. Running fix...`,
+          timeout: 10000,
+          closable: true
+        });
         
-        holdData = {
-          totalHolds: Object.keys(currentHolds).length,
-          activeHolds: activeHolds.length,
-          activeThreadIds: activeHolds.map(([threadId]) => threadId)
-        };
-      } catch (e) {
-        holdData = { error: String(e) };
-      }
-      
-      // Get auth diagnostics
-      const authDiag = getAuthDiagnostics();
-      
-      // Get session status
-      let sessionStatus: any = null;
-      try {
-        sessionStatus = await sessionManager.checkSessionStatus();
-      } catch (e) {
-        sessionStatus = { error: String(e) };
-      }
-      
-      // Get app settings related to sync
-      const currentSettings = get(settings);
-      
-      // Compile comprehensive diagnostics
-      const diagnostics = {
-        timestamp: new Date().toISOString(),
-        issue: "Inbox sync problem - 75 emails on server but not loading in inbox",
+        // Step 2: Test Gmail API access
+        console.log('[Inbox] Testing Gmail API access...');
+        const firstPage = await listThreadIdsByLabelId('INBOX', 20, undefined);
+        const firstPageThreadIds = firstPage.ids || [];
         
-        // Gmail server data
-        gmail: {
-          error: gmailError,
-          inboxLabel: gmailInboxLabel ? {
-            threadsTotal: gmailInboxLabel.threadsTotal,
-            threadsUnread: gmailInboxLabel.threadsUnread,
-            messagesTotal: gmailInboxLabel.messagesTotal,
-            messagesUnread: gmailInboxLabel.messagesUnread
-          } : null,
-          firstPageMessageIds: gmailMessageIds.length,
-          sampleMessageIds: gmailMessageIds.slice(0, 10)
-        },
-        
-        // Local database data
-        local: {
-          totalThreads: localThreads.length,
-          totalMessages: localMessages.length,
-          inboxThreads: localInboxThreads.length,
-          sampleInboxThreadIds: localInboxThreads.map((t: any) => t.threadId).slice(0, 10),
-          lastHistoryId: null as string | null // Will try to get this
-        },
-        
-        // Sync state
-        syncStatus: {
-          discrepancy: (gmailInboxLabel?.threadsTotal || 0) - localInboxThreads.length,
-          backgroundSyncing,
-          syncing,
-          ready,
-          loading,
-          nextPageToken: nextPageToken !== undefined,
-          authoritativeSync: {
-            running: authoritativeSyncProgress.running,
-            pagesCompleted: authoritativeSyncProgress.pagesCompleted,
-            totalPages: authoritativeSyncProgress.pagesTotal
-          }
-        },
-        
-        // Queue and operations
-        actionQueue: queueData,
-        
-        // Trailing holds (could prevent sync)
-        trailingHolds: holdData,
-        
-        // Authentication
-        auth: {
-          diagnostics: authDiag,
-          sessionStatus: sessionStatus
-        },
-        
-        // App settings that might affect sync
-        settings: {
-          inboxSort: currentSettings.inboxSort,
-          maxInboxThreads: (currentSettings as any).maxInboxThreads,
-          backgroundSyncEnabled: (currentSettings as any).backgroundSyncEnabled,
-          precomputeEnabled: (currentSettings as any).precomputeEnabled
-        },
-        
-        // Error states
-        errors: {
-          apiError: apiErrorMessage,
-          apiErrorStatus: apiErrorStatus,
-          apiErrorStack: apiErrorStack
-        },
-        
-        // Browser and environment
-        environment: {
-          userAgent: navigator.userAgent,
-          url: window.location.href,
-          isDev: import.meta.env.DEV,
-          timestamp: Date.now()
+        if (firstPageThreadIds.length === 0) {
+          throw new Error('Gmail API returned no thread IDs despite label showing threads');
         }
-      };
-      
-      // Try to get lastHistoryId from settings store
-      try {
-        const meta = (await db.get('settings', 'lastHistoryId')) as any || {};
-        diagnostics.local.lastHistoryId = meta?.value || null;
-      } catch (e) {
-        diagnostics.local.lastHistoryId = `Error: ${String(e)}`;
+        
+        console.log(`[Inbox] Gmail API test successful: ${firstPageThreadIds.length} thread IDs fetched`);
+        
+        // Step 3: Test thread fetching
+        const sampleThreadId = firstPageThreadIds[0];
+        console.log(`[Inbox] Testing thread fetch for ${sampleThreadId}...`);
+        const threadSummary = await getThreadSummary(sampleThreadId);
+        
+        console.log(`[Inbox] Thread fetch successful: ${threadSummary.thread.labelIds.join(', ')} labels, ${threadSummary.messages.length} messages`);
+        
+        // Step 4: Run forced resync
+        console.log('[Inbox] Starting forced inbox resync...');
+        showSnackbar({
+          message: '🔄 Starting forced resync of missing emails...',
+          timeout: 5000,
+          closable: true
+        });
+        
+        // Get all Gmail thread IDs
+        const gmailThreadIds = new Set<string>();
+        let pageToken: string | undefined = undefined;
+        let pageCount = 0;
+        const maxPages = 50;
+        
+        while (pageCount < maxPages) {
+          const page = await listThreadIdsByLabelId('INBOX', 100, pageToken);
+          pageCount++;
+          
+          if (!page.ids?.length) {
+            if (!page.nextPageToken) break;
+            pageToken = page.nextPageToken;
+            continue;
+          }
+          
+          page.ids.forEach(tid => gmailThreadIds.add(tid));
+          console.log(`[Inbox] Resync page ${pageCount}: Found ${page.ids.length} threads, total so far: ${gmailThreadIds.size}`);
+          
+          if (!page.nextPageToken) break;
+          pageToken = page.nextPageToken;
+        }
+        
+        console.log(`[Inbox] Total Gmail threads to sync: ${gmailThreadIds.size}`);
+        
+        // Find missing threads
+        const localThreadIds = new Set(localInboxThreads.map((t: any) => t.threadId));
+        const missingThreadIds = Array.from(gmailThreadIds).filter(tid => !localThreadIds.has(tid));
+        
+        console.log(`[Inbox] Missing threads to fetch: ${missingThreadIds.length}`);
+        
+        if (missingThreadIds.length === 0) {
+          showSnackbar({
+            message: '✅ No missing threads found. Running authoritative sync to fix labels...',
+            timeout: 5000
+          });
+          await performAuthoritativeInboxSync();
+        } else {
+          // Batch fetch missing threads
+          const batchSize = 5;
+          let fetchedCount = 0;
+          let errorCount = 0;
+          
+          showSnackbar({
+            message: `📥 Fetching ${missingThreadIds.length} missing threads...`,
+            timeout: 3000
+          });
+          
+          for (let i = 0; i < missingThreadIds.length; i += batchSize) {
+            const batch = missingThreadIds.slice(i, i + batchSize);
+            
+            try {
+              const fetchedThreads = await Promise.all(
+                batch.map(async (tid) => {
+                  try {
+                    return await getThreadSummary(tid);
+                  } catch (e) {
+                    console.error(`[Inbox] Failed to fetch thread ${tid}:`, e);
+                    errorCount++;
+                    return null;
+                  }
+                })
+              );
+              
+              // Store fetched threads
+              for (const fetched of fetchedThreads) {
+                if (!fetched) continue;
+                
+                try {
+                  // Store messages
+                  for (const msg of fetched.messages) {
+                    await db.put('messages', msg);
+                  }
+                  
+                  // Store thread
+                  await db.put('threads', fetched.thread);
+                  fetchedCount++;
+                } catch (e) {
+                  console.error(`[Inbox] Failed to store thread:`, e);
+                  errorCount++;
+                }
+              }
+              
+              if ((i + batchSize) % 20 === 0) {
+                showSnackbar({
+                  message: `📥 Progress: ${Math.min(i + batchSize, missingThreadIds.length)}/${missingThreadIds.length} threads processed`,
+                  timeout: 2000
+                });
+              }
+              
+            } catch (e) {
+              console.error(`[Inbox] Batch fetch error:`, e);
+              errorCount += batch.length;
+            }
+          }
+          
+          console.log(`[Inbox] Resync complete: ${fetchedCount} fetched, ${errorCount} errors`);
+          
+          showSnackbar({
+            message: `✅ Resync complete: ${fetchedCount} threads synced, ${errorCount} errors. Refreshing inbox...`,
+            timeout: 5000,
+            closable: true
+          });
+        }
+        
+        // Step 5: Refresh the inbox to show new threads
+        window.dispatchEvent(new CustomEvent('jmail:refresh'));
+        
+      } else if (Math.abs(syncDiscrepancy) > 2) {
+        // Minor sync discrepancy - run quick authoritative sync
+        console.log('[Inbox] Minor sync discrepancy detected - running authoritative sync...');
+        
+        showSnackbar({
+          message: `🔄 Sync discrepancy detected (${syncDiscrepancy}). Running quick sync...`,
+          timeout: 5000
+        });
+        
+        await performAuthoritativeInboxSync({ perPageTimeoutMs: 10000, maxRetries: 1 });
+        
+        showSnackbar({
+          message: '✅ Quick sync completed',
+          timeout: 3000
+        });
+      } else {
+        // No major issues - just copy diagnostics
+        console.log('[Inbox] No major sync issues detected - copying diagnostics...');
+        
+        const diagnostics = {
+          timestamp: new Date().toISOString(),
+          issue: "Inbox sync diagnostic run - no major issues detected",
+          gmail: { threadsTotal: gmailThreadCount },
+          local: { inboxThreads: localInboxThreads.length },
+          syncStatus: { discrepancy: syncDiscrepancy, backgroundSyncing, syncing }
+        };
+        
+        const diagnosticsText = JSON.stringify(diagnostics, null, 2);
+        await navigator.clipboard.writeText(diagnosticsText);
+        
+        showSnackbar({
+          message: `✅ No major sync issues found (discrepancy: ${syncDiscrepancy}). Diagnostics copied to clipboard.`,
+          timeout: 5000,
+          closable: true
+        });
       }
-      
-      // Copy to clipboard
-      const diagnosticsText = JSON.stringify(diagnostics, null, 2);
-      await navigator.clipboard.writeText(diagnosticsText);
-      
-      console.log('[Inbox] Inbox sync diagnostics copied to clipboard', diagnostics);
-      
-      showSnackbar({ 
-        message: 'Inbox sync diagnostics copied to clipboard! Paste in support chat or diagnostic tool.', 
-        timeout: 5000,
-        closable: true 
-      });
       
       return true;
     } catch (e) {
-      console.error('[Inbox] Failed to copy sync diagnostics:', e);
-      showSnackbar({ 
-        message: `Failed to copy sync diagnostics: ${String(e)}`, 
-        timeout: 5000,
-        closable: true 
+      console.error('[Inbox] Sync diagnostics failed:', e);
+      showSnackbar({
+        message: `❌ Sync diagnostics failed: ${e instanceof Error ? e.message : String(e)}`,
+        timeout: 8000,
+        closable: true,
+        actions: {
+          'Copy Error': async () => {
+            try {
+              await navigator.clipboard.writeText(String(e));
+              showSnackbar({ message: 'Error copied to clipboard', timeout: 3000 });
+            } catch {}
+          }
+        }
       });
       return false;
     }
@@ -2408,12 +2438,12 @@
       <SessionRefreshButton variant="outlined" compact />
       <Button 
         variant="outlined" 
-        iconType="left" 
-        onclick={copyInboxSyncDiagnostics}
-        aria-label="Copy inbox sync diagnostics to clipboard for troubleshooting"
+        iconType="full"
+        onclick={runInboxSyncDiagnostics}
+        aria-label="Run comprehensive inbox sync diagnostics and auto-repair"
+        title="Run sync diagnostics & auto-repair"
       >
         <Icon icon={iconDiagnostics} />
-        Diagnostics
       </Button>
       {#if import.meta.env.DEV}
         <Button variant="outlined" onclick={compareLocalToGmail}>Compare DB ↔ Gmail</Button>
