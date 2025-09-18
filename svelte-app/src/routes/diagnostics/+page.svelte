@@ -1988,6 +1988,111 @@ async function testAiSummary() {
 	}
 }
 
+async function diagnoseSyncFailure() {
+	try {
+		addLog('info', ['Starting detailed sync failure analysis...']);
+		
+		const { getDB } = await import('$lib/db/indexeddb');
+		const { listThreadIdsByLabelId, getThreadSummary, getLabel } = await import('$lib/gmail/api');
+		
+		const db = await getDB();
+		
+		// Step 1: Check current local state
+		const allLocalThreads = await db.getAll('threads');
+		const localInboxThreads = allLocalThreads.filter((t: any) => 
+			Array.isArray(t.labelIds) && t.labelIds.includes('INBOX')
+		);
+		
+		addLog('info', [`Local state: ${allLocalThreads.length} total threads, ${localInboxThreads.length} inbox threads`]);
+		
+		// Step 2: Check Gmail state
+		const inboxLabel = await getLabel('INBOX');
+		const gmailThreadCount = inboxLabel.threadsTotal || 0;
+		addLog('info', [`Gmail INBOX label shows ${gmailThreadCount} threads`]);
+		
+		// Step 3: Test API access - fetch first page of thread IDs
+		let firstPageThreadIds: string[] = [];
+		try {
+			const firstPage = await listThreadIdsByLabelId('INBOX', 20, undefined);
+			firstPageThreadIds = firstPage.ids || [];
+			addLog('info', [`Successfully fetched first page: ${firstPageThreadIds.length} thread IDs`]);
+			if (firstPageThreadIds.length > 0) {
+				addLog('info', [`Sample thread IDs: ${firstPageThreadIds.slice(0, 3).join(', ')}`]);
+			}
+		} catch (e) {
+			addLog('error', ['Failed to fetch thread IDs from Gmail', e]);
+			return;
+		}
+		
+		// Step 4: Test thread fetching - try to fetch one thread
+		if (firstPageThreadIds.length > 0) {
+			try {
+				const sampleThreadId = firstPageThreadIds[0];
+				addLog('info', [`Testing thread fetch for ${sampleThreadId}...`]);
+				const threadSummary = await getThreadSummary(sampleThreadId);
+				addLog('info', [`Successfully fetched thread ${sampleThreadId}:`]);
+				addLog('info', [`  - Labels: ${threadSummary.thread.labelIds.join(', ')}`]);
+				addLog('info', [`  - Messages: ${threadSummary.messages.length}`]);
+				addLog('info', [`  - Subject: ${threadSummary.messages[0]?.headers?.Subject || 'No subject'}`]);
+				
+				// Step 5: Check if this thread exists locally
+				const localThread = await db.get('threads', sampleThreadId);
+				if (localThread) {
+					addLog('info', [`Thread ${sampleThreadId} exists locally with labels: ${(localThread as any).labelIds?.join(', ') || 'none'}`]);
+				} else {
+					addLog('warn', [`Thread ${sampleThreadId} missing from local database!`]);
+				}
+			} catch (e) {
+				addLog('error', ['Failed to fetch thread summary', e]);
+			}
+		}
+		
+		// Step 6: Check pending operations
+		const allOps = await db.getAll('ops');
+		const inboxOps = allOps.filter((op: any) => 
+			op.op.type === 'batchModify' && 
+			(op.op.addLabelIds.includes('INBOX') || op.op.removeLabelIds.includes('INBOX'))
+		);
+		addLog('info', [`Pending operations: ${allOps.length} total, ${inboxOps.length} affecting INBOX`]);
+		
+		// Step 7: Diagnosis summary
+		const diagnosis = {
+			timestamp: new Date().toISOString(),
+			localInboxThreads: localInboxThreads.length,
+			gmailThreadCount,
+			discrepancy: gmailThreadCount - localInboxThreads.length,
+			apiWorking: firstPageThreadIds.length > 0,
+			pendingInboxOps: inboxOps.length,
+			sampleFetch: firstPageThreadIds.length > 0 ? 'tested' : 'skipped',
+			issue: localInboxThreads.length === 0 && gmailThreadCount > 0 ? 'zero_local_threads' : 'other'
+		};
+		
+		addLog('info', ['Sync failure diagnosis complete', diagnosis]);
+		
+		// Provide specific recommendations
+		if (diagnosis.issue === 'zero_local_threads') {
+			addLog('info', ['🎯 DIAGNOSIS: Zero local inbox threads despite Gmail having threads']);
+			addLog('info', ['RECOMMENDED ACTION: Use "Force resync missing emails" button below']);
+			showSnackbar({
+				message: `Found the issue: 0 local vs ${gmailThreadCount} Gmail threads. Use Force Resync button below.`,
+				timeout: 8000,
+				closable: true,
+				actions: {
+					'Force Resync': forcedInboxResync
+				}
+			});
+		}
+		
+	} catch (e) {
+		addLog('error', ['Sync failure diagnosis failed', e]);
+		showSnackbar({
+			message: 'Diagnosis failed - check logs for details',
+			timeout: 5000,
+			closable: true
+		});
+	}
+}
+
 loadApiBaseOverride();
 
 </script>
@@ -2465,6 +2570,7 @@ pre.diag {
 		</div>
 		<p style="color: rgb(var(--m3-scheme-on-surface-variant)); margin-bottom: 1rem;">Debug inbox sync issues - excessive pages, wrong email counts, stale data.</p>
 		<div class="controls">
+			<Button variant="filled" onclick={diagnoseSyncFailure}>🎯 Diagnose sync failure</Button>
 			<Button variant="filled" onclick={debugInboxSync}>Debug inbox sync state</Button>
 			<Button variant="filled" onclick={comprehensiveSyncAnalysis}>🔍 Comprehensive sync analysis</Button>
 			<Button variant="tonal" onclick={compareInboxCounts}>Compare local vs Gmail counts</Button>
