@@ -1131,7 +1131,16 @@ import { precomputeStatus } from '$lib/stores/precompute';
         
         <div class="menu-section-header">Account</div>
         <MenuItem icon={iconLogout} onclick={doRelogin}>Re-login</MenuItem>
-        <MenuItem icon={iconInfo} onclick={() => { aboutOpen = true; overflowDetails.open = false; }}>About</MenuItem>
+        <MenuItem icon={iconInfo} onclick={async () => {
+          try {
+            // Close overflow menu first (guarded) then open About dialog.
+            try { if (overflowDetails) overflowDetails.open = false; } catch (_) {}
+            // Wait a tick to allow details to close and focus to settle
+            await tick();
+          } finally {
+            aboutOpen = true;
+          }
+        }}>About</MenuItem>
       </Menu>
     </details>
     <Dialog icon={iconInfo} headline="About" bind:open={aboutOpen} closeOnClick={false}>
