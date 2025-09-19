@@ -93,6 +93,8 @@
     // Only prevent navigation if the click came from interactive elements in trailing actions
     // or elements explicitly marked with data-no-row-nav
     if (t?.closest('[data-no-row-nav]') || 
+        // Prevent navigation when a details popover is open inside the row (snooze etc.)
+        t?.closest('details[open]') ||
         (t?.closest('.trailing') && t?.closest('summary,button,input,select,textarea,[role="menu"],[role="menuitem"]'))) {
       e.preventDefault();
       e.stopPropagation();

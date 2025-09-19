@@ -674,15 +674,15 @@
                     console.log(`[Inbox] Gmail label stats: ${gmailThreadCount} threads in INBOX`);
                     console.log(`[Inbox] Sync decision: Gmail=${gmailThreadCount}, Local=${localThreadCount}, Diff=${Math.abs(gmailThreadCount - localThreadCount)}`);
                     
-                    // Always run authoritative sync if there's a significant discrepancy or if we have no local threads
+                    // Always run authoritative sync; avoid referring to "quick sync" in logs
                     if (localThreadCount === 0 || Math.abs(gmailThreadCount - localThreadCount) > 2) {
                       console.log(`[Inbox] TRIGGERING FULL AUTHORITATIVE SYNC - Major discrepancy detected`);
                       await performAuthoritativeInboxSync();
                       console.log(`[Inbox] Full authoritative sync completed`);
                     } else {
-                      console.log(`[Inbox] TRIGGERING QUICK SYNC CHECK - Thread counts are close`);
+                      console.log(`[Inbox] Thread counts are close - running authoritative sync (short mode)`);
                       await performAuthoritativeInboxSync({ perPageTimeoutMs: 10000, maxRetries: 1 });
-                      console.log(`[Inbox] Quick sync check completed`);
+                      console.log(`[Inbox] Authoritative sync (short mode) completed`);
                     }
                   } catch (e) {
                     console.warn('[Inbox] Label check failed, running full sync anyway:', e);
@@ -829,12 +829,12 @@
                 console.log(`[Inbox] Sync check: Gmail has ${gmailThreadCount} threads, local has ${localThreadCount} threads`);
               }
               
-              // Always run authoritative sync if there's a significant discrepancy or if we have no local threads
+              // Always run authoritative sync; avoid referring to "quick sync" in logs
               if (localThreadCount === 0 || Math.abs(gmailThreadCount - localThreadCount) > 2) {
                 console.log(`[Inbox] Significant sync discrepancy detected, running full authoritative sync`);
                 await performAuthoritativeInboxSync();
               } else {
-                console.log(`[Inbox] Thread counts are close, running quick sync check`);
+                console.log(`[Inbox] Thread counts are close - running authoritative sync (short mode)`);
                 await performAuthoritativeInboxSync({ perPageTimeoutMs: 10000, maxRetries: 1 });
               }
             } catch (e) {
