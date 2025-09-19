@@ -871,6 +871,24 @@ function onKeyDown(e: KeyboardEvent) {
     void undoLast(1);
     return;
   }
+  // 1: snooze 1 hour
+  if (e.key === '1') {
+    e.preventDefault();
+    snoozeThreadByRule(ct.threadId, '1h').then(() => {
+      showSnackbar({ message: 'Snoozed 1h', actions: { Undo: () => undoLast(1) } });
+      goto('/inbox');
+    });
+    return;
+  }
+  // 2: snooze 2 hours
+  if (e.key === '2') {
+    e.preventDefault();
+    snoozeThreadByRule(ct.threadId, '2h').then(() => {
+      showSnackbar({ message: 'Snoozed 2h', actions: { Undo: () => undoLast(1) } });
+      goto('/inbox');
+    });
+    return;
+  }
 }
 
 onMount(() => {
