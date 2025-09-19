@@ -107,6 +107,7 @@
 
   let loading = $state(true);
   let ready = $state(false);
+  let sortDetails: HTMLDetailsElement | null = $state(null);
   let apiErrorMessage: string | null = $state(null);
   let apiErrorStatus: number | undefined = $state();
   let apiErrorStack: string | undefined = $state();
@@ -2609,8 +2610,48 @@
     </div>
     <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
       
-      <details class="sort">
-        <summary class="summary-btn">
+      <details class="sort" bind:this={sortDetails}>
+        <summary class="summary-btn" onclick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          
+          const d = sortDetails || (e.currentTarget as HTMLElement).closest('details') as HTMLDetailsElement | null;
+          if (!d) return;
+          
+          // Android-specific handling for details/summary toggle
+          const isAndroid = /Android/i.test(navigator.userAgent);
+          
+          if (isAndroid) {
+            try {
+              // For Android, use setTimeout to ensure the toggle happens after event handling
+              const currentState = d.open;
+              setTimeout(() => {
+                try {
+                  d.open = !currentState;
+                  // Force a reflow to ensure the change takes effect
+                  d.offsetHeight;
+                } catch (e1) {
+                  console.error('[Inbox] Sort toggle failed:', e1);
+                  // Emergency fallback
+                  try {
+                    if (currentState) {
+                      d.removeAttribute('open');
+                    } else {
+                      d.setAttribute('open', '');
+                    }
+                  } catch (e2) {
+                    console.error('[Inbox] Sort toggle attribute fallback failed:', e2);
+                  }
+                }
+              }, 16);
+            } catch (e) {
+              console.error('[Inbox] Android sort setup failed:', e);
+              d.open = !d.open;
+            }
+          } else {
+            d.open = !d.open;
+          }
+        }}>
           <Button variant="text">
             {#snippet children()}
               <span class="label">Sort: {currentSortLabel}</span>
@@ -2628,7 +2669,15 @@
           Syncing all emails…
         </Button>
       {:else if nextPageToken && !backgroundSyncing}
-        <Button variant="outlined" disabled={syncing} onclick={loadMore}>
+        <Button variant="outlined" disabled={syncing} onclick={(e: MouseEvent) => {
+          const isAndroid = /Android/i.test(navigator.userAgent);
+          if (isAndroid) {
+            e.preventDefault();
+            setTimeout(() => loadMore(), 16);
+          } else {
+            loadMore();
+          }
+        }}>
           {#if syncing}
             Loading…
           {:else}
@@ -2640,7 +2689,15 @@
       <Button 
         variant="outlined" 
         iconType="full"
-        onclick={runInboxSyncDiagnostics}
+        onclick={(e: MouseEvent) => {
+          const isAndroid = /Android/i.test(navigator.userAgent);
+          if (isAndroid) {
+            e.preventDefault();
+            setTimeout(() => runInboxSyncDiagnostics(), 16);
+          } else {
+            runInboxSyncDiagnostics();
+          }
+        }}
         aria-label="Run comprehensive inbox sync diagnostics and auto-repair"
         title="Run sync diagnostics & auto-repair"
       >
@@ -2712,11 +2769,51 @@
           </label>
         </div>
         <div style="display:flex; gap:0.5rem; align-items:center;">
-          <Button variant="text" onclick={bulkArchive}>Archive</Button>
-          <Button variant="text" color="error" onclick={bulkDelete}>Delete</Button>
-          <Button variant="text" onclick={() => bulkSnooze('10m')} disabled={!can10m}>10m</Button>
-          <Button variant="text" onclick={() => bulkSnooze('3h')} disabled={!can3h}>3h</Button>
-          <Button variant="text" onclick={() => bulkSnooze('1d')} disabled={!can1d}>1d</Button>
+          <Button variant="text" onclick={(e: MouseEvent) => {
+            const isAndroid = /Android/i.test(navigator.userAgent);
+            if (isAndroid) {
+              e.preventDefault();
+              setTimeout(() => bulkArchive(), 16);
+            } else {
+              bulkArchive();
+            }
+          }}>Archive</Button>
+          <Button variant="text" color="error" onclick={(e: MouseEvent) => {
+            const isAndroid = /Android/i.test(navigator.userAgent);
+            if (isAndroid) {
+              e.preventDefault();
+              setTimeout(() => bulkDelete(), 16);
+            } else {
+              bulkDelete();
+            }
+          }}>Delete</Button>
+          <Button variant="text" onclick={(e: MouseEvent) => {
+            const isAndroid = /Android/i.test(navigator.userAgent);
+            if (isAndroid) {
+              e.preventDefault();
+              setTimeout(() => bulkSnooze('10m'), 16);
+            } else {
+              bulkSnooze('10m');
+            }
+          }} disabled={!can10m}>10m</Button>
+          <Button variant="text" onclick={(e: MouseEvent) => {
+            const isAndroid = /Android/i.test(navigator.userAgent);
+            if (isAndroid) {
+              e.preventDefault();
+              setTimeout(() => bulkSnooze('3h'), 16);
+            } else {
+              bulkSnooze('3h');
+            }
+          }} disabled={!can3h}>3h</Button>
+          <Button variant="text" onclick={(e: MouseEvent) => {
+            const isAndroid = /Android/i.test(navigator.userAgent);
+            if (isAndroid) {
+              e.preventDefault();
+              setTimeout(() => bulkSnooze('1d'), 16);
+            } else {
+              bulkSnooze('1d');
+            }
+          }} disabled={!can1d}>1d</Button>
         </div>
       </div>
     </Card>
@@ -2734,9 +2831,25 @@
       {/if}
       <div style="display:flex; gap:0.5rem; justify-content:flex-end; margin-top:0.75rem;">
         {#if debouncedQuery}
-          <Button variant="outlined" onclick={() => { import('$lib/stores/search').then(m=>m.searchQuery.set('')); }}>Clear search</Button>
+          <Button variant="outlined" onclick={(e: MouseEvent) => {
+            const isAndroid = /Android/i.test(navigator.userAgent);
+            if (isAndroid) {
+              e.preventDefault();
+              setTimeout(() => { import('$lib/stores/search').then(m=>m.searchQuery.set('')); }, 16);
+            } else {
+              import('$lib/stores/search').then(m=>m.searchQuery.set(''));
+            }
+          }}>Clear search</Button>
         {:else if ready && !loading}
-          <Button variant="filled" disabled={pullingForward} onclick={handlePullForward}>
+          <Button variant="filled" disabled={pullingForward} onclick={(e: MouseEvent) => {
+            const isAndroid = /Android/i.test(navigator.userAgent);
+            if (isAndroid) {
+              e.preventDefault();
+              setTimeout(() => handlePullForward(), 16);
+            } else {
+              handlePullForward();
+            }
+          }}>
             {#if pullingForward}
               Pulling forward...
             {:else}

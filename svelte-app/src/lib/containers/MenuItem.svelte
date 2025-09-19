@@ -18,11 +18,35 @@
   } & Record<string, any> = $props();
 </script>
 
-<button type="button" class="item m3-font-label-large" {disabled} onclick={(e) => {
-  // Prevent clicks inside menu items from bubbling to parent row anchors/buttons
-  e.stopPropagation();
-  onclick(e);
-}} {...extra}>
+<button type="button" class="item m3-font-label-large" {disabled} 
+  onclick={(e) => {
+    // Prevent clicks inside menu items from bubbling to parent row anchors/buttons
+    e.stopPropagation();
+    
+    // Android-specific handling
+    const isAndroid = /Android/i.test(navigator.userAgent);
+    
+    if (isAndroid) {
+      // For Android, defer the onclick to ensure proper touch handling
+      e.preventDefault();
+      setTimeout(() => {
+        try {
+          onclick(e);
+        } catch (err) {
+          console.error('[MenuItem] Android onclick failed:', err);
+        }
+      }, 16);
+    } else {
+      onclick(e);
+    }
+  }}
+  ontouchstart={(e) => {
+    // Improve Android touch responsiveness
+    if (/Android/i.test(navigator.userAgent)) {
+      e.stopPropagation();
+    }
+  }}
+  {...extra}>
   <Layer />
   {#if icon == "space"}
     <span class="icon"></span>
