@@ -2305,21 +2305,15 @@
         }
         
       } else if (!syncAnalysis.minorDiscrepancy && Math.abs(syncAnalysis.discrepancyGmailToDb) > 2) {
-        log('⚠️ MINOR DISCREPANCY: Running quick sync');
-        
-        showSnackbar({
-          message: `🔄 Minor sync issue (${syncAnalysis.discrepancyGmailToDb} threads). Running quick sync...`,
-          timeout: 5000
-        });
-        
-        await performAuthoritativeInboxSync({ perPageTimeoutMs: 15000, maxRetries: 2 });
-        
-        log('Quick sync completed');
-        showSnackbar({
-          message: '✅ Quick sync completed',
-          timeout: 3000
-        });
-        
+        log('⚠️ MINOR DISCREPANCY: Launching background authoritative sync (transparent to user)');
+        try {
+          // Start authoritative sync in the background; do not block diagnostics or show UI feedback
+          void performAuthoritativeInboxSync({ perPageTimeoutMs: 15000, maxRetries: 2 })
+            .then(() => log('Background authoritative sync completed'))
+            .catch(err => log('Background authoritative sync failed', err));
+        } catch (e) {
+          log('Failed to start background authoritative sync', e);
+        }
       } else {
         log('✅ NO MAJOR ISSUES: Sync appears healthy');
         

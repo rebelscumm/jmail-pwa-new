@@ -168,6 +168,7 @@ import { precomputeStatus } from '$lib/stores/precompute';
   }
 
   async function doPrecompute() {
+    console.log('[TopAppBar] Precompute function called');
     try {
       // Check if precompute is enabled
       const { settings } = await import('$lib/stores/settings');
@@ -265,6 +266,17 @@ import { precomputeStatus } from '$lib/stores/precompute';
     }
   }
 
+
+  function doShowAbout() {
+    console.log('[TopAppBar] About menu item clicked');
+    try {
+      if (overflowDetails) overflowDetails.open = false;
+      aboutOpen = true;
+      console.log('[TopAppBar] About dialog should now be open:', aboutOpen);
+    } catch (e) {
+      console.error('[TopAppBar] Error opening About dialog:', e);
+    }
+  }
 
   async function doShowPrecomputeSummary() {
     try {
@@ -1132,7 +1144,7 @@ import { precomputeStatus } from '$lib/stores/precompute';
         
         <div class="menu-section-header">Account</div>
         <MenuItem icon={iconLogout} onclick={doRelogin}>Re-login</MenuItem>
-        <MenuItem icon={iconInfo} onclick={() => { aboutOpen = true; overflowDetails.open = false; }}>About</MenuItem>
+        <MenuItem icon={iconInfo} onclick={doShowAbout}>About</MenuItem>
       </Menu>
     </details>
     <Dialog icon={iconInfo} headline="About" bind:open={aboutOpen} closeOnClick={false}>
