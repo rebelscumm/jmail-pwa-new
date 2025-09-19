@@ -779,4 +779,48 @@
       {/if}
     </ul>
   </Card>
+  
+  <h3 style="margin-top:1.5rem;">Diagnostics & Troubleshooting</h3>
+  <Card variant="outlined">
+    <div style="display:flex; gap:0.5rem; align-items:center; margin-bottom:0.5rem;">
+      <Button 
+        variant="outlined"
+        onclick={async () => {
+          try {
+            // Android-friendly navigation to diagnostics page
+            const isAndroid = /Android/i.test(navigator.userAgent);
+            const isPWA = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches;
+            
+            if (isAndroid || isPWA) {
+              // Try multiple navigation methods for Android
+              try {
+                window.open('/diagnostics', '_self');
+                return;
+              } catch (e) {
+                console.log('[Settings] window.open failed for diagnostics:', e);
+                try {
+                  history.pushState(null, '', '/diagnostics');
+                  window.location.reload();
+                  return;
+                } catch (e2) {
+                  console.log('[Settings] pushState failed for diagnostics:', e2);
+                }
+              }
+            }
+            
+            // Default navigation
+            location.href = '/diagnostics';
+          } catch (e) {
+            console.error('[Settings] All diagnostics navigation methods failed:', e);
+            info = 'Navigation failed. Try typing /diagnostics in your address bar.';
+          }
+        }}
+      >
+        Open Full Diagnostics Page
+      </Button>
+    </div>
+    <p style="margin:0; color:rgb(var(--m3-scheme-on-surface-variant)); font-size:0.875rem;">
+      Access comprehensive diagnostics including Android-specific troubleshooting for overflow menu and snooze button issues.
+    </p>
+  </Card>
 {/if}

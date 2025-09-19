@@ -2646,6 +2646,43 @@
       >
         <Icon icon={iconDiagnostics} />
       </Button>
+      <Button 
+        variant="outlined" 
+        onclick={async () => {
+          try {
+            // Android-friendly navigation to diagnostics page
+            const isAndroid = /Android/i.test(navigator.userAgent);
+            const isPWA = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches;
+            
+            if (isAndroid || isPWA) {
+              // Try multiple navigation methods for Android
+              try {
+                window.open('/diagnostics', '_self');
+                return;
+              } catch (e) {
+                console.log('[Inbox] window.open failed for diagnostics:', e);
+                try {
+                  history.pushState(null, '', '/diagnostics');
+                  window.location.reload();
+                  return;
+                } catch (e2) {
+                  console.log('[Inbox] pushState failed for diagnostics:', e2);
+                }
+              }
+            }
+            
+            // Default navigation
+            location.href = '/diagnostics';
+          } catch (e) {
+            console.error('[Inbox] All diagnostics navigation methods failed:', e);
+            showSnackbar({ message: 'Navigation failed. Try typing /diagnostics in your address bar.', closable: true });
+          }
+        }}
+        title="Open full diagnostics page"
+        aria-label="Navigate to diagnostics page"
+      >
+        Full Diagnostics
+      </Button>
       {#if import.meta.env.DEV}
         <Button variant="outlined" onclick={compareLocalToGmail}>Compare DB ↔ Gmail</Button>
       {/if}
