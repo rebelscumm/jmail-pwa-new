@@ -19,16 +19,16 @@
   aria-label="Menu"
   tabindex="0"
   onclick={(e) => { 
-    // Always prevent clicks from bubbling out of the menu to parent rows
-    e.preventDefault(); 
+    // Prevent clicks from bubbling out of the menu to parent rows but
+    // do NOT call preventDefault() so touch -> click synthesis still occurs on mobile.
     e.stopPropagation(); 
   }}
-  onpointerdown={(e) => { e.preventDefault(); e.stopPropagation(); }}
-  onpointerup={(e) => { e.preventDefault(); e.stopPropagation(); }}
-  onmousedown={(e) => { e.preventDefault(); e.stopPropagation(); }}
-  onmouseup={(e) => { e.preventDefault(); e.stopPropagation(); }}
-  ontouchstart={(e) => { e.preventDefault(); e.stopPropagation(); }}
-  ontouchend={(e) => { e.preventDefault(); e.stopPropagation(); }}
+  onpointerdown={(e) => { e.stopPropagation(); }}
+  onpointerup={(e) => { e.stopPropagation(); }}
+  onmousedown={(e) => { e.stopPropagation(); }}
+  onmouseup={(e) => { e.stopPropagation(); }}
+  ontouchstart={(e) => { /* allow default to preserve click synthesis */ e.stopPropagation(); }}
+  ontouchend={(e) => { e.stopPropagation(); }}
   onkeydown={(e) => { if (e.key === 'Escape') { (e.currentTarget as HTMLElement).blur(); } }}
 >
   {@render children()}
