@@ -8,6 +8,7 @@ import iconCheck from '@ktibow/iconset-material-symbols/check-circle';
 import iconError from '@ktibow/iconset-material-symbols/error';
 import iconWarning from '@ktibow/iconset-material-symbols/warning';
 import iconPlayArrow from '@ktibow/iconset-material-symbols/play-arrow';
+import iconBack from '@ktibow/iconset-material-symbols/chevron-left';
 import Icon from '$lib/misc/_icon.svelte';
 import { show as showSnackbar } from '$lib/containers/snackbar';
 import { checkForUpdateOnce } from '$lib/update/checker';
@@ -2569,6 +2570,69 @@ async function testSnoozeMenuAndroid() {
 	}
 }
 
+// Test the original overflow menu toggle specifically
+async function testOriginalOverflowMenu() {
+	addLog('info', ['Testing original overflow menu functionality...']);
+	try {
+		// Find the overflow menu
+		const overflowDetails = document.querySelector('.overflow') as HTMLDetailsElement;
+		const overflowSummary = document.querySelector('.overflow summary') as HTMLElement;
+		
+		if (!overflowDetails) {
+			showSnackbar({ message: 'No overflow menu found on this page.', closable: true });
+			return;
+		}
+		
+		addLog('info', [`Found overflow menu. Current state: ${overflowDetails.open ? 'open' : 'closed'}`]);
+		
+		// Test programmatic toggle
+		const wasOpen = overflowDetails.open;
+		overflowDetails.open = !wasOpen;
+		
+		setTimeout(() => {
+			const newState = overflowDetails.open;
+			const programmaticWorked = newState !== wasOpen;
+			addLog('info', [`Programmatic toggle: ${programmaticWorked ? 'SUCCESS' : 'FAILED'}. New state: ${newState ? 'open' : 'closed'}`]);
+			
+			// Reset state
+			overflowDetails.open = wasOpen;
+			
+			// Now test click simulation
+			setTimeout(() => {
+				if (overflowSummary) {
+					addLog('info', ['Testing simulated click on summary element...']);
+					const clickEvent = new MouseEvent('click', {
+						bubbles: true,
+						cancelable: true,
+						view: window
+					});
+					
+					const beforeClick = overflowDetails.open;
+					overflowSummary.dispatchEvent(clickEvent);
+					
+					setTimeout(() => {
+						const afterClick = overflowDetails.open;
+						const clickWorked = afterClick !== beforeClick;
+						addLog('info', [`Click simulation: ${clickWorked ? 'SUCCESS' : 'FAILED'}. Before: ${beforeClick}, After: ${afterClick}`]);
+						
+						// Reset to original state
+						overflowDetails.open = wasOpen;
+						
+						showSnackbar({ 
+							message: `Overflow menu test: Programmatic ${programmaticWorked ? 'OK' : 'FAILED'}, Click ${clickWorked ? 'OK' : 'FAILED'}`, 
+							closable: true 
+						});
+					}, 100);
+				}
+			}, 100);
+		}, 100);
+		
+	} catch (e) {
+		addLog('error', ['Overflow menu test failed', e]);
+		showSnackbar({ message: 'Overflow menu test failed: ' + String(e), closable: true });
+	}
+}
+
 </script>
 
 <style>
@@ -2634,6 +2698,11 @@ pre.diag {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 2rem;
+}
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
 }
 .main-header h1 {
   margin: 0;
@@ -2791,7 +2860,47 @@ pre.diag {
 
 	<div>
 	<div class="main-header">
-		<h1>Diagnostics</h1>
+		<div class="header-left">
+			<Button 
+				variant="text" 
+				iconType="left"
+				onclick={async () => {
+					try {
+						// Android-friendly navigation back to inbox
+						const isAndroid = /Android/i.test(navigator.userAgent);
+						const isPWA = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches;
+						
+						if (isAndroid || isPWA) {
+							// Try multiple navigation methods for Android
+							try {
+								window.open('/', '_self');
+								return;
+							} catch (e) {
+								console.log('[Diagnostics] window.open failed for inbox:', e);
+								try {
+									history.pushState(null, '', '/');
+									window.location.reload();
+									return;
+								} catch (e2) {
+									console.log('[Diagnostics] pushState failed for inbox:', e2);
+								}
+							}
+						}
+						
+						// Default navigation
+						location.href = '/';
+					} catch (e) {
+						console.error('[Diagnostics] All inbox navigation methods failed:', e);
+						showSnackbar({ message: 'Navigation failed. Try typing / in your address bar.', closable: true });
+					}
+				}}
+				aria-label="Back to inbox"
+			>
+				<Icon icon={iconBack} />
+				Back to Inbox
+			</Button>
+			<h1>Diagnostics</h1>
+		</div>
 		<div class="copy-all-container">
 			<Button variant="tonal" iconType="left" onclick={copyAllSections}>
 				<Icon icon={iconSelectAll} />
@@ -3006,7 +3115,18 @@ pre.diag {
 				Copy Section
 			</Button>
 		</div>
-		<p style="color: rgb(var(--m3-scheme-on-surface-variant)); margin-bottom: 1rem;">Diagnose Android-specific issues with overflow menu buttons and snooze trailing action menus not responding to taps.</p>
+		<p style="color: rgb(var(--m3-scheme-on-surface-variant)); margin-bottom: 1rem;">
+			Diagnose Android-specific issues with overflow menu buttons and snooze trailing action menus not responding to taps.
+		</p>
+		<div style="background: rgb(var(--m3-scheme-primary-container)); color: rgb(var(--m3-scheme-on-primary-container)); padding: 1rem; border-radius: var(--m3-util-rounding-medium); margin-bottom: 1rem;">
+			<strong>📱 Testing Snooze Buttons:</strong> Snooze menus only exist on email thread rows. To test snooze functionality:
+			<ol style="margin: 0.5rem 0; padding-left: 1.5rem;">
+				<li>Navigate to <strong>Inbox</strong> using the "Back to Inbox" button above</li>
+				<li>Find email threads with trailing action buttons (right side)</li>
+				<li>Look for the snooze expand button (arrow ↓) next to time options like "1h", "30d"</li>
+				<li>Tap the expand arrow to test the snooze menu - it should now work with Android fixes!</li>
+			</ol>
+		</div>
 		
 		<div class="controls">
 			<Button variant="filled" iconType="left" onclick={runAndroidDiagnostics} disabled={androidDiagnostics.running}>
@@ -3016,6 +3136,7 @@ pre.diag {
 			<Button variant="tonal" onclick={navigateToSettingsAlternative}>Try Alternative Settings Navigation</Button>
 			<Button variant="tonal" onclick={checkForUpdateAlternative}>Try Alternative App Update</Button>
 			<Button variant="tonal" onclick={testSnoozeMenuAndroid}>Test Snooze Menu Toggle</Button>
+			<Button variant="outlined" onclick={testOriginalOverflowMenu}>Test Original Overflow Menu</Button>
 		</div>
 		
 		{#if androidDiagnostics.deviceInfo}

@@ -52,8 +52,46 @@ import { precomputeStatus } from '$lib/stores/precompute';
   function toggleOverflow(e: MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
+    
     const d = overflowDetails || (e.currentTarget as HTMLElement).closest('details') as HTMLDetailsElement | null;
-    if (d) d.open = !d.open;
+    if (!d) return;
+    
+    // Android-specific handling for details/summary toggle
+    const isAndroid = /Android/i.test(navigator.userAgent);
+    
+    if (isAndroid) {
+      try {
+        // For Android, use setTimeout to ensure the toggle happens after event handling
+        const currentState = d.open;
+        setTimeout(() => {
+          try {
+            d.open = !currentState;
+            // Force a reflow to ensure the change takes effect
+            d.offsetHeight;
+            console.log('[TopAppBar] Android overflow toggle:', d.open ? 'opened' : 'closed');
+          } catch (e1) {
+            console.error('[TopAppBar] Android toggle failed:', e1);
+            // Emergency fallback - try direct attribute manipulation
+            try {
+              if (currentState) {
+                d.removeAttribute('open');
+              } else {
+                d.setAttribute('open', '');
+              }
+            } catch (e2) {
+              console.error('[TopAppBar] Attribute fallback failed:', e2);
+            }
+          }
+        }, 16);
+      } catch (e) {
+        console.error('[TopAppBar] Android overflow setup failed:', e);
+        // Fallback to original behavior
+        d.open = !d.open;
+      }
+    } else {
+      // Non-Android behavior (original)
+      d.open = !d.open;
+    }
   }
   async function doSync() {
     console.log('[TopAppBar] ===== SYNC BUTTON CLICKED =====');
