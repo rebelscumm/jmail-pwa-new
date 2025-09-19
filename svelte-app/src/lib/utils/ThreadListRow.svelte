@@ -991,7 +991,7 @@
               <Icon icon={iconExpand} />
             </span>
           </summary>
-          <div class="snooze-menu">
+          <div class="snooze-menu" onpointerdown={(e: PointerEvent) => { e.preventDefault(); e.stopPropagation(); }} ontouchstart={(e: TouchEvent) => { e.preventDefault(); e.stopPropagation(); }}>
             <Menu>
               {#if mappedKeys.length > 0}
                 <SnoozePanel onSelect={(rk) => { lastSelectedSnoozeRuleKey.set(normalizeRuleKey(rk)); trySnooze(rk); const d = snoozeDetails; if (d) d.open = false; }} />

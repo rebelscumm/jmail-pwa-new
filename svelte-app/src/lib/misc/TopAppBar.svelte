@@ -38,7 +38,8 @@ import { precomputeStatus } from '$lib/stores/precompute';
   import iconNotifications from '@ktibow/iconset-material-symbols/notifications';
   import iconTerminal from '@ktibow/iconset-material-symbols/terminal';
   import iconDiagnostics from '@ktibow/iconset-material-symbols/bug-report';
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
+  import { cacheVersion as cacheVersionStore } from '$lib/utils/cacheVersion';
   import { trailingHolds } from '$lib/stores/holds';
   import { labels as labelsStore } from '$lib/stores/labels';
   import { optimisticCounters } from '$lib/stores/optimistic-counters';
@@ -661,7 +662,8 @@ import { precomputeStatus } from '$lib/stores/precompute';
     }
   }
 
-  let cacheVersion = $state('unknown');
+  // Cache version is read from centralized helper (service worker CACHE_NAME or Cache Storage)
+  // Exposed as a Svelte store `cacheVersionStore`; use `$cacheVersionStore` in markup.
 
   let checkingUpdate = $state(false);
   async function doCheckForUpdates() {
@@ -697,37 +699,12 @@ import { precomputeStatus } from '$lib/stores/precompute';
 
   onMount(async () => {
     try {
-      // Try to read cache version from Cache Storage (preferred)
-      try {
-        const keys = await caches.keys();
-        const cache = keys.find((k: string) => k.startsWith('Jmail-v'));
-        if (cache) cacheVersion = cache.replace('Jmail-v', '');
-      } catch (e) {
-        // ignore and continue to next fallback
-      }
-
-      // Fallback: try to read the CACHE_NAME defined in the service worker file
-      if (!cacheVersion || cacheVersion === 'unknown') {
-        try {
-          const r = await fetch('/sw.js', { method: 'GET', cache: 'no-store' });
-          if (r && r.ok) {
-            const swText = await r.text();
-            const m = /CACHE_NAME\s*=\s*['"]Jmail-v([0-9.]+)['"]/i.exec(swText);
-            if (m && m[1]) {
-              cacheVersion = m[1];
-            }
-          }
-        } catch (e) {
-          // ignore - leave cacheVersion as-is
-        }
-      }
+      // Ensure label stats are refreshed on mount
+      try { await refreshLabelStats(); } catch (_) {}
+      try { window.addEventListener('jmail:refresh', refreshLabelStats as EventListener); } catch (_) {}
     } catch (e) {
       console.error(e);
     }
-    // Refresh label stats on mount
-    try { await refreshLabelStats(); } catch (_) {}
-    // Update label stats when a global refresh occurs
-    try { window.addEventListener('jmail:refresh', refreshLabelStats as EventListener); } catch (_) {}
   });
 
   // Listen for global request to show precompute logs (dispatched by snackbar action)
@@ -1162,7 +1139,7 @@ import { precomputeStatus } from '$lib/stores/precompute';
         <div class="about">
           <div class="row"><span class="k">Version</span><span class="v">{appVersion}</span></div>
           <div class="row"><span class="k">Build</span><span class="v">{buildId}</span></div>
-          <div class="row"><span class="k">Cache</span><span class="v">{cacheVersion}</span></div>
+          <div class="row"><span class="k">Cache</span><span class="v">{$cacheVersionStore}</span></div>
         </div>
       {/snippet}
       {#snippet buttons()}
