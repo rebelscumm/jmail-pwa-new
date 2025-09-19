@@ -954,7 +954,39 @@ import { precomputeStatus } from '$lib/stores/precompute';
       </summary>
       <Menu>
         <div class="menu-section-header">Quick Actions</div>
-        <MenuItem icon={iconSettings} onclick={() => (location.href = '/settings')}>Settings</MenuItem>
+        <MenuItem icon={iconSettings} onclick={async () => {
+          try {
+            // Check if we're on Android and try alternative navigation methods
+            const isAndroid = /Android/i.test(navigator.userAgent);
+            const isPWA = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches;
+            
+            if (isAndroid || isPWA) {
+              // Try window.open first for Android PWAs
+              try {
+                window.open('/settings', '_self');
+                return;
+              } catch (e) {
+                console.log('[TopAppBar] window.open failed, trying pushState:', e);
+              }
+              
+              // Fallback to pushState navigation
+              try {
+                history.pushState(null, '', '/settings');
+                window.location.reload();
+                return;
+              } catch (e) {
+                console.log('[TopAppBar] pushState failed, using location.href:', e);
+              }
+            }
+            
+            // Default fallback
+            location.href = '/settings';
+          } catch (e) {
+            console.error('[TopAppBar] All navigation methods failed:', e);
+            // Show user feedback
+            showSnackbar({ message: 'Navigation failed. Please try again or refresh the app.', closable: true });
+          }
+        }}>Settings</MenuItem>
         
         <div class="menu-section-header">AI Features</div>
         <MenuItem icon={iconSparkles} onclick={doPrecompute}>Run Precompute</MenuItem>
@@ -963,8 +995,69 @@ import { precomputeStatus } from '$lib/stores/precompute';
         <MenuItem icon={iconSparkles} onclick={doBackfillSummaryVersions}>Backfill AI Summary Versions</MenuItem>
         
         <div class="menu-section-header">System</div>
-        <MenuItem icon={iconRefresh} onclick={() => { const u = new URL(window.location.href); u.searchParams.set('refresh', '1'); location.href = u.toString(); }}>Check for App Update</MenuItem>
-        <MenuItem icon={iconDiagnostics} onclick={() => (location.href = '/diagnostics')}>Diagnostics</MenuItem>
+        <MenuItem icon={iconRefresh} onclick={async () => {
+          try {
+            const isAndroid = /Android/i.test(navigator.userAgent);
+            const isPWA = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches;
+            
+            if (isAndroid || isPWA) {
+              // For Android PWAs, try calling the update check directly instead of navigation
+              try {
+                await checkForUpdateOnce();
+                showSnackbar({ message: 'Update check completed', closable: true });
+                return;
+              } catch (e) {
+                console.log('[TopAppBar] Direct update check failed, trying URL navigation:', e);
+              }
+            }
+            
+            // Default behavior - navigate with refresh parameter
+            const u = new URL(window.location.href);
+            u.searchParams.set('refresh', '1');
+            
+            if (isAndroid || isPWA) {
+              // Try alternative navigation methods for Android
+              try {
+                window.open(u.toString(), '_self');
+                return;
+              } catch (e) {
+                console.log('[TopAppBar] window.open failed for update check:', e);
+              }
+            }
+            
+            location.href = u.toString();
+          } catch (e) {
+            console.error('[TopAppBar] App update check failed:', e);
+            showSnackbar({ message: 'Update check failed. Please try again.', closable: true });
+          }
+        }}>Check for App Update</MenuItem>
+        <MenuItem icon={iconDiagnostics} onclick={async () => {
+          try {
+            const isAndroid = /Android/i.test(navigator.userAgent);
+            const isPWA = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches;
+            
+            if (isAndroid || isPWA) {
+              try {
+                window.open('/diagnostics', '_self');
+                return;
+              } catch (e) {
+                console.log('[TopAppBar] window.open failed for diagnostics, trying pushState:', e);
+                try {
+                  history.pushState(null, '', '/diagnostics');
+                  window.location.reload();
+                  return;
+                } catch (e2) {
+                  console.log('[TopAppBar] pushState failed for diagnostics:', e2);
+                }
+              }
+            }
+            
+            location.href = '/diagnostics';
+          } catch (e) {
+            console.error('[TopAppBar] Diagnostics navigation failed:', e);
+            showSnackbar({ message: 'Navigation failed. Please try again.', closable: true });
+          }
+        }}>Diagnostics</MenuItem>
         <MenuItem icon={iconNotifications} onclick={async () => {
           try {
             const { getHistory } = await import('$lib/containers/snackbar');

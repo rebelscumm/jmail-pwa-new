@@ -923,7 +923,68 @@
       </Button>
       <div class="snooze-buttons">
         <details class="menu-toggle" bind:this={snoozeDetails} use:autoclose ontoggle={(e) => { const isOpen = (e.currentTarget as HTMLDetailsElement).open; snoozeMenuOpen = isOpen; }}>
-          <summary aria-label="Snooze menu" aria-haspopup="menu" aria-expanded={snoozeMenuOpen} onpointerdown={(e: PointerEvent) => e.stopPropagation()} onclick={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); const d = snoozeDetails || (e.currentTarget as HTMLElement).closest('details') as HTMLDetailsElement | null; if (!d) return; if (!d.open) { openSnoozeMenuAndShowPicker(); } else { (d as HTMLDetailsElement).open = false; } }}>
+          <summary aria-label="Snooze menu" aria-haspopup="menu" aria-expanded={snoozeMenuOpen} 
+            onpointerdown={(e: PointerEvent) => e.stopPropagation()} 
+            ontouchstart={(e: TouchEvent) => e.stopPropagation()}
+            onclick={(e: MouseEvent) => { 
+              try {
+                e.preventDefault(); 
+                e.stopPropagation(); 
+                
+                const d = snoozeDetails || (e.currentTarget as HTMLElement).closest('details') as HTMLDetailsElement | null;
+                if (!d) return;
+                
+                // Android-friendly toggle with multiple attempts
+                const isAndroid = /Android/i.test(navigator.userAgent);
+                const isPWA = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches;
+                
+                if (isAndroid || isPWA) {
+                  // For Android, try multiple approaches
+                  try {
+                    if (!d.open) {
+                      d.open = true;
+                      // Force a reflow to ensure the change takes effect
+                      d.offsetHeight;
+                      openSnoozeMenuAndShowPicker();
+                    } else {
+                      d.open = false;
+                      d.offsetHeight;
+                    }
+                    return;
+                  } catch (e1) {
+                    console.log('[ThreadListRow] Primary Android toggle failed:', e1);
+                  }
+                  
+                  // Fallback: Use setTimeout to defer the toggle
+                  try {
+                    setTimeout(() => {
+                      if (!d.open) {
+                        openSnoozeMenuAndShowPicker();
+                      } else {
+                        d.open = false;
+                      }
+                    }, 16);
+                    return;
+                  } catch (e2) {
+                    console.log('[ThreadListRow] Deferred Android toggle failed:', e2);
+                  }
+                }
+                
+                // Standard behavior
+                if (!d.open) { 
+                  openSnoozeMenuAndShowPicker(); 
+                } else { 
+                  d.open = false; 
+                } 
+              } catch (e) {
+                console.error('[ThreadListRow] Snooze menu toggle failed:', e);
+                // Emergency fallback
+                try {
+                  const d = snoozeDetails;
+                  if (d) d.open = !d.open;
+                } catch {}
+              }
+            }}>
             <!-- Render MD3-styled container directly in summary (avoid nested button) -->
             <span class="m3-container m3-font-label-large text icon-full expand-button outlined" title="Snooze options">
               <Layer />

@@ -81,6 +81,21 @@ let testBodyText = 'Dear Customer,\n\nYour vehicle service appointment has been 
 let aiSummaryTestResult: any = null;
 let testingAiSummary = false;
 
+// Android overflow button diagnostics state
+let androidDiagnostics: {
+	deviceInfo: any;
+	navigationTests: Array<{name: string; status: 'pending' | 'success' | 'error'; message?: string; data?: any}>;
+	touchEventTests: Array<{name: string; status: 'pending' | 'success' | 'error'; message?: string; data?: any}>;
+	snoozeMenuTests: Array<{name: string; status: 'pending' | 'success' | 'error'; message?: string; data?: any}>;
+	running: boolean;
+} = {
+	deviceInfo: null,
+	navigationTests: [],
+	touchEventTests: [],
+	snoozeMenuTests: [],
+	running: false
+};
+
 // Comprehensive diagnostics runner
 async function runFullDiagnostics() {
 	fullDiagnostics.running = true;
@@ -2095,6 +2110,465 @@ async function diagnoseSyncFailure() {
 
 loadApiBaseOverride();
 
+// Android overflow button diagnostics
+async function runAndroidDiagnostics() {
+	androidDiagnostics.running = true;
+	androidDiagnostics.deviceInfo = null;
+	androidDiagnostics.navigationTests = [
+		{ name: 'Settings Navigation (location.href)', status: 'pending' },
+		{ name: 'Settings Navigation (pushState)', status: 'pending' },
+		{ name: 'Check App Update Navigation', status: 'pending' },
+		{ name: 'Overflow Menu Accessibility', status: 'pending' }
+	];
+	androidDiagnostics.touchEventTests = [
+		{ name: 'Touch Event Detection', status: 'pending' },
+		{ name: 'Click Event Propagation', status: 'pending' },
+		{ name: 'MenuItem Button Response', status: 'pending' },
+		{ name: 'Details/Summary Element Behavior', status: 'pending' }
+	];
+	androidDiagnostics.snoozeMenuTests = [
+		{ name: 'Snooze Menu Element Detection', status: 'pending' },
+		{ name: 'Snooze Menu Toggle Functionality', status: 'pending' },
+		{ name: 'Trailing Action Visibility', status: 'pending' },
+		{ name: 'Thread Row Touch Events', status: 'pending' }
+	];
+	
+	addLog('info', ['Starting Android overflow button diagnostics...']);
+	
+	try {
+		// Collect device information
+		androidDiagnostics.deviceInfo = {
+			userAgent: navigator.userAgent,
+			isAndroid: /Android/i.test(navigator.userAgent),
+			isPWA: window.matchMedia && window.matchMedia('(display-mode: standalone)').matches,
+			touchSupport: 'ontouchstart' in window || navigator.maxTouchPoints > 0,
+			screen: {
+				width: screen.width,
+				height: screen.height,
+				availWidth: screen.availWidth,
+				availHeight: screen.availHeight
+			},
+			viewport: {
+				width: window.innerWidth,
+				height: window.innerHeight
+			},
+			pixelRatio: window.devicePixelRatio || 1
+		};
+		addLog('info', ['Device info collected', androidDiagnostics.deviceInfo]);
+		
+		// Test 1: Settings navigation with location.href
+		androidDiagnostics.navigationTests[0].status = 'pending';
+		addLog('info', ['Testing Settings navigation with location.href...']);
+		try {
+			// Test if we can read current location
+			const currentLocation = window.location.href;
+			addLog('info', ['Current location:', currentLocation]);
+			androidDiagnostics.navigationTests[0] = {
+				name: 'Settings Navigation (location.href)',
+				status: 'success',
+				message: 'Can read location.href',
+				data: { currentLocation }
+			};
+		} catch (e) {
+			androidDiagnostics.navigationTests[0] = {
+				name: 'Settings Navigation (location.href)',
+				status: 'error',
+				message: `Failed to read location.href: ${e}`,
+				data: { error: String(e) }
+			};
+		}
+		
+		// Test 2: Alternative navigation with pushState
+		androidDiagnostics.navigationTests[1].status = 'pending';
+		addLog('info', ['Testing pushState navigation capability...']);
+		try {
+			// Test if history.pushState is available and working
+			if (typeof window.history.pushState === 'function') {
+				androidDiagnostics.navigationTests[1] = {
+					name: 'Settings Navigation (pushState)',
+					status: 'success',
+					message: 'history.pushState available',
+					data: { historyLength: history.length }
+				};
+			} else {
+				androidDiagnostics.navigationTests[1] = {
+					name: 'Settings Navigation (pushState)',
+					status: 'error',
+					message: 'history.pushState not available'
+				};
+			}
+		} catch (e) {
+			androidDiagnostics.navigationTests[1] = {
+				name: 'Settings Navigation (pushState)',
+				status: 'error',
+				message: `pushState test failed: ${e}`
+			};
+		}
+		
+		// Test 3: Check for app update functionality
+		androidDiagnostics.navigationTests[2].status = 'pending';
+		addLog('info', ['Testing Check for App Update functionality...']);
+		try {
+			// Test URL parameter addition
+			const testUrl = new URL(window.location.href);
+			testUrl.searchParams.set('refresh', '1');
+			const testUrlString = testUrl.toString();
+			
+			androidDiagnostics.navigationTests[2] = {
+				name: 'Check App Update Navigation',
+				status: 'success',
+				message: 'URL manipulation works',
+				data: { testUrl: testUrlString }
+			};
+		} catch (e) {
+			androidDiagnostics.navigationTests[2] = {
+				name: 'Check App Update Navigation',
+				status: 'error',
+				message: `URL manipulation failed: ${e}`
+			};
+		}
+		
+		// Test 4: Overflow menu accessibility
+		androidDiagnostics.navigationTests[3].status = 'pending';
+		addLog('info', ['Testing overflow menu accessibility...']);
+		try {
+			// Look for overflow menu elements
+			const overflowElements = document.querySelectorAll('.overflow, details.overflow');
+			const summaryElements = document.querySelectorAll('summary.summary-btn');
+			
+			androidDiagnostics.navigationTests[3] = {
+				name: 'Overflow Menu Accessibility',
+				status: overflowElements.length > 0 ? 'success' : 'error',
+				message: `Found ${overflowElements.length} overflow menus, ${summaryElements.length} summary buttons`,
+				data: { 
+					overflowCount: overflowElements.length,
+					summaryCount: summaryElements.length,
+					hasOverflowElements: overflowElements.length > 0
+				}
+			};
+		} catch (e) {
+			androidDiagnostics.navigationTests[3] = {
+				name: 'Overflow Menu Accessibility',
+				status: 'error',
+				message: `Menu accessibility test failed: ${e}`
+			};
+		}
+		
+		// Touch event tests
+		// Test 1: Touch event detection
+		androidDiagnostics.touchEventTests[0].status = 'pending';
+		addLog('info', ['Testing touch event detection...']);
+		try {
+			const touchEvents = {
+				touchstart: 'ontouchstart' in window,
+				touchend: 'ontouchend' in window,
+				touchmove: 'ontouchmove' in window,
+				pointerEvents: 'PointerEvent' in window,
+				maxTouchPoints: navigator.maxTouchPoints
+			};
+			
+			androidDiagnostics.touchEventTests[0] = {
+				name: 'Touch Event Detection',
+				status: touchEvents.touchstart ? 'success' : 'error',
+				message: `Touch support: ${touchEvents.touchstart ? 'Available' : 'Not available'}`,
+				data: touchEvents
+			};
+		} catch (e) {
+			androidDiagnostics.touchEventTests[0] = {
+				name: 'Touch Event Detection',
+				status: 'error',
+				message: `Touch detection failed: ${e}`
+			};
+		}
+		
+		// Test 2: Click event propagation test
+		androidDiagnostics.touchEventTests[1].status = 'pending';
+		addLog('info', ['Testing click event propagation...']);
+		try {
+			// Create a test element to verify event propagation
+			const testDiv = document.createElement('div');
+			testDiv.style.cssText = 'position:absolute;top:-1000px;left:-1000px;width:10px;height:10px;';
+			document.body.appendChild(testDiv);
+			
+			let clickReceived = false;
+			const clickHandler = () => { clickReceived = true; };
+			testDiv.addEventListener('click', clickHandler);
+			
+			// Simulate a click
+			const clickEvent = new MouseEvent('click', {
+				bubbles: true,
+				cancelable: true,
+				view: window
+			});
+			testDiv.dispatchEvent(clickEvent);
+			
+			// Clean up
+			testDiv.removeEventListener('click', clickHandler);
+			document.body.removeChild(testDiv);
+			
+			androidDiagnostics.touchEventTests[1] = {
+				name: 'Click Event Propagation',
+				status: clickReceived ? 'success' : 'error',
+				message: `Click events ${clickReceived ? 'working' : 'not working'} properly`,
+				data: { clickReceived }
+			};
+		} catch (e) {
+			androidDiagnostics.touchEventTests[1] = {
+				name: 'Click Event Propagation',
+				status: 'error',
+				message: `Click propagation test failed: ${e}`
+			};
+		}
+		
+		// Test 3: MenuItem button response test
+		androidDiagnostics.touchEventTests[2].status = 'pending';
+		addLog('info', ['Testing MenuItem button response...']);
+		try {
+			// Look for menu item buttons in the overflow menu
+			const menuItems = document.querySelectorAll('.overflow .item, .overflow button.item');
+			
+			androidDiagnostics.touchEventTests[2] = {
+				name: 'MenuItem Button Response',
+				status: menuItems.length > 0 ? 'success' : 'error',
+				message: `Found ${menuItems.length} menu item buttons`,
+				data: { 
+					menuItemCount: menuItems.length,
+					menuItemsFound: menuItems.length > 0
+				}
+			};
+		} catch (e) {
+			androidDiagnostics.touchEventTests[2] = {
+				name: 'MenuItem Button Response',
+				status: 'error',
+				message: `MenuItem test failed: ${e}`
+			};
+		}
+		
+		// Test 4: Details/Summary element behavior
+		androidDiagnostics.touchEventTests[3].status = 'pending';
+		addLog('info', ['Testing Details/Summary element behavior...']);
+		try {
+			// Test if details/summary elements work properly
+			const detailsSupport = 'open' in document.createElement('details');
+			
+			androidDiagnostics.touchEventTests[3] = {
+				name: 'Details/Summary Element Behavior',
+				status: detailsSupport ? 'success' : 'error',
+				message: `Details/Summary elements ${detailsSupport ? 'supported' : 'not supported'}`,
+				data: { detailsSupport }
+			};
+		} catch (e) {
+			androidDiagnostics.touchEventTests[3] = {
+				name: 'Details/Summary Element Behavior',
+				status: 'error',
+				message: `Details/Summary test failed: ${e}`
+			};
+		}
+		
+		// Snooze menu tests
+		// Test 1: Snooze menu element detection
+		androidDiagnostics.snoozeMenuTests[0].status = 'pending';
+		addLog('info', ['Testing snooze menu element detection...']);
+		try {
+			const snoozeMenus = document.querySelectorAll('.menu-toggle, .snooze-menu-toggle, details[class*="snooze"]');
+			const snoozeButtons = document.querySelectorAll('.snooze-wrap, .snooze-buttons');
+			const trailingActions = document.querySelectorAll('.actions, .trailing, [class*="trailing"]');
+			
+			androidDiagnostics.snoozeMenuTests[0] = {
+				name: 'Snooze Menu Element Detection',
+				status: snoozeMenus.length > 0 || snoozeButtons.length > 0 ? 'success' : 'error',
+				message: `Found ${snoozeMenus.length} snooze menus, ${snoozeButtons.length} snooze button groups, ${trailingActions.length} trailing action areas`,
+				data: {
+					snoozeMenuCount: snoozeMenus.length,
+					snoozeButtonCount: snoozeButtons.length,
+					trailingActionCount: trailingActions.length
+				}
+			};
+		} catch (e) {
+			androidDiagnostics.snoozeMenuTests[0] = {
+				name: 'Snooze Menu Element Detection',
+				status: 'error',
+				message: `Element detection failed: ${e}`
+			};
+		}
+		
+		// Test 2: Snooze menu toggle functionality
+		androidDiagnostics.snoozeMenuTests[1].status = 'pending';
+		addLog('info', ['Testing snooze menu toggle functionality...']);
+		try {
+			// Check if details elements support the open property
+			const testDetails = document.createElement('details');
+			const hasOpenProperty = 'open' in testDetails;
+			
+			// Check for summary elements that should handle clicks
+			const summaryElements = document.querySelectorAll('summary[aria-label*="Snooze"], summary[aria-haspopup="menu"]');
+			
+			androidDiagnostics.snoozeMenuTests[1] = {
+				name: 'Snooze Menu Toggle Functionality',
+				status: hasOpenProperty ? 'success' : 'error',
+				message: `Details/open property ${hasOpenProperty ? 'supported' : 'not supported'}, found ${summaryElements.length} snooze summary elements`,
+				data: {
+					hasOpenProperty,
+					summaryElementCount: summaryElements.length
+				}
+			};
+		} catch (e) {
+			androidDiagnostics.snoozeMenuTests[1] = {
+				name: 'Snooze Menu Toggle Functionality',
+				status: 'error',
+				message: `Toggle test failed: ${e}`
+			};
+		}
+		
+		// Test 3: Trailing action visibility
+		androidDiagnostics.snoozeMenuTests[2].status = 'pending';
+		addLog('info', ['Testing trailing action visibility...']);
+		try {
+			// Check if thread rows are visible
+			const threadRows = document.querySelectorAll('.row-container, [class*="thread"], [class*="row"]');
+			const visibleRows = Array.from(threadRows).filter(row => {
+				const rect = (row as HTMLElement).getBoundingClientRect();
+				return rect.width > 0 && rect.height > 0;
+			});
+			
+			androidDiagnostics.snoozeMenuTests[2] = {
+				name: 'Trailing Action Visibility',
+				status: visibleRows.length > 0 ? 'success' : 'error',
+				message: `Found ${threadRows.length} thread rows, ${visibleRows.length} visible`,
+				data: {
+					totalRows: threadRows.length,
+					visibleRows: visibleRows.length
+				}
+			};
+		} catch (e) {
+			androidDiagnostics.snoozeMenuTests[2] = {
+				name: 'Trailing Action Visibility',
+				status: 'error',
+				message: `Visibility test failed: ${e}`
+			};
+		}
+		
+		// Test 4: Thread row touch events
+		androidDiagnostics.snoozeMenuTests[3].status = 'pending';
+		addLog('info', ['Testing thread row touch events...']);
+		try {
+			// Check for pointer event handling on thread rows
+			const pointerSupport = 'PointerEvent' in window;
+			const touchSupport = 'ontouchstart' in window;
+			
+			// Look for elements with pointer/touch event handlers
+			const elementsWithPointerHandlers = document.querySelectorAll('[onpointerdown], [ontouchstart]');
+			
+			androidDiagnostics.snoozeMenuTests[3] = {
+				name: 'Thread Row Touch Events',
+				status: pointerSupport && touchSupport ? 'success' : 'error',
+				message: `Pointer events: ${pointerSupport ? 'supported' : 'not supported'}, Touch: ${touchSupport ? 'supported' : 'not supported'}, ${elementsWithPointerHandlers.length} elements with handlers`,
+				data: {
+					pointerSupport,
+					touchSupport,
+					handlerElementCount: elementsWithPointerHandlers.length
+				}
+			};
+		} catch (e) {
+			androidDiagnostics.snoozeMenuTests[3] = {
+				name: 'Thread Row Touch Events',
+				status: 'error',
+				message: `Touch event test failed: ${e}`
+			};
+		}
+		
+		addLog('info', ['Android diagnostics completed successfully']);
+		showSnackbar({ message: 'Android diagnostics completed', closable: true });
+		
+	} catch (e) {
+		addLog('error', ['Android diagnostics failed', e]);
+		showSnackbar({ message: 'Android diagnostics failed: ' + String(e), closable: true });
+	} finally {
+		androidDiagnostics.running = false;
+	}
+}
+
+// Alternative navigation functions for Android
+async function navigateToSettingsAlternative() {
+	addLog('info', ['Testing alternative Settings navigation...']);
+	try {
+		// Try using window.open first
+		window.open('/settings', '_self');
+		addLog('info', ['Used window.open for Settings navigation']);
+	} catch (e) {
+		addLog('error', ['window.open failed, trying pushState', e]);
+		try {
+			// Fallback to pushState + manual navigation
+			history.pushState(null, '', '/settings');
+			window.dispatchEvent(new PopStateEvent('popstate', { state: null }));
+			addLog('info', ['Used pushState for Settings navigation']);
+		} catch (e2) {
+			addLog('error', ['pushState also failed', e2]);
+			showSnackbar({ message: 'Navigation failed. Try refreshing the app.', closable: true });
+		}
+	}
+}
+
+async function checkForUpdateAlternative() {
+	addLog('info', ['Testing alternative Check for App Update...']);
+	try {
+		// Import and run the update check directly
+		const updateResult = await checkForUpdateOnce();
+		addLog('info', ['Update check completed:', updateResult]);
+		showSnackbar({ message: updateResult ? 'Update check completed' : 'No updates available', closable: true });
+	} catch (e) {
+		addLog('error', ['Direct update check failed', e]);
+		showSnackbar({ message: 'Update check failed: ' + String(e), closable: true });
+	}
+}
+
+// Test snooze menu functionality specifically
+async function testSnoozeMenuAndroid() {
+	addLog('info', ['Testing snooze menu Android functionality...']);
+	try {
+		// Find snooze menu elements
+		const snoozeMenus = document.querySelectorAll('.menu-toggle, details[class*="snooze"]');
+		const summaryElements = document.querySelectorAll('summary[aria-label*="Snooze"]');
+		
+		addLog('info', [`Found ${snoozeMenus.length} snooze menu elements, ${summaryElements.length} summary elements`]);
+		
+		if (snoozeMenus.length === 0) {
+			showSnackbar({ message: 'No snooze menus found. Navigate to inbox first.', closable: true });
+			return;
+		}
+		
+		// Try to programmatically open the first snooze menu
+		const firstMenu = snoozeMenus[0] as HTMLDetailsElement;
+		const wasOpen = firstMenu.open;
+		
+		addLog('info', [`Testing snooze menu toggle. Current state: ${wasOpen ? 'open' : 'closed'}`]);
+		
+		// Test the toggle
+		firstMenu.open = !wasOpen;
+		
+		// Wait a bit and check if it worked
+		setTimeout(() => {
+			const newState = firstMenu.open;
+			const worked = newState !== wasOpen;
+			addLog('info', [`Toggle test result: ${worked ? 'SUCCESS' : 'FAILED'}. New state: ${newState ? 'open' : 'closed'}`]);
+			
+			// Reset to original state
+			setTimeout(() => {
+				firstMenu.open = wasOpen;
+			}, 1000);
+			
+			showSnackbar({ 
+				message: worked ? 'Snooze menu toggle test passed' : 'Snooze menu toggle test failed', 
+				closable: true 
+			});
+		}, 100);
+		
+	} catch (e) {
+		addLog('error', ['Snooze menu test failed', e]);
+		showSnackbar({ message: 'Snooze menu test failed: ' + String(e), closable: true });
+	}
+}
+
 </script>
 
 <style>
@@ -2518,6 +2992,124 @@ pre.diag {
 				{#if profileResult}
 					<pre class="diag">{JSON.stringify(profileResult, null, 2)}</pre>
 				{/if}
+			</div>
+		{/if}
+	</Card>
+
+	<Card variant="outlined">
+		<div class="section-header">
+			<div class="section-title">
+				<h2>Android Overflow Button Diagnostics</h2>
+			</div>
+			<Button variant="text" iconType="left" class="copy-button" onclick={() => copySection('Android Overflow Button Diagnostics', androidDiagnostics)}>
+				<Icon icon={iconCopy} />
+				Copy Section
+			</Button>
+		</div>
+		<p style="color: rgb(var(--m3-scheme-on-surface-variant)); margin-bottom: 1rem;">Diagnose Android-specific issues with overflow menu buttons and snooze trailing action menus not responding to taps.</p>
+		
+		<div class="controls">
+			<Button variant="filled" iconType="left" onclick={runAndroidDiagnostics} disabled={androidDiagnostics.running}>
+				<Icon icon={iconPlayArrow} />
+				{androidDiagnostics.running ? 'Running Diagnostics...' : 'Run Android Diagnostics'}
+			</Button>
+			<Button variant="tonal" onclick={navigateToSettingsAlternative}>Try Alternative Settings Navigation</Button>
+			<Button variant="tonal" onclick={checkForUpdateAlternative}>Try Alternative App Update</Button>
+			<Button variant="tonal" onclick={testSnoozeMenuAndroid}>Test Snooze Menu Toggle</Button>
+		</div>
+		
+		{#if androidDiagnostics.deviceInfo}
+			<div style="margin-top: 1.5rem;">
+				<h3 style="color: rgb(var(--m3-scheme-on-surface)); margin-bottom: 0.5rem;">Device Information</h3>
+				<div style="background: rgb(var(--m3-scheme-surface-variant)); color: rgb(var(--m3-scheme-on-surface-variant)); padding: 1rem; border-radius: var(--m3-util-rounding-medium); font-family: 'Roboto Mono', monospace; font-size: 0.875rem;">
+					<div><strong>Android Device:</strong> {androidDiagnostics.deviceInfo.isAndroid ? 'Yes' : 'No'}</div>
+					<div><strong>PWA Mode:</strong> {androidDiagnostics.deviceInfo.isPWA ? 'Yes' : 'No'}</div>
+					<div><strong>Touch Support:</strong> {androidDiagnostics.deviceInfo.touchSupport ? 'Yes' : 'No'}</div>
+					<div><strong>Screen:</strong> {androidDiagnostics.deviceInfo.screen.width}x{androidDiagnostics.deviceInfo.screen.height}</div>
+					<div><strong>Viewport:</strong> {androidDiagnostics.deviceInfo.viewport.width}x{androidDiagnostics.deviceInfo.viewport.height}</div>
+					<div><strong>Pixel Ratio:</strong> {androidDiagnostics.deviceInfo.pixelRatio}</div>
+				</div>
+			</div>
+		{/if}
+		
+		{#if androidDiagnostics.navigationTests.length > 0}
+			<div style="margin-top: 1.5rem;">
+				<h3 style="color: rgb(var(--m3-scheme-on-surface)); margin-bottom: 1rem;">Navigation Tests</h3>
+				<div class="diagnostics-results">
+					{#each androidDiagnostics.navigationTests as result}
+						<div class="diagnostic-item {result.status}">
+							<div class="diagnostic-icon">
+								{#if result.status === 'success'}
+									<Icon icon={iconCheck} />
+								{:else if result.status === 'error'}
+									<Icon icon={iconError} />
+								{:else}
+									<div class="pending-dot"></div>
+								{/if}
+							</div>
+							<div class="diagnostic-content">
+								<div class="diagnostic-name">{result.name}</div>
+								{#if result.message}
+									<div class="diagnostic-message">{result.message}</div>
+								{/if}
+							</div>
+						</div>
+					{/each}
+				</div>
+			</div>
+		{/if}
+		
+		{#if androidDiagnostics.touchEventTests.length > 0}
+			<div style="margin-top: 1.5rem;">
+				<h3 style="color: rgb(var(--m3-scheme-on-surface)); margin-bottom: 1rem;">Touch Event Tests</h3>
+				<div class="diagnostics-results">
+					{#each androidDiagnostics.touchEventTests as result}
+						<div class="diagnostic-item {result.status}">
+							<div class="diagnostic-icon">
+								{#if result.status === 'success'}
+									<Icon icon={iconCheck} />
+								{:else if result.status === 'error'}
+									<Icon icon={iconError} />
+								{:else}
+									<div class="pending-dot"></div>
+								{/if}
+							</div>
+							<div class="diagnostic-content">
+								<div class="diagnostic-name">{result.name}</div>
+								{#if result.message}
+									<div class="diagnostic-message">{result.message}</div>
+								{/if}
+							</div>
+						</div>
+					{/each}
+				</div>
+			</div>
+		{/if}
+		
+		{#if androidDiagnostics.snoozeMenuTests.length > 0}
+			<div style="margin-top: 1.5rem;">
+				<h3 style="color: rgb(var(--m3-scheme-on-surface)); margin-bottom: 1rem;">Snooze Menu Tests</h3>
+				<div class="diagnostics-results">
+					{#each androidDiagnostics.snoozeMenuTests as result}
+						<div class="diagnostic-item {result.status}">
+							<div class="diagnostic-icon">
+								{#if result.status === 'success'}
+									<Icon icon={iconCheck} />
+								{:else if result.status === 'error'}
+									<Icon icon={iconError} />
+								{:else}
+									<div class="pending-dot"></div>
+								{/if}
+							</div>
+							<div class="diagnostic-content">
+								<div class="diagnostic-name">{result.name}</div>
+								{#if result.message}
+									<div class="diagnostic-message">{result.message}</div>
+								{/if}
+							</div>
+						</div>
+					{/each}
+				</div>
 			</div>
 		{/if}
 	</Card>
