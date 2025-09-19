@@ -265,11 +265,6 @@ import { precomputeStatus } from '$lib/stores/precompute';
     }
   }
 
-  // Centralized About dialog opener (used by menu and global events)
-  function doShowAbout() {
-    try { if (overflowDetails) overflowDetails.open = false; } catch (_) {}
-    aboutOpen = true;
-  }
 
   async function doShowPrecomputeSummary() {
     try {
@@ -722,8 +717,6 @@ import { precomputeStatus } from '$lib/stores/precompute';
       } catch (e) {}
     }
     try { window.addEventListener('jmail:show-precompute-logs', handleShowPrecomputeLogs); } catch (e) {}
-    // Allow other code to trigger About dialog reliably
-    try { window.addEventListener('jmail:show-about', doShowAbout); } catch (e) {}
     return () => { try { window.removeEventListener('jmail:show-precompute-logs', handleShowPrecomputeLogs); } catch (e) {} };
   });
 
@@ -1139,7 +1132,7 @@ import { precomputeStatus } from '$lib/stores/precompute';
         
         <div class="menu-section-header">Account</div>
         <MenuItem icon={iconLogout} onclick={doRelogin}>Re-login</MenuItem>
-        <MenuItem icon={iconInfo} onclick={() => { try { window.dispatchEvent(new CustomEvent('jmail:show-about')); } catch (_) { aboutOpen = true; } }}>About</MenuItem>
+        <MenuItem icon={iconInfo} onclick={() => { aboutOpen = true; overflowDetails.open = false; }}>About</MenuItem>
       </Menu>
     </details>
     <Dialog icon={iconInfo} headline="About" bind:open={aboutOpen} closeOnClick={false}>
