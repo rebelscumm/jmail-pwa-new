@@ -697,9 +697,30 @@ import { precomputeStatus } from '$lib/stores/precompute';
 
   onMount(async () => {
     try {
-      const keys = await caches.keys();
-      const cache = keys.find((k: string) => k.startsWith('Jmail-v'));
-      if (cache) cacheVersion = cache.replace('Jmail-v', '');
+      // Try to read cache version from Cache Storage (preferred)
+      try {
+        const keys = await caches.keys();
+        const cache = keys.find((k: string) => k.startsWith('Jmail-v'));
+        if (cache) cacheVersion = cache.replace('Jmail-v', '');
+      } catch (e) {
+        // ignore and continue to next fallback
+      }
+
+      // Fallback: try to read the CACHE_NAME defined in the service worker file
+      if (!cacheVersion || cacheVersion === 'unknown') {
+        try {
+          const r = await fetch('/sw.js', { method: 'GET', cache: 'no-store' });
+          if (r && r.ok) {
+            const swText = await r.text();
+            const m = /CACHE_NAME\s*=\s*['"]Jmail-v([0-9.]+)['"]/i.exec(swText);
+            if (m && m[1]) {
+              cacheVersion = m[1];
+            }
+          }
+        } catch (e) {
+          // ignore - leave cacheVersion as-is
+        }
+      }
     } catch (e) {
       console.error(e);
     }
