@@ -14,7 +14,6 @@ import { precomputeStatus } from '$lib/stores/precompute';
   import { show as showSnackbar } from '$lib/containers/snackbar';
   import { copyGmailDiagnosticsToClipboard, getAndClearGmailDiagnostics } from '$lib/gmail/api';
   import Dialog from '$lib/containers/Dialog.svelte';
-  import { appVersion, buildId } from '$lib/utils/version';
   import { checkForUpdateOnce, hardReloadNow } from '$lib/update/checker';
   import { signOut, acquireTokenInteractive, resolveGoogleClientId, initAuth, getAuthDiagnostics } from '$lib/gmail/auth';
   import { threads as threadsStore } from '$lib/stores/threads';
@@ -1147,16 +1146,13 @@ import { precomputeStatus } from '$lib/stores/precompute';
         <MenuItem icon={iconInfo} onclick={doShowAbout}>About</MenuItem>
       </Menu>
     </details>
-    <Dialog icon={iconInfo} headline="About" bind:open={aboutOpen} closeOnClick={false}>
+    <Dialog icon={iconInfo} headline="About" bind:open={aboutOpen} closeOnClick={false} pushHistory={false}>
       {#snippet children()}
         <div class="about">
-          <div class="row"><span class="k">Version</span><span class="v">{appVersion}</span></div>
-          <div class="row"><span class="k">Build</span><span class="v">{buildId}</span></div>
-          <div class="row"><span class="k">Cache</span><span class="v">{$cacheVersionStore}</span></div>
+          <div class="row"><span class="k">Version</span><span class="v">{$cacheVersionStore}</span></div>
         </div>
       {/snippet}
       {#snippet buttons()}
-        <Button variant="text" disabled={checkingUpdate} onclick={doCheckForUpdates}>{checkingUpdate ? 'Checking…' : 'Check for updates'}</Button>
         <Button variant="text" onclick={() => (aboutOpen = false)}>Close</Button>
       {/snippet}
     </Dialog>

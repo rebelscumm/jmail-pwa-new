@@ -2317,7 +2317,7 @@
       } else {
         log('✅ NO MAJOR ISSUES: Sync appears healthy');
         
-        // Still copy comprehensive diagnostics for analysis
+        // Still copy comprehensive diagnostics for analysis (include human-readable summary)
         const fullDiagnostics = {
           timestamp: new Date().toISOString(),
           conclusion: "No major sync issues detected",
@@ -2329,16 +2329,44 @@
           operations: opsAnalysis,
           debugLog: debugLog.slice(-20) // Last 20 log entries
         };
-        
-        await navigator.clipboard.writeText(JSON.stringify(fullDiagnostics, null, 2));
-        
-        showSnackbar({
-          message: `✅ Sync healthy (${syncAnalysis.discrepancyGmailToDb} thread difference). Full diagnostics copied to clipboard.`,
-          timeout: 6000,
-          closable: true
-        });
+
+        const summaryLine = `Inbox sync diagnostics — gmailThreads=${syncAnalysis?.gmailThreadCount ?? 'unknown'} dbInboxThreads=${syncAnalysis?.dbInboxThreadCount ?? 'unknown'} discrepancy=${syncAnalysis?.discrepancyGmailToDb ?? 'unknown'}`;
+        const payloadText = summaryLine + "\n\n" + JSON.stringify(fullDiagnostics, null, 2);
+        try {
+          await navigator.clipboard.writeText(payloadText);
+        } catch (e) {
+          console.warn('[Inbox] Failed to write diagnostics to clipboard', e);
+        }
+
+        try { showSnackbar({ message: `✅ Sync healthy (${syncAnalysis.discrepancyGmailToDb} thread difference). Full diagnostics copied to clipboard.`, timeout: 6000, closable: true }); } catch (_) {}
       }
       
+      // At the end of successful diagnostics, copy the full diagnostic payload to the clipboard with a short summary
+      try {
+        const fullDiagnostics = {
+          timestamp: new Date().toISOString(),
+          conclusion: syncAnalysis && syncAnalysis.discrepancyGmailToDb !== undefined ? (Math.abs(syncAnalysis.discrepancyGmailToDb) > 0 ? 'Issues detected' : 'No major issues') : 'Completed',
+          environment: envInfo,
+          database: dbIntegrity,
+          store: storeState,
+          gmail: gmailConnectivity,
+          syncAnalysis,
+          operations: opsAnalysis,
+          debugLog
+        };
+
+        const summaryLine = `Diagnostics summary — gmailThreads=${syncAnalysis?.gmailThreadCount ?? 'unknown'} dbInboxThreads=${syncAnalysis?.dbInboxThreadCount ?? 'unknown'} discrepancy=${syncAnalysis?.discrepancyGmailToDb ?? 'unknown'}`;
+        const payloadText = summaryLine + "\n\n" + JSON.stringify(fullDiagnostics, null, 2);
+        try {
+          await navigator.clipboard.writeText(payloadText);
+          log('Diagnostics copied to clipboard');
+        } catch (e) {
+          log('Failed to copy diagnostics to clipboard', e);
+        }
+      } catch (e) {
+        log('Failed to prepare diagnostics payload', e);
+      }
+
       log('🏁 DIAGNOSTICS COMPLETED SUCCESSFULLY');
       return true;
       
@@ -2355,7 +2383,9 @@
       };
       
       try {
-        await navigator.clipboard.writeText(JSON.stringify(errorDiagnostics, null, 2));
+        const errMsg = typeof errorDiagnostics.error === 'string' ? errorDiagnostics.error : (errorDiagnostics.error && (errorDiagnostics.error as any).message) || String(errorDiagnostics.error);
+        const summaryLine = `Diagnostics ERROR — ${errMsg}`;
+        await navigator.clipboard.writeText(summaryLine + "\n\n" + JSON.stringify(errorDiagnostics, null, 2));
       } catch {}
       
       showSnackbar({
