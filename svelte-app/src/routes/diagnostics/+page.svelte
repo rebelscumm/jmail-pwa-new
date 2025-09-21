@@ -2994,7 +2994,35 @@ pre.diag {
 			</div>
 		{/if}
 	</Card>
-	
+
+	<Card variant="outlined">
+		<div class="section-header">
+			<div class="section-title">
+				<h2>Inbox Sync Diagnostics</h2>
+			</div>
+			<Button variant="text" iconType="left" class="copy-button" onclick={() => copySection('Inbox Sync Diagnostics', inboxDiagnostics)}>
+				<Icon icon={iconCopy} />
+				Copy Section
+			</Button>
+		</div>
+		<p style="color: rgb(var(--m3-scheme-on-surface-variant)); margin-bottom: 1rem;">Debug inbox sync issues - excessive pages, wrong email counts, stale data.</p>
+		<div class="controls">
+			<!-- Combined comprehensive inbox sync button -->
+			<Button variant="filled" onclick={runCombinedInboxDiagnostics} title="Run combined inbox diagnostics and actions">
+				<Icon icon={iconDiagnostics} />
+				Run Inbox Sync Diagnostics & Actions
+			</Button>
+			<Button variant="outlined" color="error" onclick={clearLocalInboxData}>Clear local inbox data</Button>
+			<Button variant="text" onclick={() => copySection('Inbox Sync Diagnostics', inboxDiagnostics)}>Copy Section</Button>
+		</div>
+		{#if inboxDiagnostics}
+			<div class="summary">
+				<strong>Inbox Sync Diagnostics</strong>
+				<pre style="white-space:pre-wrap">{JSON.stringify(inboxDiagnostics, null, 2)}</pre>
+			</div>
+		{/if}
+	</Card>
+
 	<Card variant="outlined">
 		<div class="section-header">
 			<div class="section-title">
