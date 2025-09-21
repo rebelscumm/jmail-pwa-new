@@ -9,6 +9,7 @@ import iconError from '@ktibow/iconset-material-symbols/error';
 import iconWarning from '@ktibow/iconset-material-symbols/warning';
 import iconPlayArrow from '@ktibow/iconset-material-symbols/play-arrow';
 import iconBack from '@ktibow/iconset-material-symbols/chevron-left';
+import iconDiagnostics from '@ktibow/iconset-material-symbols/bug-report-outline';
 import Icon from '$lib/misc/_icon.svelte';
 import { show as showSnackbar } from '$lib/containers/snackbar';
 import { checkForUpdateOnce } from '$lib/update/checker';
@@ -1458,6 +1459,22 @@ async function compareInboxCounts() {
 		addLog('info', ['Count comparison completed', comparison]);
 	} catch (e) {
 		addLog('error', ['compareInboxCounts failed', e]);
+	}
+}
+
+// Combined runner for the consolidated inbox sync button
+async function runCombinedInboxDiagnostics() {
+	try {
+ 		addLog('info', ['Running combined inbox diagnostics...']);
+ 		// Run the most impactful diagnostics and actions sequentially
+ 		await diagnoseSyncFailure();
+ 		await comprehensiveSyncAnalysis();
+ 		await compareInboxCounts();
+		// Do not auto-run forced resync here to avoid destructive actions without explicit consent
+		showSnackbar({ message: 'Combined inbox diagnostics completed. Review results and run resync if needed.', closable: true });
+	} catch (e) {
+		addLog('error', ['runCombinedInboxDiagnostics failed', e]);
+		showSnackbar({ message: 'Combined inbox diagnostics failed', closable: true });
 	}
 }
 
@@ -3283,15 +3300,13 @@ pre.diag {
 		</div>
 		<p style="color: rgb(var(--m3-scheme-on-surface-variant)); margin-bottom: 1rem;">Debug inbox sync issues - excessive pages, wrong email counts, stale data.</p>
 		<div class="controls">
-			<Button variant="filled" onclick={diagnoseSyncFailure}>🎯 Diagnose sync failure</Button>
-			<Button variant="filled" onclick={debugInboxSync}>Debug inbox sync state</Button>
-			<Button variant="filled" onclick={comprehensiveSyncAnalysis}>🔍 Comprehensive sync analysis</Button>
-			<Button variant="tonal" onclick={compareInboxCounts}>Compare local vs Gmail counts</Button>
-			<Button variant="tonal" onclick={forcedInboxResync}>⬇️ Force resync missing emails</Button>
+			<!-- Combined comprehensive inbox sync button -->
+			<Button variant="filled" onclick={runCombinedInboxDiagnostics} title="Run combined inbox diagnostics and actions">
+				<Icon icon={iconDiagnostics} />
+				Run Inbox Sync Diagnostics & Actions
+			</Button>
 			<Button variant="outlined" color="error" onclick={clearLocalInboxData}>Clear local inbox data</Button>
-			<Button variant="outlined" onclick={testGmailPagination}>Test Gmail API pagination</Button>
-			<Button variant="text" onclick={identifyStaleThreads}>Identify stale threads</Button>
-			<Button variant="text" onclick={testPaginationHealth}>Test pagination health</Button>
+			<Button variant="text" onclick={() => copySection('Inbox Sync Diagnostics', inboxDiagnostics)}>Copy Section</Button>
 		</div>
 		{#if inboxDiagnostics}
 			<div class="summary">
