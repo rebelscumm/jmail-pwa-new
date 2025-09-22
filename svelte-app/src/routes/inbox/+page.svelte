@@ -27,6 +27,7 @@
   import { trailingHolds } from '$lib/stores/holds';
   import Menu from '$lib/containers/Menu.svelte';
   import MenuItem from '$lib/containers/MenuItem.svelte';
+  import Dialog from '$lib/containers/Dialog.svelte';
   import { searchQuery } from '$lib/stores/search';
   import FilterBar from '$lib/utils/FilterBar.svelte';
   import { filters as filtersStore, applyFilterToThreads, loadFilters } from '$lib/stores/filters';
@@ -122,6 +123,10 @@
   onMount(() => { const id = setInterval(() => { now = Date.now(); }, 250); return () => clearInterval(id); });
   let pullingForward = $state(false);
   let forcingResync = $state(false);
+  let resyncProgress = $state({ running: false, pagesCompleted: 0, pagesTotal: 0, threadsFound: 0, threadsFetched: 0, errors: 0 });
+  let staleDialogOpen = $state(false);
+  let staleCandidates: Array<{ threadId: string; subject?: string; from?: string; labels?: string[] }> = $state([]);
+  let selectedToDelete = $state(new Set<string>());
   // Temporarily lock interactions during coordinated collapses
   let listLocked = $state(false);
   // Restore list lock handler
@@ -1846,18 +1851,23 @@
       let pageCount = 0;
       const maxPages = 200; // safety cap
 
+      // Enumerate pages and update progress
+      resyncProgress = { running: true, pagesCompleted: 0, pagesTotal: 0, threadsFound: 0, threadsFetched: 0, errors: 0 };
       while (pageCount < maxPages) {
         const page = await listThreadIdsByLabelId('INBOX', 100, pageToken);
         pageCount++;
         if (page.ids && page.ids.length) page.ids.forEach((id) => gmailThreadIds.add(id));
+        resyncProgress.pagesCompleted = pageCount;
+        resyncProgress.threadsFound = gmailThreadIds.size;
+        // Update UI-friendly total pages estimate
+        resyncProgress.pagesTotal = Math.max(resyncProgress.pagesTotal, pageCount + (page.nextPageToken ? 1 : 0));
         if (!page.nextPageToken) break;
         pageToken = page.nextPageToken;
       }
 
       const allIds = Array.from(gmailThreadIds);
-      console.log('[Inbox] forcedInboxResync: total Gmail threads to ensure:', allIds.length);
 
-      // Fetch threads in batches and write to DB
+      // Fetch threads in batches and write to DB, updating progress
       const batchSize = 5;
       let fetchedCount = 0;
       let errorCount = 0;
@@ -1885,11 +1895,28 @@
         const failures = results.length - successes;
         fetchedCount += successes;
         errorCount += failures;
-        console.log(`[Inbox] forced resync batch ${Math.floor(i / batchSize) + 1}: fetched ${successes}/${batch.length}, errors ${failures}`);
+        resyncProgress.threadsFetched = fetchedCount;
+        resyncProgress.errors = errorCount;
+        // Yield to UI
+        await new Promise((r) => setTimeout(r, 0));
       }
 
       showSnackbar({ message: `Forced resync complete: fetched ${fetchedCount}, errors ${errorCount}`, timeout: 8000, closable: true });
       console.log('[Inbox] forcedInboxResync complete', { total: allIds.length, fetchedCount, errorCount });
+      try {
+        // Refresh in-memory store from DB so UI reflects newly fetched threads
+        const allThreads = await db.getAll('threads');
+        threadsStore.set(allThreads);
+        // Also refresh messages store (shallow rebuild)
+        const allMessages = await db.getAll('messages');
+        const msgDict: Record<string, import('$lib/types').GmailMessage> = {} as any;
+        for (const m of allMessages) msgDict[m.id] = m;
+        messagesStore.set(msgDict);
+        // End progress
+        resyncProgress.running = false;
+      } catch (e) {
+        console.warn('[Inbox] forcedInboxResync: failed to refresh stores', e);
+      }
     } catch (e) {
       console.error('[Inbox] forcedInboxResync failed', e);
       showSnackbar({ message: 'Forced resync failed: ' + String(e), timeout: 8000, closable: true });
@@ -2565,6 +2592,93 @@
     } catch (_) {}
   }
 
+  // Compute stale candidates and open review dialog
+  async function computeStaleCandidatesAndShowDialog() {
+    try {
+      const { getDB } = await import('$lib/db/indexeddb');
+      const { listThreadIdsByLabelId } = await import('$lib/gmail/api');
+      const db = await getDB();
+
+      const localThreads = await db.getAll('threads');
+      const localInboxThreads = localThreads.filter((t: any) => Array.isArray(t.labelIds) && t.labelIds.includes('INBOX'));
+
+      const gmailThreadIds = new Set<string>();
+      let pageToken: string | undefined = undefined;
+      let pageCount = 0;
+      const maxPages = 50;
+      while (pageCount < maxPages) {
+        const page = await listThreadIdsByLabelId('INBOX', 100, pageToken);
+        pageCount++;
+        if (page.ids && page.ids.length) page.ids.forEach((id) => gmailThreadIds.add(id));
+        if (!page.nextPageToken) break;
+        pageToken = page.nextPageToken;
+      }
+
+      const stale = localInboxThreads.filter((t: any) => !gmailThreadIds.has(t.threadId));
+      staleCandidates = stale.map((t: any) => ({ threadId: t.threadId, subject: t.lastMsgMeta?.subject, from: t.lastMsgMeta?.from, labels: t.labelIds }));
+      selectedToDelete = new Set(staleCandidates.map(s => s.threadId));
+      staleDialogOpen = true;
+    } catch (e) {
+      console.error('computeStaleCandidatesAndShowDialog failed', e);
+      showSnackbar({ message: 'Failed to compute stale threads', closable: true });
+    }
+  }
+
+  function toggleStaleSelection(threadId: string) {
+    try {
+      if (selectedToDelete.has(threadId)) selectedToDelete.delete(threadId);
+      else selectedToDelete.add(threadId);
+      // Reassign to trigger reactive updates
+      selectedToDelete = new Set(selectedToDelete);
+    } catch (e) {
+      console.error('toggleStaleSelection failed', e);
+    }
+  }
+
+  async function deleteSelectedStaleThreads() {
+    try {
+      const db = await getDB();
+      const toDelete = Array.from(selectedToDelete || []);
+      if (!toDelete.length) {
+        showSnackbar({ message: 'No threads selected', closable: true });
+        return;
+      }
+      const txThreads = db.transaction('threads', 'readwrite');
+      for (const id of toDelete) {
+        try { await txThreads.store.delete(id); } catch (_) {}
+      }
+      await txThreads.done;
+
+      // Also remove messages belonging to deleted threads
+      try {
+        const allMessages = await db.getAll('messages');
+        const txMsgs = db.transaction('messages', 'readwrite');
+        for (const m of allMessages) {
+          if (toDelete.includes(m.threadId)) {
+            try { await txMsgs.store.delete(m.id); } catch (_) {}
+          }
+        }
+        await txMsgs.done;
+      } catch (_) {}
+
+      // Refresh live stores
+      const allThreads = await db.getAll('threads');
+      threadsStore.set(allThreads);
+      const allMessages = await db.getAll('messages');
+      const msgDict: Record<string, import('$lib/types').GmailMessage> = {} as any;
+      for (const m of allMessages) msgDict[m.id] = m;
+      messagesStore.set(msgDict);
+
+      showSnackbar({ message: `Deleted ${toDelete.length} local thread(s)`, closable: true });
+      staleDialogOpen = false;
+      selectedToDelete = new Set();
+      staleCandidates = [];
+    } catch (e) {
+      console.error('deleteSelectedStaleThreads failed', e);
+      showSnackbar({ message: 'Failed to delete selected threads', closable: true });
+    }
+  }
+
   const can10m = $derived.by(() => {
     try {
       return Object.keys($settings?.labelMapping || {}).some((k)=>k==='10m' && $settings?.labelMapping?.[k]);
@@ -2607,6 +2721,35 @@
   <div style="display:grid; place-items:center; height:70vh;">
     <LoadingIndicator />
   </div>
+  
+  <!-- Stale threads review dialog -->
+  <Dialog headline="Review stale local threads" bind:open={staleDialogOpen} closeOnEsc={true} closeOnClick={false}>
+    {#snippet children()}
+      <div style="max-height:40vh; overflow:auto;">
+        {#if staleCandidates && staleCandidates.length}
+          <ul style="list-style:none; padding:0; margin:0;">
+            {#each staleCandidates as s}
+              <li style="display:flex; align-items:center; gap:0.5rem; padding:0.5rem; border-bottom:1px solid rgba(0,0,0,0.04);">
+                <input type="checkbox" checked={selectedToDelete.has(s.threadId)} onchange={() => toggleStaleSelection(s.threadId)} />
+                <div style="flex:1;">
+                  <div style="font-weight:600">{s.subject || '(no subject)'}</div>
+                  <div style="font-size:0.85rem; color: rgb(var(--m3-scheme-on-surface-variant));">{s.from || ''} • {s.threadId}</div>
+                </div>
+              </li>
+            {/each}
+          </ul>
+        {:else}
+          <p>No stale threads detected.</p>
+        {/if}
+      </div>
+    {/snippet}
+    {#snippet buttons()}
+      <div class="btns">
+        <Button variant="text" onclick={() => { staleDialogOpen = false; }}>Cancel</Button>
+        <Button variant="outlined" color="error" onclick={deleteSelectedStaleThreads}>Delete selected</Button>
+      </div>
+    {/snippet}
+  </Dialog>
 {:else}
   {#if apiErrorStatus === 403}
     <Card variant="filled" style="max-width:36rem; margin: 0 auto 1rem;">
@@ -2765,6 +2908,17 @@
       >
         <Icon icon={iconSync} />
       </Button>
+      <Button variant="outlined" onclick={computeStaleCandidatesAndShowDialog} title="Find local threads not present on Gmail">Find stale local threads</Button>
+      {#if resyncProgress.running}
+        <div style="display:flex; align-items:center; gap:0.5rem; margin-left:0.5rem;">
+          <div style="width:160px">
+            <div style="height:6px; background:var(--m3-scheme-surface-variant); border-radius:4px; overflow:hidden;">
+              <div style="height:100%; background:linear-gradient(90deg, rgb(var(--m3-scheme-primary)), rgb(var(--m3-scheme-primary-container))); width: {Math.min(100, resyncProgress.threadsFetched / Math.max(1, resyncProgress.threadsFound) * 100)}%; transition: width 200ms;"></div>
+            </div>
+          </div>
+          <div style="font-size:0.85rem; color: rgb(var(--m3-scheme-on-surface-variant));">{resyncProgress.threadsFetched}/{resyncProgress.threadsFound} threads</div>
+        </div>
+      {/if}
       <Button 
         variant="outlined" 
         onclick={async () => {
