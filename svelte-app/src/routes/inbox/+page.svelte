@@ -1385,7 +1385,7 @@
                 const msgsStore = tx.objectStore('messages');
                 const threadsStoreDb = tx.objectStore('threads');
                 for (const m of f.messages) {
-                  try { msgsStore.put(m); storedMessages++; } catch (e) { console.error(`[AuthSync] Phase 1b: Failed to store message ${m.id}:`, e); }
+                  try { msgsStore.put(m); } catch (e) { console.error(`[AuthSync] Phase 1b: Failed to store message ${m.id}:`, e); }
                 }
                 const labels = new Set<string>(f.thread.labelIds || []);
                 labels.add('INBOX');
@@ -1968,21 +1968,32 @@
     try {
       showSnackbar({ message: 'Starting forced inbox resync...', timeout: 3000, closable: true });
       const db = await getDB();
-      const { listThreadIdsByLabelId, getThreadSummary } = await import('$lib/gmail/api');
+      const { listInboxMessageIds, getMessageMetadata, getThreadSummary } = await import('$lib/gmail/api');
 
       const gmailThreadIds = new Set<string>();
       let pageToken: string | undefined = undefined;
       let pageCount = 0;
       const maxPages = 200; // safety cap
 
-      // Enumerate pages and update progress
+      // Enumerate pages and update progress (use message-based approach like authoritative sync)
       resyncProgress = { running: true, pagesCompleted: 0, pagesTotal: 0, threadsFound: 0, threadsFetched: 0, errors: 0 };
       while (pageCount < maxPages) {
-        const page = await listThreadIdsByLabelId('INBOX', 100, pageToken);
+        const page = await listInboxMessageIds(500, pageToken);
         pageCount++;
-        if (page.ids && page.ids.length) page.ids.forEach((id) => gmailThreadIds.add(id));
         resyncProgress.pagesCompleted = pageCount;
-        resyncProgress.threadsFound = gmailThreadIds.size;
+        
+        if (page.ids && page.ids.length) {
+          // Extract threadIds from message metadata to ensure only INBOX messages are considered
+          const msgs = await mapWithConcurrency(page.ids, 4, async (id: string) => {
+            try { 
+              const m = await getMessageMetadata(id); 
+              if (m && m.threadId) gmailThreadIds.add(m.threadId);
+              return m; 
+            } catch (_) { return null; }
+          });
+          resyncProgress.threadsFound = gmailThreadIds.size;
+        }
+        
         // Update UI-friendly total pages estimate
         resyncProgress.pagesTotal = Math.max(resyncProgress.pagesTotal, pageCount + (page.nextPageToken ? 1 : 0));
         if (!page.nextPageToken) break;
