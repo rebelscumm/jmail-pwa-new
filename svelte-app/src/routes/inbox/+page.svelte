@@ -35,6 +35,32 @@
   import Icon from '$lib/misc/_icon.svelte';
   import iconSync from '@ktibow/iconset-material-symbols/sync';
 
+  // Helper: check pending ops with retries; returns array of ops, or null if lookup failed
+  async function getPendingOpsWithRetry(db: any, scopeKey: string, attempts = 3): Promise<any[] | null> {
+    for (let i = 0; i < attempts; i++) {
+      try {
+        const res = await db.getAllFromIndex('ops', 'by_scopeKey', scopeKey);
+        return res || [];
+      } catch (e) {
+        // small backoff before retry
+        await new Promise(r => setTimeout(r, 200 * (i + 1)));
+      }
+    }
+    return null; // unresolved
+  }
+
+  // Helper: show a snackbar with choice buttons and return the choice key
+  function promptSnackbarChoice(message: string, choices: string[]): Promise<string> {
+    return new Promise((resolve) => {
+      const actions: Record<string, () => void> = {};
+      for (const c of choices) {
+        actions[c] = () => { resolve(c); };
+      }
+      // no timeout so user can decide; closable true
+      showSnackbar({ message, actions, timeout: null, closable: true });
+    });
+  }
+
   // Keyboard shortcut handling
   function handleKeyboardShortcuts(event: KeyboardEvent) {
     // Only handle shortcuts when not typing in inputs, textareas, or content-editable elements
@@ -1196,18 +1222,28 @@
               }
               try { 
                 // Check for pending operations before storing thread
-                const pendingOps = await db.getAllFromIndex('ops', 'by_scopeKey', f.thread.threadId);
-                const hasPendingLabelChanges = pendingOps.some(op => 
-                  op.op.type === 'batchModify' && 
-                  (op.op.addLabelIds.includes('INBOX') || op.op.removeLabelIds.includes('INBOX'))
-                );
-                
-                if (hasPendingLabelChanges) {
-                  console.log(`[AuthSync] Skipping thread ${f.thread.threadId} storage - has pending operations`);
+                // Check pending ops with retries to avoid transient IDB errors
+                const pendingOps = await getPendingOpsWithRetry(db, f.thread.threadId, 3);
+                if (pendingOps === null) {
+                  // couldn't determine pending ops; prompt user before resurrecting many threads
+                  const wouldResurrect = 1; // per-thread count
+                  const choice = await promptSnackbarChoice(`Unable to determine pending operations for some threads. This thread would be re-imported. Proceed with this thread?`, ['Proceed', 'Skip']);
+                  if (choice !== 'Proceed') {
+                    console.log(`[AuthSync] Skipping thread ${f.thread.threadId} storage - user chose Skip`);
+                  } else {
+                    await txThreads.store.put(f.thread);
+                    storedThreads++;
+                    console.log(`[AuthSync] Stored thread ${f.thread.threadId} with labels: ${f.thread.labelIds.join(',')}`);
+                  }
                 } else {
-                  await txThreads.store.put(f.thread); 
-                  storedThreads++;
-                  console.log(`[AuthSync] Stored thread ${f.thread.threadId} with labels: ${f.thread.labelIds.join(',')}`);
+                  const hasPendingLabelChanges = pendingOps.some((op: any) => op.op?.type === 'batchModify' && ((op.op.addLabelIds || []).includes('INBOX') || (op.op.removeLabelIds || []).includes('INBOX')));
+                  if (hasPendingLabelChanges) {
+                    console.log(`[AuthSync] Skipping thread ${f.thread.threadId} storage - has pending operations`);
+                  } else {
+                    await txThreads.store.put(f.thread);
+                    storedThreads++;
+                    console.log(`[AuthSync] Stored thread ${f.thread.threadId} with labels: ${f.thread.labelIds.join(',')}`);
+                  }
                 }
               } catch (e) {
                 console.error(`[AuthSync] Failed to store thread ${f.thread.threadId}:`, e);
@@ -1325,51 +1361,43 @@
           let newThreadsStored = 0;
           
           if (fetched.some(f => !!f)) {
-            console.log(`[AuthSync] Phase 1b: Creating fresh transactions for storing missing threads...`);
-            const txMsgsA = db.transaction('messages', 'readwrite');
-            const txThreadsA = db.transaction('threads', 'readwrite');
-            
+          console.log(`[AuthSync] Phase 1b: Creating fresh transactions for storing missing threads (per-thread transactions)...`);
+            let newThreadsStored = 0;
             for (const f of fetched) {
               if (!f) continue;
               try {
-                for (const m of f.messages) { 
-                  try { await txMsgsA.store.put(m); } catch (e) {
-                    console.error(`[AuthSync] Phase 1b: Failed to store message ${m.id}:`, e);
-                  } 
-                }
-                // Check for pending operations before storing 
-                const pendingOps = await db.getAllFromIndex('ops', 'by_scopeKey', f.thread.threadId);
-                const hasPendingLabelChanges = pendingOps.some(op => 
-                  op.op.type === 'batchModify' && 
-                  (op.op.addLabelIds.includes('INBOX') || op.op.removeLabelIds.includes('INBOX'))
-                );
-                
-                if (hasPendingLabelChanges) {
-                  console.log(`[AuthSync] Phase 1b: Skipping new thread ${f.thread.threadId} - has pending label operations`);
+                // Check pending ops with retry to avoid transient IDB errors
+                const pendingOps = await getPendingOpsWithRetry(db, f.thread.threadId, 3);
+                if (pendingOps !== null) {
+                  const hasPendingLabelChanges = (pendingOps || []).some((op: any) => op.op?.type === 'batchModify' && ((op.op.addLabelIds || []).includes('INBOX') || (op.op.removeLabelIds || []).includes('INBOX')));
+                  if (hasPendingLabelChanges) {
+                    console.log(`[AuthSync] Phase 1b: Skipping new thread ${f.thread.threadId} - has pending label operations`);
+                    continue;
+                  }
+                } else {
+                  // If we couldn't determine pending ops, skip this thread to be safe
+                  console.log(`[AuthSync] Phase 1b: Skipping new thread ${f.thread.threadId} - pending-ops lookup unavailable`);
                   continue;
                 }
-                
-                // Store new thread with INBOX label if no pending operations
+
+                // Per-thread short transaction
+                const tx = db.transaction(['messages', 'threads'], 'readwrite');
+                const msgsStore = tx.objectStore('messages');
+                const threadsStoreDb = tx.objectStore('threads');
+                for (const m of f.messages) {
+                  try { msgsStore.put(m); storedMessages++; } catch (e) { console.error(`[AuthSync] Phase 1b: Failed to store message ${m.id}:`, e); }
+                }
                 const labels = new Set<string>(f.thread.labelIds || []);
                 labels.add('INBOX');
                 const threadWithInbox = { ...f.thread, labelIds: Array.from(labels) } as any;
-                await txThreadsA.store.put(threadWithInbox);
-                
-                newThreadsStored++;
+                try { threadsStoreDb.put(threadWithInbox); newThreadsStored++; } catch (e) { console.error(`[AuthSync] Phase 1b: Failed to store thread ${f.thread.threadId}:`, e); }
+                await new Promise((res) => { tx.oncomplete = () => res(undefined); tx.onerror = () => res(undefined); tx.onabort = () => res(undefined); });
                 console.log(`[AuthSync] Phase 1b: Stored new thread ${f.thread.threadId} with INBOX label, labels: ${Array.from(labels).join(',')}`);
-                
               } catch (e) {
-                console.error(`[AuthSync] Phase 1b: Failed to process thread ${f.thread.threadId}:`, e);
+                console.error(`[AuthSync] Phase 1b: Failed to process thread ${f?.thread?.threadId || '<unknown>'}:`, e);
               }
             }
-            
-            try {
-              await txMsgsA.done; 
-              await txThreadsA.done;
-              console.log(`[AuthSync] Phase 1b: Missing threads storage transactions completed successfully`);
-            } catch (e) {
-              console.error(`[AuthSync] Phase 1b: Transaction completion failed:`, e);
-            }
+            console.log(`[AuthSync] Phase 1b: Missing threads storage completed: ${newThreadsStored} new threads stored`);
           }
           
           console.log(`[AuthSync] Phase 1b: Stored ${newThreadsStored} new threads with INBOX labels`);
@@ -3263,4 +3291,5 @@
   .summary-btn { cursor: pointer; }
   .sort[open] > :global(.m3-container) { position: absolute; right: 0; margin-top: 0.25rem; }
 </style>
+
 
