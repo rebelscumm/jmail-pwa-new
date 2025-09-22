@@ -1232,12 +1232,27 @@
         for (const tid of seenThreadIds) {
           try {
             const existing = await db.get('threads', tid) as any | undefined;
+            // Determine if there are pending ops that would conflict with label updates
+            let hasPendingLabelChanges = false;
+            try {
+              const pendingOps = await db.getAllFromIndex('ops', 'by_scopeKey', tid);
+              hasPendingLabelChanges = pendingOps.some(op => op.op?.type === 'batchModify' && (op.op.addLabelIds?.includes('INBOX') || op.op.removeLabelIds?.includes('INBOX')));
+            } catch (_) {
+              // If index lookup fails, conservatively mark pending as false so we attempt fetch/update
+              hasPendingLabelChanges = false;
+            }
+
             if (!existing) {
               console.log(`[AuthSync] Thread ${tid} missing from database, will fetch`);
               toFetch.push(tid);
             } else if (!Array.isArray(existing.labelIds) || !existing.labelIds.includes('INBOX')) {
-              console.log(`[AuthSync] Thread ${tid} exists but missing INBOX label, current labels: ${existing.labelIds?.join(',') || 'none'}`);
-              toUpdateLabelsOnly.push({threadId: tid, existing});
+              if (hasPendingLabelChanges) {
+                console.log(`[AuthSync] Thread ${tid} exists but has pending ops; skipping label update`);
+                // skip quick update; will be handled by Phase 1b or later
+              } else {
+                console.log(`[AuthSync] Thread ${tid} exists but missing INBOX label, current labels: ${existing.labelIds?.join(',') || 'none'}`);
+                toUpdateLabelsOnly.push({threadId: tid, existing});
+              }
             }
           } catch (e) {
             console.error(`[AuthSync] Error checking thread ${tid}:`, e);
@@ -1250,41 +1265,27 @@
         
         // Phase 1a: Update existing threads with INBOX label (fast path)
         if (toUpdateLabelsOnly.length > 0) {
-          console.log(`[AuthSync] Phase 1a: Adding INBOX labels to existing threads...`);
+          console.log(`[AuthSync] Phase 1a: Adding INBOX labels to existing threads (batched)...`);
           const txThreadsUpdate = db.transaction('threads', 'readwrite');
+          const putPromises: Array<Promise<any>> = [];
           let quickUpdates = 0;
-          
+
           for (const {threadId, existing} of toUpdateLabelsOnly) {
             try {
-              // Check if this thread was optimistically modified (e.g., archived/deleted locally)
-              const localHasInbox = Array.isArray(existing.labelIds) && existing.labelIds.includes('INBOX');
-              
-              // If the local thread doesn't have INBOX but Gmail says it should, this might be an optimistic change
-              // Check if there are pending operations for this thread
-              const pendingOps = await db.getAllFromIndex('ops', 'by_scopeKey', threadId);
-              const hasPendingLabelChanges = pendingOps.some(op => 
-                op.op.type === 'batchModify' && 
-                (op.op.addLabelIds.includes('INBOX') || op.op.removeLabelIds.includes('INBOX'))
-              );
-              
-              if (hasPendingLabelChanges) {
-                console.log(`[AuthSync] Phase 1a: Skipping thread ${threadId} - has pending label operations`);
-                continue;
-              }
-              
-              // Only add INBOX if not optimistically removed
               const labels = new Set<string>(existing.labelIds || []);
               labels.add('INBOX');
-              const updatedThread = { ...existing, labelIds: Array.from(labels) };
-              await txThreadsUpdate.store.put(updatedThread);
+              const updatedThread = { ...existing, labelIds: Array.from(labels) } as any;
+              // queue puts without awaiting to keep transaction alive
+              putPromises.push(txThreadsUpdate.store.put(updatedThread));
               quickUpdates++;
-              console.log(`[AuthSync] Phase 1a: Added INBOX to existing thread ${threadId}, labels: ${Array.from(labels).join(',')}`);
+              console.log(`[AuthSync] Phase 1a: Queued INBOX add for thread ${threadId}, labels: ${Array.from(labels).join(',')}`);
             } catch (e) {
-              console.error(`[AuthSync] Phase 1a: Failed to update thread ${threadId}:`, e);
+              console.error(`[AuthSync] Phase 1a: Failed to prepare update for thread ${threadId}:`, e);
             }
           }
-          
+
           try {
+            await Promise.all(putPromises);
             await txThreadsUpdate.done;
             console.log(`[AuthSync] Phase 1a: Quick INBOX label updates completed: ${quickUpdates} threads`);
           } catch (e) {
