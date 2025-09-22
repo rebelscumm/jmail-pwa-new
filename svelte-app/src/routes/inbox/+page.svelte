@@ -32,7 +32,7 @@
   import { filters as filtersStore, applyFilterToThreads, loadFilters } from '$lib/stores/filters';
   import { aiSummarizeSubject, aiSummarizeEmail } from '$lib/ai/providers';
   import Icon from '$lib/misc/_icon.svelte';
-  import iconDiagnostics from '@ktibow/iconset-material-symbols/bug-report-outline';
+  import iconSync from '@ktibow/iconset-material-symbols/sync';
 
   // Keyboard shortcut handling
   function handleKeyboardShortcuts(event: KeyboardEvent) {
@@ -121,6 +121,7 @@
   let now = $state(Date.now());
   onMount(() => { const id = setInterval(() => { now = Date.now(); }, 250); return () => clearInterval(id); });
   let pullingForward = $state(false);
+  let forcingResync = $state(false);
   // Temporarily lock interactions during coordinated collapses
   let listLocked = $state(false);
   // Restore list lock handler
@@ -1831,6 +1832,72 @@
     } catch (_) {}
   }
 
+  // Force a full inbox resync: enumerate all Gmail thread IDs for INBOX and ensure local DB contains each thread
+  async function forcedInboxResync() {
+    if (forcingResync) return;
+    forcingResync = true;
+    try {
+      showSnackbar({ message: 'Starting forced inbox resync...', timeout: 3000, closable: true });
+      const db = await getDB();
+      const { listThreadIdsByLabelId, getThreadSummary } = await import('$lib/gmail/api');
+
+      const gmailThreadIds = new Set<string>();
+      let pageToken: string | undefined = undefined;
+      let pageCount = 0;
+      const maxPages = 200; // safety cap
+
+      while (pageCount < maxPages) {
+        const page = await listThreadIdsByLabelId('INBOX', 100, pageToken);
+        pageCount++;
+        if (page.ids && page.ids.length) page.ids.forEach((id) => gmailThreadIds.add(id));
+        if (!page.nextPageToken) break;
+        pageToken = page.nextPageToken;
+      }
+
+      const allIds = Array.from(gmailThreadIds);
+      console.log('[Inbox] forcedInboxResync: total Gmail threads to ensure:', allIds.length);
+
+      // Fetch threads in batches and write to DB
+      const batchSize = 5;
+      let fetchedCount = 0;
+      let errorCount = 0;
+
+      for (let i = 0; i < allIds.length; i += batchSize) {
+        const batch = allIds.slice(i, i + batchSize);
+        const results = await Promise.allSettled(batch.map(async (threadId) => {
+          try {
+            const threadSummary = await getThreadSummary(threadId);
+            const txMsgs = db.transaction('messages', 'readwrite');
+            const txThreads = db.transaction('threads', 'readwrite');
+            for (const m of threadSummary.messages) {
+              try { await txMsgs.store.put(m); } catch (_) {}
+            }
+            await txMsgs.done;
+            try { await txThreads.store.put(threadSummary.thread); } catch (_) {}
+            await txThreads.done;
+            return { success: true };
+          } catch (e) {
+            return { success: false, error: String(e) };
+          }
+        }));
+
+        const successes = results.filter(r => r.status === 'fulfilled' && (r as any).value.success).length;
+        const failures = results.length - successes;
+        fetchedCount += successes;
+        errorCount += failures;
+        console.log(`[Inbox] forced resync batch ${Math.floor(i / batchSize) + 1}: fetched ${successes}/${batch.length}, errors ${failures}`);
+      }
+
+      showSnackbar({ message: `Forced resync complete: fetched ${fetchedCount}, errors ${errorCount}`, timeout: 8000, closable: true });
+      console.log('[Inbox] forcedInboxResync complete', { total: allIds.length, fetchedCount, errorCount });
+    } catch (e) {
+      console.error('[Inbox] forcedInboxResync failed', e);
+      showSnackbar({ message: 'Forced resync failed: ' + String(e), timeout: 8000, closable: true });
+    } finally {
+      forcingResync = false;
+    }
+  }
+
   async function loadMore() {
     if (!nextPageToken) return;
     syncing = true;
@@ -2683,19 +2750,20 @@
       <Button 
         variant="outlined" 
         iconType="full"
+        disabled={forcingResync}
         onclick={(e: MouseEvent) => {
           const isAndroid = /Android/i.test(navigator.userAgent);
           if (isAndroid) {
             e.preventDefault();
-            setTimeout(() => runInboxSyncDiagnostics(), 16);
+            setTimeout(() => forcedInboxResync(), 16);
           } else {
-            runInboxSyncDiagnostics();
+            forcedInboxResync();
           }
         }}
-        aria-label="Run comprehensive inbox sync diagnostics and auto-repair"
-        title="Run sync diagnostics & auto-repair"
+        aria-label="Force resync inbox with Gmail server"
+        title="Force resync inbox with Gmail server"
       >
-        <Icon icon={iconDiagnostics} />
+        <Icon icon={iconSync} />
       </Button>
       <Button 
         variant="outlined" 
