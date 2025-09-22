@@ -976,6 +976,42 @@ async function copyAllSections() {
 	}
 }
 
+// Helper: ensure comprehensive analysis is available and copy to clipboard
+async function copyComprehensiveAnalysis() {
+	try {
+		// Ensure analysis exists
+        if (!inboxDiagnostics || !inboxDiagnostics.comprehensiveAnalysis) {
+            addLog('info', ['Comprehensive analysis missing - running now']);
+            await comprehensiveSyncAnalysis();
+        }
+
+        // Build a richer diagnostics payload but avoid including secrets
+        const extra = {
+            comprehensiveAnalysis: inboxDiagnostics?.comprehensiveAnalysis || null,
+            profileResult: profileResult || null,
+            endpointResults: endpointResults || null,
+            parsedDiag: parsedDiag || null,
+            logs: logs.slice(-300)
+        };
+
+        // Reuse centralized helper which already implements robust clipboard fallbacks
+        const { copyGmailDiagnosticsToClipboard } = await import('$lib/gmail/api');
+        const ok = await copyGmailDiagnosticsToClipboard(extra);
+
+        if (ok) {
+            addLog('info', ['copied comprehensive analysis via centralized helper']);
+            showSnackbar({ message: 'Comprehensive analysis copied to clipboard', closable: true });
+        } else {
+            // The helper already attempted fallbacks; surface a friendly note
+            addLog('info', ['centralized copy helper returned false; fallback applied']);
+            showSnackbar({ message: 'Comprehensive analysis prepared (see console). Clipboard fallback may be restricted.', closable: true });
+        }
+    } catch (e) {
+        addLog('error', ['failed to copy comprehensive analysis', e]);
+        showSnackbar({ message: 'Failed to copy comprehensive analysis: ' + String(e), closable: true });
+    }
+}
+
 function clearLogs() { logs = []; }
 
 onDestroy(() => {
@@ -3013,6 +3049,10 @@ pre.diag {
 				Run Inbox Sync Diagnostics & Actions
 			</Button>
 			<Button variant="outlined" color="error" onclick={clearLocalInboxData}>Clear local inbox data</Button>
+			<Button variant="tonal" iconType="left" onclick={copyComprehensiveAnalysis} title="Copy the comprehensive sync analysis to clipboard"> 
+				<Icon icon={iconCopy} />
+				Copy Comprehensive Analysis
+			</Button>
 			<Button variant="text" onclick={() => copySection('Inbox Sync Diagnostics', inboxDiagnostics)}>Copy Section</Button>
 		</div>
 		{#if inboxDiagnostics}
