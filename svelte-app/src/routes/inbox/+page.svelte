@@ -684,9 +684,9 @@
                   );
                   
                   if (pendingLabelOps.length > 0) {
-                    console.log(`[Inbox] Delaying sync - ${pendingLabelOps.length} pending INBOX operations found`);
-                    // Wait a bit for operations to flush before syncing
-                    await new Promise(resolve => setTimeout(resolve, 5000));
+                    console.log(`[Inbox] Skipping background sync - ${pendingLabelOps.length} pending INBOX operations found`);
+                    console.log(`[Inbox] Background sync will be retried later when operations complete`);
+                    return; // Skip sync entirely to avoid resurrecting locally-deleted threads
                   }
                   
                   const localThreads = await db.getAll('threads');
@@ -840,9 +840,9 @@
             );
             
             if (pendingLabelOps.length > 0) {
-              console.log(`[Inbox] Delaying sync - ${pendingLabelOps.length} pending INBOX operations found`);
-              // Wait a bit for operations to flush before syncing
-              await new Promise(resolve => setTimeout(resolve, 5000));
+              console.log(`[Inbox] Skipping background sync - ${pendingLabelOps.length} pending INBOX operations found`);
+              console.log(`[Inbox] Background sync will be retried later when operations complete`);
+              return; // Skip sync entirely to avoid resurrecting locally-deleted threads
             }
             
             const localThreads = await db.getAll('threads');
