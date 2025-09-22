@@ -1026,6 +1026,19 @@
 
       // Stream thread ids (preferred) rather than messages to avoid missing
       // threads due to message-level pagination nuances.
+      // Helper: fetch thread IDs by enumerating INBOX messages and extracting their threadIds
+      async function fetchInboxThreadIdsByMessagePage(pageSize: number, pageToken?: string) {
+        // listInboxMessageIds returns message ids; we need to fetch message metadata to get threadIds
+        const page = await listInboxMessageIds(pageSize, pageToken);
+        const msgIds = page.ids || [];
+        if (!msgIds.length) return { ids: [] as string[], nextPageToken: page.nextPageToken };
+        const msgs = await mapWithConcurrency(msgIds, 4, async (id: string) => {
+          try { const m = await getMessageMetadata(id); return m; } catch (_) { return null; }
+        });
+        const threadIds = Array.from(new Set((msgs || []).filter(Boolean).map((m: any) => m.threadId).filter(Boolean)));
+        return { ids: threadIds, nextPageToken: page.nextPageToken };
+      }
+
       while (true) {
         totalPagesAttempted++;
         
@@ -1042,9 +1055,9 @@
         while (attempt <= maxRetries && !page) {
           attempt += 1;
           try {
-            // Use direct thread listing which is much more efficient than message->thread conversion
+            // Enumerate INBOX by messages to ensure only threads with INBOX messages are considered
             page = await Promise.race([
-              listThreadIdsByLabelId('INBOX', pageSize, pageToken),
+              fetchInboxThreadIdsByMessagePage(pageSize, pageToken),
               new Promise((_, rej) => setTimeout(() => rej(new Error('page_timeout')), perPageTimeoutMs))
             ]) as { ids: string[]; nextPageToken?: string };
           } catch (e) {
