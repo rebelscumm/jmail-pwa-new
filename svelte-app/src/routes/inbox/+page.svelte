@@ -1381,37 +1381,65 @@
       }
 
       console.log(`[AuthSync] Phase 2: Removing INBOX label from threads not seen in Gmail...`);
-      const txThreads = db.transaction('threads', 'readwrite');
-      const allThreads = await txThreads.store.getAll();
+      // Read all threads and ops once to avoid per-iteration async calls that can
+      // prematurely finish transactions. We'll compute updates in-memory and
+      // then write them in a single short-lived transaction.
+      const allThreads = await db.getAll('threads');
       let threadsUpdated = 0;
-      
+
       console.log(`[AuthSync] Phase 2: Checking ${allThreads.length} local threads for stale INBOX labels`);
-      
+
+      // Prefetch all pending ops and group by scopeKey to avoid repeated index lookups
+      let opsByScope: Record<string, any[]> = {};
+      try {
+        const allOps = await db.getAll('ops');
+        for (const op of (allOps || [])) {
+          try {
+            const key = op.scopeKey || (op.op && op.op.threadId) || '';
+            if (!key) continue;
+            opsByScope[key] = opsByScope[key] || [];
+            opsByScope[key].push(op);
+          } catch (_) {}
+        }
+      } catch (_) {
+        opsByScope = {};
+      }
+
+      const updates: any[] = [];
       for (const t of (allThreads || [])) {
         try {
           const labels = Array.isArray(t.labelIds) ? t.labelIds.slice() : [];
           if (labels.includes('INBOX') && !seenThreadIds.has(t.threadId)) {
-            // Check if this thread has pending operations before removing INBOX
-            const pendingOps = await db.getAllFromIndex('ops', 'by_scopeKey', t.threadId);
+            const pendingOps = opsByScope[t.threadId] || [];
             const hasPendingOperations = pendingOps.length > 0;
-            
             if (hasPendingOperations) {
               console.log(`[AuthSync] Phase 2: Skipping INBOX removal from thread ${t.threadId} - has pending operations`);
               continue;
             }
-            
             const next = { ...t, labelIds: labels.filter((l) => l !== 'INBOX') } as any;
-            await txThreads.store.put(next);
+            updates.push(next);
             threadsUpdated++;
-            console.log(`[AuthSync] Phase 2: Removed INBOX label from stale thread: ${t.threadId}`);
+            console.log(`[AuthSync] Phase 2: Scheduled INBOX removal for thread: ${t.threadId}`);
           }
         } catch (e) {
           console.error(`[AuthSync] Phase 2: Error processing thread ${t.threadId}:`, e);
         }
       }
-      
-      console.log(`[AuthSync] Phase 2: Reconciliation complete - removed INBOX from ${threadsUpdated} stale threads`);
-      await txThreads.done;
+
+      if (updates.length > 0) {
+        try {
+          const txThreadsPut = db.transaction('threads', 'readwrite');
+          for (const u of updates) {
+            try { txThreadsPut.store.put(u); } catch (e) { console.error('[AuthSync] Phase 2: put failed for thread', u.threadId, e); }
+          }
+          await txThreadsPut.done;
+          console.log(`[AuthSync] Phase 2: Reconciliation complete - removed INBOX from ${threadsUpdated} stale threads`);
+        } catch (e) {
+          console.error(`[AuthSync] Phase 2: Transaction completion failed:`, e);
+        }
+      } else {
+        console.log(`[AuthSync] Phase 2: Reconciliation complete - removed INBOX from ${threadsUpdated} stale threads`);
+      }
       authoritativeSyncProgress = { ...authoritativeSyncProgress, running: false };
 
       // Clear trailing holds to prevent stale display after authoritative sync
@@ -1450,6 +1478,59 @@
       }
       
       console.log(`[AuthSync] ===== AUTHORITATIVE SYNC COMPLETE =====`);
+      // EXTRA STEP: authoritative prune using message-level INBOX membership
+      try {
+        console.log('[AuthSync] Running authoritative prune using message-level INBOX membership...');
+        const authoritativeInboxThreadIds = new Set<string>();
+        let msgPageToken: string | undefined = undefined;
+        const msgPageSize = 200;
+        // enumerate all INBOX messages and extract threadIds
+        while (true) {
+          const msgPage = await listInboxMessageIds(msgPageSize, msgPageToken);
+          const msgIds = msgPage.ids || [];
+          if (msgIds.length) {
+            const msgs = await mapWithConcurrency(msgIds, 6, async (id: string) => {
+              try { const m = await getMessageMetadata(id); return m; } catch (_) { return null; }
+            });
+            for (const m of msgs) if (m && m.threadId) authoritativeInboxThreadIds.add(m.threadId);
+          }
+          if (!msgPage.nextPageToken) break;
+          msgPageToken = msgPage.nextPageToken;
+        }
+
+        // Now remove INBOX label from any local thread not in authoritative set
+        const allLocal = await db.getAll('threads');
+        const removals: any[] = [];
+        for (const t of (allLocal || [])) {
+          try {
+            const labels = Array.isArray(t.labelIds) ? t.labelIds.slice() : [];
+            if (labels.includes('INBOX') && !authoritativeInboxThreadIds.has(t.threadId)) {
+              // skip if pending ops exist
+              const pendingOps = await db.getAllFromIndex('ops', 'by_scopeKey', t.threadId).catch(() => []);
+              if ((pendingOps || []).length > 0) {
+                console.log(`[AuthSync] Prune: skipping ${t.threadId} due to pending ops`);
+                continue;
+              }
+              const next = { ...t, labelIds: labels.filter((l) => l !== 'INBOX') } as any;
+              removals.push(next);
+            }
+          } catch (e) {
+            console.error('[AuthSync] Prune: error checking thread', t.threadId, e);
+          }
+        }
+        if (removals.length) {
+          const tx = db.transaction('threads', 'readwrite');
+          for (const u of removals) {
+            try { tx.store.put(u); } catch (e) { console.error('[AuthSync] Prune: put failed', u.threadId, e); }
+          }
+          await tx.done;
+          console.log(`[AuthSync] Prune: removed INBOX from ${removals.length} local threads`);
+        } else {
+          console.log('[AuthSync] Prune: no local INBOX removals necessary');
+        }
+      } catch (e) {
+        console.error('[AuthSync] Authoritative prune failed:', e);
+      }
     } catch (e) {
       // Surface a subtle telemetry snackbar so user can retry if needed
       try { showSnackbar({ message: 'Full sync failed', timeout: 5000, actions: { 'Retry': () => { void performAuthoritativeInboxSync(); } } }); } catch (_) {}
