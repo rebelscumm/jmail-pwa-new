@@ -1395,7 +1395,8 @@
         const allOps = await db.getAll('ops');
         for (const op of (allOps || [])) {
           try {
-            const key = op.scopeKey || (op.op && op.op.threadId) || '';
+            const anyOp = op as any;
+            const key = anyOp.scopeKey || (anyOp.op && anyOp.op.threadId) || '';
             if (!key) continue;
             opsByScope[key] = opsByScope[key] || [];
             opsByScope[key].push(op);
@@ -2771,6 +2772,81 @@
     } catch (e) {
       console.error('deleteSelectedStaleThreads failed', e);
       showSnackbar({ message: 'Failed to delete selected threads', closable: true });
+    }
+  }
+
+  // Repair: rehydrate local INBOX from authoritative server messages/threads
+  async function repairInboxFromServerMessages() {
+    try {
+      showSnackbar({ message: 'Repairing inbox from server messages...', timeout: 4000, closable: true });
+      const db = await getDB();
+      // Collect authoritative threadIds from INBOX messages
+      const threadIds = new Set<string>();
+      let pageToken: string | undefined = undefined;
+      do {
+        const page = await listInboxMessageIds(500, pageToken);
+        for (const mid of page.ids || []) {
+          try {
+            const meta = await getMessageMetadata(mid);
+            if (meta && meta.threadId) threadIds.add(meta.threadId);
+          } catch (e) {
+            console.warn('[Repair] message metadata failed', mid, e);
+          }
+        }
+        pageToken = page.nextPageToken;
+      } while (pageToken);
+
+      let stored = 0;
+      for (const tid of Array.from(threadIds)) {
+        try {
+          // Skip threads that have pending local operations to avoid resurrecting
+          // user-deleted or -modified threads. If there are pending ops for this
+          // scopeKey/threadId, do not fetch/store the thread now.
+          try {
+            const pendingOps = await db.getAllFromIndex('ops', 'by_scopeKey', tid).catch(() => []);
+            if ((pendingOps || []).length > 0) {
+              console.log('[Repair] skipping thread due to pending ops:', tid);
+              continue;
+            }
+          } catch (e) {
+            // ignore and proceed if index isn't available
+          }
+
+          const threadSummary = await getThreadSummary(tid);
+          const tx = db.transaction(['messages', 'threads'], 'readwrite');
+          const msgsStore = tx.objectStore('messages');
+          const threadsStoreDb = tx.objectStore('threads');
+          for (const m of threadSummary.messages) {
+            try { msgsStore.put(m); } catch (e) { console.warn('[Repair] put message failed', m.id, e); }
+          }
+          // Ensure INBOX present
+          const labels = new Set<string>(threadSummary.thread.labelIds || []);
+          labels.add('INBOX');
+          const threadObj = { ...threadSummary.thread, labelIds: Array.from(labels) } as any;
+          try { threadsStoreDb.put(threadObj); } catch (e) { console.warn('[Repair] put thread failed', tid, e); }
+          await new Promise((res) => { tx.oncomplete = () => res(undefined); tx.onerror = () => res(undefined); tx.onabort = () => res(undefined); });
+          stored++;
+        } catch (e) {
+          console.warn('[Repair] failed for thread', tid, e);
+        }
+      }
+
+      // Refresh live stores
+      try {
+        const allThreads = await db.getAll('threads');
+        threadsStore.set(allThreads);
+        const allMessages = await db.getAll('messages');
+        const msgDict: Record<string, any> = {};
+        for (const m of allMessages) msgDict[m.id] = m;
+        messagesStore.set(msgDict);
+      } catch (_) {}
+
+      showSnackbar({ message: `Repair complete: stored ${stored} threads`, timeout: 4000, closable: true });
+      // Give UI a moment then refresh
+      setTimeout(() => { try { location.reload(); } catch (_) {} }, 500);
+    } catch (e) {
+      console.error('[Repair] failed', e);
+      showSnackbar({ message: 'Repair failed: ' + String(e), closable: true });
     }
   }
 
