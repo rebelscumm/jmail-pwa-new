@@ -148,8 +148,6 @@
   let now = $state(Date.now());
   onMount(() => { const id = setInterval(() => { now = Date.now(); }, 250); return () => clearInterval(id); });
   let pullingForward = $state(false);
-  let forcingResync = $state(false);
-  let resyncProgress = $state({ running: false, pagesCompleted: 0, pagesTotal: 0, threadsFound: 0, threadsFetched: 0, errors: 0 });
   let staleDialogOpen = $state(false);
   let staleCandidates: Array<{ threadId: string; subject?: string; from?: string; labels?: string[] }> = $state([]);
   let selectedToDelete = $state(new Set<string>());
@@ -1961,104 +1959,6 @@
     } catch (_) {}
   }
 
-  // Force a full inbox resync: enumerate all Gmail thread IDs for INBOX and ensure local DB contains each thread
-  async function forcedInboxResync() {
-    if (forcingResync) return;
-    forcingResync = true;
-    try {
-      showSnackbar({ message: 'Starting forced inbox resync...', timeout: 3000, closable: true });
-      const db = await getDB();
-      const { listInboxMessageIds, getMessageMetadata, getThreadSummary } = await import('$lib/gmail/api');
-
-      const gmailThreadIds = new Set<string>();
-      let pageToken: string | undefined = undefined;
-      let pageCount = 0;
-      const maxPages = 200; // safety cap
-
-      // Enumerate pages and update progress (use message-based approach like authoritative sync)
-      resyncProgress = { running: true, pagesCompleted: 0, pagesTotal: 0, threadsFound: 0, threadsFetched: 0, errors: 0 };
-      while (pageCount < maxPages) {
-        const page = await listInboxMessageIds(500, pageToken);
-        pageCount++;
-        resyncProgress.pagesCompleted = pageCount;
-        
-        if (page.ids && page.ids.length) {
-          // Extract threadIds from message metadata to ensure only INBOX messages are considered
-          const msgs = await mapWithConcurrency(page.ids, 4, async (id: string) => {
-            try { 
-              const m = await getMessageMetadata(id); 
-              if (m && m.threadId) gmailThreadIds.add(m.threadId);
-              return m; 
-            } catch (_) { return null; }
-          });
-          resyncProgress.threadsFound = gmailThreadIds.size;
-        }
-        
-        // Update UI-friendly total pages estimate
-        resyncProgress.pagesTotal = Math.max(resyncProgress.pagesTotal, pageCount + (page.nextPageToken ? 1 : 0));
-        if (!page.nextPageToken) break;
-        pageToken = page.nextPageToken;
-      }
-
-      const allIds = Array.from(gmailThreadIds);
-
-      // Fetch threads in batches and write to DB, updating progress
-      const batchSize = 5;
-      let fetchedCount = 0;
-      let errorCount = 0;
-
-      for (let i = 0; i < allIds.length; i += batchSize) {
-        const batch = allIds.slice(i, i + batchSize);
-        const results = await Promise.allSettled(batch.map(async (threadId) => {
-          try {
-            const threadSummary = await getThreadSummary(threadId);
-            const txMsgs = db.transaction('messages', 'readwrite');
-            const txThreads = db.transaction('threads', 'readwrite');
-            for (const m of threadSummary.messages) {
-              try { await txMsgs.store.put(m); } catch (_) {}
-            }
-            await txMsgs.done;
-            try { await txThreads.store.put(threadSummary.thread); } catch (_) {}
-            await txThreads.done;
-            return { success: true };
-          } catch (e) {
-            return { success: false, error: String(e) };
-          }
-        }));
-
-        const successes = results.filter(r => r.status === 'fulfilled' && (r as any).value.success).length;
-        const failures = results.length - successes;
-        fetchedCount += successes;
-        errorCount += failures;
-        resyncProgress.threadsFetched = fetchedCount;
-        resyncProgress.errors = errorCount;
-        // Yield to UI
-        await new Promise((r) => setTimeout(r, 0));
-      }
-
-      showSnackbar({ message: `Forced resync complete: fetched ${fetchedCount}, errors ${errorCount}`, timeout: 8000, closable: true });
-      console.log('[Inbox] forcedInboxResync complete', { total: allIds.length, fetchedCount, errorCount });
-      try {
-        // Refresh in-memory store from DB so UI reflects newly fetched threads
-        const allThreads = await db.getAll('threads');
-        threadsStore.set(allThreads);
-        // Also refresh messages store (shallow rebuild)
-        const allMessages = await db.getAll('messages');
-        const msgDict: Record<string, import('$lib/types').GmailMessage> = {} as any;
-        for (const m of allMessages) msgDict[m.id] = m;
-        messagesStore.set(msgDict);
-        // End progress
-        resyncProgress.running = false;
-      } catch (e) {
-        console.warn('[Inbox] forcedInboxResync: failed to refresh stores', e);
-      }
-    } catch (e) {
-      console.error('[Inbox] forcedInboxResync failed', e);
-      showSnackbar({ message: 'Forced resync failed: ' + String(e), timeout: 8000, closable: true });
-    } finally {
-      forcingResync = false;
-    }
-  }
 
   async function loadMore() {
     if (!nextPageToken) return;
@@ -3103,14 +3003,14 @@
       <Button 
         variant="outlined" 
         iconType="full"
-        disabled={forcingResync}
+        disabled={authoritativeSyncProgress.running}
         onclick={(e: MouseEvent) => {
           const isAndroid = /Android/i.test(navigator.userAgent);
           if (isAndroid) {
             e.preventDefault();
-            setTimeout(() => forcedInboxResync(), 16);
+            setTimeout(() => performAuthoritativeInboxSync(), 16);
           } else {
-            forcedInboxResync();
+            performAuthoritativeInboxSync();
           }
         }}
         aria-label="Force resync inbox with Gmail server"
@@ -3119,14 +3019,14 @@
         <Icon icon={iconSync} />
       </Button>
       <Button variant="outlined" onclick={computeStaleCandidatesAndShowDialog} title="Find local threads not present on Gmail">Find stale local threads</Button>
-      {#if resyncProgress.running}
+      {#if authoritativeSyncProgress.running}
         <div style="display:flex; align-items:center; gap:0.5rem; margin-left:0.5rem;">
           <div style="width:160px">
             <div style="height:6px; background:var(--m3-scheme-surface-variant); border-radius:4px; overflow:hidden;">
-              <div style="height:100%; background:linear-gradient(90deg, rgb(var(--m3-scheme-primary)), rgb(var(--m3-scheme-primary-container))); width: {Math.min(100, resyncProgress.threadsFetched / Math.max(1, resyncProgress.threadsFound) * 100)}%; transition: width 200ms;"></div>
+              <div style="height:100%; background:linear-gradient(90deg, rgb(var(--m3-scheme-primary)), rgb(var(--m3-scheme-primary-container))); width: {Math.min(100, authoritativeSyncProgress.pagesCompleted / Math.max(1, authoritativeSyncProgress.pagesTotal || 1) * 100)}%; transition: width 200ms;"></div>
             </div>
           </div>
-          <div style="font-size:0.85rem; color: rgb(var(--m3-scheme-on-surface-variant));">{resyncProgress.threadsFetched}/{resyncProgress.threadsFound} threads</div>
+          <div style="font-size:0.85rem; color: rgb(var(--m3-scheme-on-surface-variant));">Page {authoritativeSyncProgress.pagesCompleted}/{authoritativeSyncProgress.pagesTotal || '?'}</div>
         </div>
       {/if}
       <Button 
