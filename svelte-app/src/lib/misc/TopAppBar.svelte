@@ -94,68 +94,82 @@ import { precomputeStatus } from '$lib/stores/precompute';
       d.open = !d.open;
     }
   }
-  async function doSync() {
-    console.log('[TopAppBar] ===== SYNC BUTTON CLICKED =====');
+  async function doComprehensiveRefresh() {
+    console.log('[TopAppBar] ===== COMPREHENSIVE REFRESH STARTED =====');
     try {
-      showSnackbar({ message: 'Syncing…' });
+      showSnackbar({ message: 'Refreshing everything…' });
     } catch {}
+    
     try {
-      console.log('[TopAppBar] Step 1: Importing and calling syncNow()...');
-      const { syncNow } = await import('$lib/stores/queue');
-      await syncNow();
-      console.log('[TopAppBar] Step 1: syncNow() completed');
-      
-      // After flushing, immediately clear any trailing holds and reload inbox cache
+      // Step 1: Refresh authentication session
+      console.log('[TopAppBar] Step 1: Refreshing session...');
       try {
-        console.log('[TopAppBar] Step 2: Clearing holds...');
-        const { clearAllHolds } = await import('$lib/stores/holds');
-        clearAllHolds();
-        console.log('[TopAppBar] Step 2: Holds cleared');
+        const { sessionManager } = await import('$lib/auth/session-manager');
+        await sessionManager.refreshSession();
+        console.log('[TopAppBar] Step 1: Session refresh completed');
       } catch (e) {
-        console.error('[TopAppBar] Step 2: Failed to clear holds:', e);
+        console.warn('[TopAppBar] Step 1: Session refresh failed (continuing):', e);
       }
       
-      // Ensure we don't show stale threads after server sync
+      // Step 2: Sync queue operations
+      console.log('[TopAppBar] Step 2: Syncing queue...');
+      const { syncNow } = await import('$lib/stores/queue');
+      await syncNow();
+      console.log('[TopAppBar] Step 2: Queue sync completed');
+      
+      // Step 3: Clear holds
       try {
-        console.log('[TopAppBar] Step 3: Trying resetInboxCache...');
+        console.log('[TopAppBar] Step 3: Clearing holds...');
+        const { clearAllHolds } = await import('$lib/stores/holds');
+        clearAllHolds();
+        console.log('[TopAppBar] Step 3: Holds cleared');
+      } catch (e) {
+        console.error('[TopAppBar] Step 3: Failed to clear holds:', e);
+      }
+      
+      // Step 4: Perform authoritative inbox sync if on inbox page
+      try {
+        console.log('[TopAppBar] Step 4: Checking for inbox page...');
+        const isInboxPage = typeof window !== 'undefined' && window.location.pathname.includes('/inbox');
+        if (isInboxPage) {
+          console.log('[TopAppBar] Step 4: Triggering authoritative inbox sync...');
+          // Dispatch event to inbox page to perform authoritative sync
+          window.dispatchEvent(new CustomEvent('jmail:performAuthoritativeSync'));
+        }
+        console.log('[TopAppBar] Step 4: Inbox sync trigger completed');
+      } catch (e) {
+        console.error('[TopAppBar] Step 4: Failed to trigger inbox sync:', e);
+      }
+      
+      // Step 5: Reset and reload inbox cache
+      try {
+        console.log('[TopAppBar] Step 5: Resetting inbox cache...');
         const mod = await import('../../routes/inbox/+page.svelte');
         if (typeof (mod as any).resetInboxCache === 'function') {
           await (mod as any).resetInboxCache();
-          console.log('[TopAppBar] Step 3: resetInboxCache() called');
-        } else {
-          console.log('[TopAppBar] Step 3: resetInboxCache function not found');
+          console.log('[TopAppBar] Step 5: resetInboxCache() called');
         }
-      } catch (e) {
-        console.error('[TopAppBar] Step 3: Failed to call resetInboxCache:', e);
-      }
-      
-      try {
-        console.log('[TopAppBar] Step 4: Trying reloadFromCache...');
-        const mod = await import('../../routes/inbox/+page.svelte');
         if (typeof (mod as any).reloadFromCache === 'function') {
           await (mod as any).reloadFromCache();
-          console.log('[TopAppBar] Step 4: reloadFromCache() called');
-        } else {
-          console.log('[TopAppBar] Step 4: reloadFromCache function not found');
+          console.log('[TopAppBar] Step 5: reloadFromCache() called');
         }
       } catch (e) {
-        console.error('[TopAppBar] Step 4: Failed to call reloadFromCache:', e);
+        console.error('[TopAppBar] Step 5: Failed to reset/reload cache:', e);
       }
     } catch (e) {
-      console.error('[TopAppBar] Sync process failed:', e);
+      console.error('[TopAppBar] Comprehensive refresh failed:', e);
     }
     
     try {
-      console.log('[TopAppBar] Step 5: Dispatching jmail:refresh event...');
-      // Ask pages (e.g., inbox) to re-hydrate from server
+      console.log('[TopAppBar] Step 6: Dispatching global refresh event...');
       window.dispatchEvent(new CustomEvent('jmail:refresh'));
-      console.log('[TopAppBar] Step 5: jmail:refresh event dispatched');
-      showSnackbar({ message: 'Sync complete', timeout: 2500 });
+      console.log('[TopAppBar] Step 6: Global refresh event dispatched');
+      showSnackbar({ message: 'Refresh complete', timeout: 2500 });
     } catch (e) {
       console.error('[TopAppBar] Failed to dispatch refresh event:', e);
     }
     onSyncNow && onSyncNow();
-    console.log('[TopAppBar] ===== SYNC BUTTON PROCESS COMPLETE =====');
+    console.log('[TopAppBar] ===== COMPREHENSIVE REFRESH COMPLETE =====');
   }
 
   function handleBack() {
@@ -931,13 +945,8 @@ import { precomputeStatus } from '$lib/stores/precompute';
       </Button>
     {/if}
 
-    <Button variant="outlined" iconType="left" onclick={doSync}>
-      {#snippet children()}
-        <Icon icon={iconSync} />
-        <span class="last-sync m3-font-label-small">
-          {formatLastSync($syncState.lastUpdatedAt)}{$syncState.pendingOps > 0 ? ` (${$syncState.pendingOps})` : ''}
-        </span>
-      {/snippet}
+    <Button variant="outlined" iconType="full" onclick={doComprehensiveRefresh} aria-label="Comprehensive refresh" title="Refresh session, sync queue, and reload data">
+      <Icon icon={iconSync} />
     </Button>
 
     <SplitButton variant="filled" x="right" y="down" onclick={() => doUndo(1)} on:toggle={(e) => { if (e.detail) refreshUndo(); }}>
@@ -984,16 +993,6 @@ import { precomputeStatus } from '$lib/stores/precompute';
       {/snippet}
     </SplitButton>
 
-    <div style="display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap;">
-      <div style="display:flex; align-items:center; gap:0.5rem;">
-        <Icon icon={iconInbox} width="1.25rem" height="1.25rem" />
-        <div style="color: rgb(var(--m3-scheme-on-surface)); padding: 0.15rem 0.5rem; border-radius: 0.5rem; font-weight: 700;">{renderedInboxCount}</div>
-      </div>
-      <div style="display:flex; align-items:center; gap:0.5rem;">
-        <Icon icon={iconMarkEmailUnread} width="1.25rem" height="1.25rem" />
-        <div style="color: rgb(var(--m3-scheme-on-surface)); padding: 0.15rem 0.5rem; border-radius: 0.5rem; font-weight: 700;">{renderedUnreadCount}</div>
-      </div>
-    </div>
 
     <details class="overflow" bind:this={overflowDetails}>
       <summary aria-label="More actions" class="summary-btn" onclick={toggleOverflow}>
