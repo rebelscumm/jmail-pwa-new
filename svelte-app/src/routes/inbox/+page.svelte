@@ -684,9 +684,36 @@
                   );
                   
                   if (pendingLabelOps.length > 0) {
-                    console.log(`[Inbox] Skipping background sync - ${pendingLabelOps.length} pending INBOX operations found`);
-                    console.log(`[Inbox] Background sync will be retried later when operations complete`);
-                    return; // Skip sync entirely to avoid resurrecting locally-deleted threads
+                    // Check if operations are stuck (old and repeatedly failed)
+                    const now = Date.now();
+                    const stuckOps = pendingLabelOps.filter(op => 
+                      op.attempts > 5 && (now - (op.createdAt || 0)) > 300000 // 5+ attempts and older than 5 minutes
+                    );
+                    
+                    if (stuckOps.length > 0) {
+                      console.warn(`[Inbox] Found ${stuckOps.length} stuck operations (5+ attempts, >5min old) - clearing them to unblock sync`);
+                      const tx = db.transaction('ops', 'readwrite');
+                      for (const op of stuckOps) {
+                        console.warn(`[Inbox] Clearing stuck op: ${op.id}, attempts: ${op.attempts}, error: ${op.lastError}`);
+                        await tx.store.delete(op.id);
+                      }
+                      await tx.done;
+                      
+                      // Re-check remaining operations
+                      const remainingOps = pendingLabelOps.filter(op => !stuckOps.includes(op));
+                      if (remainingOps.length > 0) {
+                        console.log(`[Inbox] Still ${remainingOps.length} pending INBOX operations after clearing stuck ones - skipping sync`);
+                        return;
+                      } else {
+                        console.log(`[Inbox] All stuck operations cleared - proceeding with sync`);
+                      }
+                    } else {
+                      console.log(`[Inbox] Skipping background sync - ${pendingLabelOps.length} pending INBOX operations found`);
+                      pendingLabelOps.forEach(op => {
+                        console.log(`[Inbox] Pending op: ${op.id}, attempts: ${op.attempts}, nextAttempt: ${new Date(op.nextAttemptAt || 0).toISOString()}, error: ${op.lastError || 'none'}`);
+                      });
+                      return; // Skip sync entirely to avoid resurrecting locally-deleted threads
+                    }
                   }
                   
                   const localThreads = await db.getAll('threads');
@@ -840,9 +867,36 @@
             );
             
             if (pendingLabelOps.length > 0) {
-              console.log(`[Inbox] Skipping background sync - ${pendingLabelOps.length} pending INBOX operations found`);
-              console.log(`[Inbox] Background sync will be retried later when operations complete`);
-              return; // Skip sync entirely to avoid resurrecting locally-deleted threads
+              // Check if operations are stuck (old and repeatedly failed)
+              const now = Date.now();
+              const stuckOps = pendingLabelOps.filter(op => 
+                op.attempts > 5 && (now - (op.createdAt || 0)) > 300000 // 5+ attempts and older than 5 minutes
+              );
+              
+              if (stuckOps.length > 0) {
+                console.warn(`[Inbox] Found ${stuckOps.length} stuck operations (5+ attempts, >5min old) - clearing them to unblock sync`);
+                const tx = db.transaction('ops', 'readwrite');
+                for (const op of stuckOps) {
+                  console.warn(`[Inbox] Clearing stuck op: ${op.id}, attempts: ${op.attempts}, error: ${op.lastError}`);
+                  await tx.store.delete(op.id);
+                }
+                await tx.done;
+                
+                // Re-check remaining operations
+                const remainingOps = pendingLabelOps.filter(op => !stuckOps.includes(op));
+                if (remainingOps.length > 0) {
+                  console.log(`[Inbox] Still ${remainingOps.length} pending INBOX operations after clearing stuck ones - skipping sync`);
+                  return;
+                } else {
+                  console.log(`[Inbox] All stuck operations cleared - proceeding with sync`);
+                }
+              } else {
+                console.log(`[Inbox] Skipping background sync - ${pendingLabelOps.length} pending INBOX operations found`);
+                pendingLabelOps.forEach(op => {
+                  console.log(`[Inbox] Pending op: ${op.id}, attempts: ${op.attempts}, nextAttempt: ${new Date(op.nextAttemptAt || 0).toISOString()}, error: ${op.lastError || 'none'}`);
+                });
+                return; // Skip sync entirely to avoid resurrecting locally-deleted threads
+              }
             }
             
             const localThreads = await db.getAll('threads');
