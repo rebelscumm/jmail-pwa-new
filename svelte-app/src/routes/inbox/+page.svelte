@@ -172,6 +172,15 @@
     window.addEventListener('keydown', handleKeyboardShortcuts);
     return () => window.removeEventListener('keydown', handleKeyboardShortcuts);
   });
+  
+  // Listen for authoritative sync requests from TopAppBar
+  onMount(() => {
+    const handleAuthoritativeSync = () => {
+      performAuthoritativeInboxSync().catch(console.error);
+    };
+    window.addEventListener('jmail:performAuthoritativeSync', handleAuthoritativeSync);
+    return () => window.removeEventListener('jmail:performAuthoritativeSync', handleAuthoritativeSync);
+  });
   // Lightweight remote change detection state
   let lastRemoteCheckAtMs: number | null = $state(null);
   let remoteCheckInFlight = $state(false);
@@ -2999,26 +3008,6 @@
           {/if}
         </Button>
       {/if}
-      <SessionRefreshButton variant="outlined" compact />
-      <Button 
-        variant="outlined" 
-        iconType="full"
-        disabled={authoritativeSyncProgress.running}
-        onclick={(e: MouseEvent) => {
-          const isAndroid = /Android/i.test(navigator.userAgent);
-          if (isAndroid) {
-            e.preventDefault();
-            setTimeout(() => performAuthoritativeInboxSync(), 16);
-          } else {
-            performAuthoritativeInboxSync();
-          }
-        }}
-        aria-label="Force resync inbox with Gmail server"
-        title="Force resync inbox with Gmail server"
-      >
-        <Icon icon={iconSync} />
-      </Button>
-      <Button variant="outlined" onclick={computeStaleCandidatesAndShowDialog} title="Find local threads not present on Gmail">Find stale local threads</Button>
       {#if authoritativeSyncProgress.running}
         <div style="display:flex; align-items:center; gap:0.5rem; margin-left:0.5rem;">
           <div style="width:160px">
@@ -3029,43 +3018,6 @@
           <div style="font-size:0.85rem; color: rgb(var(--m3-scheme-on-surface-variant));">Page {authoritativeSyncProgress.pagesCompleted}/{authoritativeSyncProgress.pagesTotal || '?'}</div>
         </div>
       {/if}
-      <Button 
-        variant="outlined" 
-        onclick={async () => {
-          try {
-            // Android-friendly navigation to diagnostics page
-            const isAndroid = /Android/i.test(navigator.userAgent);
-            const isPWA = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches;
-            
-            if (isAndroid || isPWA) {
-              // Try multiple navigation methods for Android
-              try {
-                window.open('/diagnostics', '_self');
-                return;
-              } catch (e) {
-                console.log('[Inbox] window.open failed for diagnostics:', e);
-                try {
-                  history.pushState(null, '', '/diagnostics');
-                  window.location.reload();
-                  return;
-                } catch (e2) {
-                  console.log('[Inbox] pushState failed for diagnostics:', e2);
-                }
-              }
-            }
-            
-            // Default navigation
-            location.href = '/diagnostics';
-          } catch (e) {
-            console.error('[Inbox] All diagnostics navigation methods failed:', e);
-            showSnackbar({ message: 'Navigation failed. Try typing /diagnostics in your address bar.', closable: true });
-          }
-        }}
-        title="Open full diagnostics page"
-        aria-label="Navigate to diagnostics page"
-      >
-        Full Diagnostics
-      </Button>
       {#if import.meta.env.DEV}
         <Button variant="outlined" onclick={compareLocalToGmail}>Compare DB ↔ Gmail</Button>
       {/if}
