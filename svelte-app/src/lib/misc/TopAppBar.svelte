@@ -1045,38 +1045,11 @@ import { precomputeStatus } from '$lib/stores/precompute';
         <div class="menu-section-header">System</div>
         <MenuItem icon={iconRefresh} onclick={async () => {
           try {
-            const isAndroid = /Android/i.test(navigator.userAgent);
-            const isPWA = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches;
-            
-            if (isAndroid || isPWA) {
-              // For Android PWAs, try calling the update check directly instead of navigation
-              try {
-                await checkForUpdateOnce();
-                showSnackbar({ message: 'Update check completed', closable: true });
-                return;
-              } catch (e) {
-                console.log('[TopAppBar] Direct update check failed, trying URL navigation:', e);
-              }
-            }
-            
-            // Default behavior - navigate with refresh parameter
-            const u = new URL(window.location.href);
-            u.searchParams.set('refresh', '1');
-            
-            if (isAndroid || isPWA) {
-              // Try alternative navigation methods for Android
-              try {
-                window.open(u.toString(), '_self');
-                return;
-              } catch (e) {
-                console.log('[TopAppBar] window.open failed for update check:', e);
-              }
-            }
-            
-            location.href = u.toString();
+            // Redirect to home with ?refresh to trigger hard reload logic
+            location.href = '/?refresh';
           } catch (e) {
-            console.error('[TopAppBar] App update check failed:', e);
-            showSnackbar({ message: 'Update check failed. Please try again.', closable: true });
+            console.error('[TopAppBar] App update redirect failed:', e);
+            try { showSnackbar({ message: 'Navigation failed. Please try again.', closable: true }); } catch {}
           }
         }}>Check for App Update</MenuItem>
         <MenuItem icon={iconDiagnostics} onclick={async () => {
