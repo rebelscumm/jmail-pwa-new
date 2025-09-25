@@ -833,6 +833,18 @@ function onKeyDown(e: KeyboardEvent) {
     navigateToInbox();
     return;
   }
+  // b: open snooze menu
+  if (e.key === 'b' || e.key === 'B') {
+    e.preventDefault();
+    try {
+      const d = snoozeDetails;
+      if (d) {
+        d.open = true;
+        snoozeMenuOpen = true;
+      }
+    } catch (_) {}
+    return;
+  }
   // j/k: next/previous thread
   if (e.key === 'j' || e.key === 'J') {
     e.preventDefault();

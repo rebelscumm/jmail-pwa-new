@@ -16,6 +16,8 @@
         <li><span class="k">c</span><span class="v">Compose</span></li>
         <li><span class="k">j / k</span><span class="v">Move selection down / up</span></li>
         <li><span class="k">o or Enter</span><span class="v">Open selected conversation</span></li>
+        <li><span class="k">Space</span><span class="v">Open first conversation (Inbox)</span></li>
+        <li><span class="k">b</span><span class="v">Open Snooze menu (Viewer & Inbox row)</span></li>
         <li><span class="k">x</span><span class="v">Select conversation</span></li>
         <li><span class="k">y</span><span class="v">Archive</span></li>
         <li><span class="k"># or Delete</span><span class="v">Delete</span></li>
