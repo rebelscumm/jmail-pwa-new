@@ -255,7 +255,9 @@ import iconExpand from "@ktibow/iconset-material-symbols/keyboard-arrow-down";
   function gotoNext() { if (nextThreadId) safeGoto(`/viewer/${nextThreadId}`); }
   async function navigateToInbox() {
     try {
+      try { sessionStorage.setItem('jmail:refreshOnce', '1'); } catch {}
       await goto('/inbox');
+      try { window.dispatchEvent(new CustomEvent('jmail:refresh')); } catch {}
     } catch (_) {
       try { location.href = '/inbox'; } catch {}
     }
@@ -874,18 +876,18 @@ function onKeyDown(e: KeyboardEvent) {
   // 1: snooze 1 hour
   if (e.key === '1') {
     e.preventDefault();
-    snoozeThreadByRule(ct.threadId, '1h').then(() => {
+    snoozeThreadByRule(ct.threadId, '1h').then(async () => {
       showSnackbar({ message: 'Snoozed 1h', actions: { Undo: () => undoLast(1) } });
-      goto('/inbox');
+      await navigateToInbox();
     });
     return;
   }
   // 2: snooze 2 hours
   if (e.key === '2') {
     e.preventDefault();
-    snoozeThreadByRule(ct.threadId, '2h').then(() => {
+    snoozeThreadByRule(ct.threadId, '2h').then(async () => {
       showSnackbar({ message: 'Snoozed 2h', actions: { Undo: () => undoLast(1) } });
-      goto('/inbox');
+      await navigateToInbox();
     });
     return;
   }
@@ -991,13 +993,13 @@ onMount(() => {
             </Button>
           {/if}
           {#if Object.keys($settings.labelMapping || {}).some((k)=>k==='3h' && $settings.labelMapping[k])}
-            <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '3h').then(()=> { showSnackbar({ message: 'Snoozed 3h', actions: { Undo: () => undoLast(1) } }); goto('/inbox'); })}>
+            <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '3h').then(async ()=> { showSnackbar({ message: 'Snoozed 3h', actions: { Undo: () => undoLast(1) } }); await navigateToInbox(); })}>
               <Icon icon={iconSnooze} />
               3h
             </Button>
           {/if}
           {#if Object.keys($settings.labelMapping || {}).some((k)=>k==='1d' && $settings.labelMapping[k])}
-            <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '1d').then(()=> { showSnackbar({ message: 'Snoozed 1d', actions: { Undo: () => undoLast(1) } }); goto('/inbox'); })}>
+            <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '1d').then(async ()=> { showSnackbar({ message: 'Snoozed 1d', actions: { Undo: () => undoLast(1) } }); await navigateToInbox(); })}>
               <Icon icon={iconSnooze} />
               1d
             </Button>
@@ -1072,7 +1074,7 @@ onMount(() => {
                 Filter Options
               </MenuItem>
               {#if Object.keys($settings.labelMapping || {}).some((k)=>k==='10m' && $settings.labelMapping[k])}
-                <MenuItem onclick={() => snoozeThreadByRule(currentThread.threadId, '10m').then(()=> { showSnackbar({ message: 'Snoozed 10m', actions: { Undo: () => undoLast(1) } }); goto('/inbox'); })}>
+                <MenuItem onclick={() => snoozeThreadByRule(currentThread.threadId, '10m').then(async ()=> { showSnackbar({ message: 'Snoozed 10m', actions: { Undo: () => undoLast(1) } }); await navigateToInbox(); })}>
                   <Icon icon={iconSnooze} />
                   Snooze 10m
                 </MenuItem>
@@ -1345,13 +1347,13 @@ onMount(() => {
             </Button>
           {/if}
           {#if Object.keys($settings.labelMapping || {}).some((k)=>k==='3h' && $settings.labelMapping[k])}
-            <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '3h').then(()=> { showSnackbar({ message: 'Snoozed 3h', actions: { Undo: () => undoLast(1) } }); goto('/inbox'); })}>
+            <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '3h').then(async ()=> { showSnackbar({ message: 'Snoozed 3h', actions: { Undo: () => undoLast(1) } }); await navigateToInbox(); })}>
               <Icon icon={iconSnooze} />
               3h
             </Button>
           {/if}
           {#if Object.keys($settings.labelMapping || {}).some((k)=>k==='1d' && $settings.labelMapping[k])}
-            <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '1d').then(()=> { showSnackbar({ message: 'Snoozed 1d', actions: { Undo: () => undoLast(1) } }); goto('/inbox'); })}>
+            <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '1d').then(async ()=> { showSnackbar({ message: 'Snoozed 1d', actions: { Undo: () => undoLast(1) } }); await navigateToInbox(); })}>
               <Icon icon={iconSnooze} />
               1d
             </Button>
@@ -1426,7 +1428,7 @@ onMount(() => {
                 Filter Options
               </MenuItem>
               {#if Object.keys($settings.labelMapping || {}).some((k)=>k==='10m' && $settings.labelMapping[k])}
-                <MenuItem onclick={() => snoozeThreadByRule(currentThread.threadId, '10m').then(()=> { showSnackbar({ message: 'Snoozed 10m', actions: { Undo: () => undoLast(1) } }); goto('/inbox'); })}>
+                <MenuItem onclick={() => snoozeThreadByRule(currentThread.threadId, '10m').then(async ()=> { showSnackbar({ message: 'Snoozed 10m', actions: { Undo: () => undoLast(1) } }); await navigateToInbox(); })}>
                   <Icon icon={iconSnooze} />
                   Snooze 10m
                 </MenuItem>
