@@ -82,6 +82,18 @@
     if (!firstAvailableThread) return;
 
     switch (event.key) {
+      case ' ':
+      case 'Spacebar':
+        event.preventDefault();
+        // Open the first available thread (subject email) in the viewer
+        try {
+          const href = `/viewer/${firstAvailableThread.threadId}`;
+          if (typeof window !== 'undefined') {
+            try { (await import('$app/navigation')).goto(href); }
+            catch { window.location.href = href; }
+          }
+        } catch (_) {}
+        break;
       case '#':
         event.preventDefault();
         // Trigger slide animation with full action performance
