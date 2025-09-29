@@ -86,13 +86,19 @@
       case 'Spacebar':
         event.preventDefault();
         // Open the first available thread (subject email) in the viewer
-        try {
-          const href = `/viewer/${firstAvailableThread.threadId}`;
-          if (typeof window !== 'undefined') {
-            try { (await import('$app/navigation')).goto(href); }
-            catch { window.location.href = href; }
-          }
-        } catch (_) {}
+        (async () => {
+          try {
+            const href = `/viewer/${firstAvailableThread.threadId}`;
+            if (typeof window !== 'undefined') {
+              try { 
+                const nav = await import('$app/navigation');
+                nav.goto(href);
+              } catch { 
+                window.location.href = href; 
+              }
+            }
+          } catch (_) {}
+        })();
         break;
       case '#':
         event.preventDefault();
@@ -649,7 +655,11 @@
       ready = s.ready;
       if (!wasReady && s.ready && pendingRefresh) {
         pendingRefresh = false;
-        void handleGlobalRefresh();
+        setTimeout(() => {
+          try {
+            window.dispatchEvent(new CustomEvent('jmail:refresh'));
+          } catch (_) {}
+        }, 50);
       }
     });
     
@@ -985,21 +995,21 @@
     // Listen for global refresh requests
     async function handleGlobalRefresh() {
       console.log('[Inbox] ===== REFRESH BUTTON CLICKED =====');
+      let queuedRefresh = false;
       try {
-        showSnackbar({ message: 'Force refreshing inbox from Gmail…' });
         syncing = true;
-        let queuedRefresh = false;
         
         console.log('[Inbox] Force refresh triggered - clearing cache and performing full sync');
         
         // Check if we're in a valid state to refresh
         if (!ready) {
-          console.warn('[Inbox] Refresh requested but auth not ready yet; queuing refresh');
           pendingRefresh = true;
           queuedRefresh = true;
-          showSnackbar({ message: 'Re-establishing Gmail session…', timeout: 2000 });
+          syncing = false;
           return;
         }
+        
+        showSnackbar({ message: 'Force refreshing inbox from Gmail…' });
         
         // Clear any cached data that might be stale
         const db = await getDB();
