@@ -141,6 +141,7 @@
   let nextPageToken: string | undefined = $state();
   let syncing = $state(false);
   let authoritativeSyncProgress = $state({ running: false, pagesCompleted: 0, pagesTotal: 0 });
+  let pendingRefresh = $state(false);
   let backgroundSyncing = $state(false);
   let copiedDiagOk = $state(false);
   let debouncedQuery = $state('');
@@ -631,7 +632,14 @@
   }
 
   onMount(() => {
-    const unsub = authState.subscribe((s) => (ready = s.ready));
+    const unsub = authState.subscribe((s) => {
+      const wasReady = ready;
+      ready = s.ready;
+      if (!wasReady && s.ready && pendingRefresh) {
+        pendingRefresh = false;
+        void handleGlobalRefresh();
+      }
+    });
     
     if (($threadsStore || []).length) loading = false;
     (async () => {
@@ -968,13 +976,17 @@
       try {
         showSnackbar({ message: 'Force refreshing inbox from Gmail…' });
         syncing = true;
+        let queuedRefresh = false;
         
         console.log('[Inbox] Force refresh triggered - clearing cache and performing full sync');
         
         // Check if we're in a valid state to refresh
         if (!ready) {
-          console.error('[Inbox] Cannot refresh - inbox not ready');
-          throw new Error('Inbox not ready for refresh');
+          console.warn('[Inbox] Refresh requested but auth not ready yet; queuing refresh');
+          pendingRefresh = true;
+          queuedRefresh = true;
+          showSnackbar({ message: 'Re-establishing Gmail session…', timeout: 2000 });
+          return;
         }
         
         // Clear any cached data that might be stale
@@ -1025,7 +1037,8 @@
           }
         });
       } finally {
-        syncing = false;
+        if (!queuedRefresh) syncing = false;
+        if (!queuedRefresh) pendingRefresh = false;
       }
     }
     console.log('[Inbox] Setting up refresh event listeners...');
@@ -2089,6 +2102,7 @@
       setApiError(e);
     } finally {
       syncing = false;
+      pendingRefresh = false;
     }
   }
 
