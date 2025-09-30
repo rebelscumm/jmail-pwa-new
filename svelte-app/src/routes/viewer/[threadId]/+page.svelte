@@ -15,7 +15,19 @@
   import { getThreadSummary } from "$lib/gmail/api";
   import { getDB } from "$lib/db/indexeddb";
   import { acquireTokenForScopes, SCOPES, fetchTokenInfo, signOut, acquireTokenInteractive } from "$lib/gmail/auth";
-  import { aiSummarizeEmail, aiSummarizeSubject, aiDraftReply, findUnsubscribeTarget, aiExtractUnsubscribeUrl, getFriendlyAIErrorMessage, AIProviderError, aiSummarizeAttachment } from "$lib/ai/providers";
+import {
+  aiSummarizeEmailWithDiagnostics,
+  aiSummarizeSubject,
+  aiDraftReply,
+  findUnsubscribeTarget,
+  aiExtractUnsubscribeUrl,
+  getFriendlyAIErrorMessage,
+  AIProviderError,
+  aiSummarizeAttachment,
+  simpleHash,
+  prepareEmailSummaryContext,
+  type AISummaryDiagnostics
+} from "$lib/ai/providers";
   import { filters, deleteSavedFilter, type ThreadFilter } from "$lib/stores/filters";
   import { applyFilterToThreads } from "$lib/stores/filters";
   import FilterBar from "$lib/utils/FilterBar.svelte";
@@ -55,7 +67,8 @@ import iconExpand from "@ktibow/iconset-material-symbols/keyboard-arrow-down";
   import RecipientBadges from "$lib/utils/RecipientBadges.svelte";
   import { getGmailMessageUrl, getGmailThreadUrl, openGmailPopup, openGmailMessagePopup } from "$lib/utils/gmail-links";
   import SnoozePanel from "$lib/snooze/SnoozePanel.svelte";
-  import Layer from "$lib/misc/Layer.svelte";
+import Layer from "$lib/misc/Layer.svelte";
+import BottomSheet from "$lib/containers/BottomSheet.svelte";
   // Derive threadId defensively in case params are briefly undefined during navigation
   const threadId = $derived((() => {
     try { const id = $page?.params?.threadId; if (id) return id; } catch {}
@@ -148,6 +161,9 @@ import iconExpand from "@ktibow/iconset-material-symbols/keyboard-arrow-down";
   let extractingUnsub: boolean = $state(false);
   let aiSubjectSummary: string | null = $state(null);
   let aiBodySummary: string | null = $state(null);
+  let aiDiagnostics: AISummaryDiagnostics | null = $state(null);
+  let diagnosticsSheetOpen: boolean = $state(false);
+  let lastSummarizedMid: string | null = $state(null);
   // Attachment summary dialog state
   let attDialogOpen: boolean = $state(false);
   let attDialogTitle: string | null = $state(null);
@@ -191,6 +207,60 @@ import iconExpand from "@ktibow/iconset-material-symbols/keyboard-arrow-down";
       await navigator.clipboard.writeText(aiBodySummary);
       showSnackbar({ message: 'AI summary copied', closable: true });
     } catch (e) { showSnackbar({ message: 'Failed to copy AI summary', closable: true }); }
+  }
+  function fmtIso(input?: string | null): string {
+    if (!input) return '—';
+    try { return new Date(input).toLocaleString(); } catch { return input; }
+  }
+  function fmtDuration(ms?: number | null): string {
+    if (typeof ms !== 'number' || Number.isNaN(ms)) return '—';
+    if (ms < 1000) return `${Math.round(ms)} ms`;
+    if (ms < 60_000) return `${(ms / 1000).toFixed(2)} s`;
+    return `${(ms / 60000).toFixed(2)} min`;
+  }
+  function openDiagnosticsSheet() {
+    if (!aiDiagnostics) {
+      showSnackbar({ message: 'No diagnostics captured yet', closable: true });
+      return;
+    }
+    diagnosticsSheetOpen = true;
+  }
+  async function copyAiDiagnostics() {
+    try {
+      if (!aiDiagnostics) {
+        showSnackbar({ message: 'No diagnostics to copy', closable: true });
+        return;
+      }
+      const payload = {
+        viewer: {
+          reason: 'viewer_ai_diagnostics',
+          page: 'viewer',
+          at: new Date().toISOString(),
+          threadId,
+          messageId: lastSummarizedMid,
+          subject: currentThread?.lastMsgMeta?.subject,
+          runId: aiDiagnostics.runId
+        },
+        ai: aiDiagnostics,
+        summary: {
+          subject: aiSubjectSummary,
+          body: aiBodySummary
+        }
+      };
+      const ok = await copyGmailDiagnosticsToClipboard(payload);
+      showSnackbar({ message: ok ? 'Diagnostics copied' : 'Failed to copy diagnostics', closable: true });
+    } catch (e) {
+      console.error('[Viewer] Failed to copy AI diagnostics', e);
+      showSnackbar({ message: 'Failed to copy diagnostics', closable: true });
+    }
+  }
+  function triggerDiagnosticsRerun() {
+    if (!lastSummarizedMid) {
+      showSnackbar({ message: 'No previous AI run yet', closable: true });
+      return;
+    }
+    diagnosticsSheetOpen = false;
+    summarize(lastSummarizedMid, true);
   }
   function getSubject(a: import('$lib/types').GmailThread): string { return (a.lastMsgMeta.subject || '').toLowerCase(); }
   function getDate(a: import('$lib/types').GmailThread): number { return num(a.lastMsgMeta.date) || 0; }
@@ -269,6 +339,9 @@ import iconExpand from "@ktibow/iconset-material-symbols/keyboard-arrow-down";
     const _tid = currentThread?.threadId;
     aiSubjectSummary = null;
     aiBodySummary = null;
+    aiDiagnostics = null;
+    diagnosticsSheetOpen = false;
+    lastSummarizedMid = null;
     summarizing = false;
   });
   // Surface precomputed summaries if present
@@ -512,6 +585,9 @@ import iconExpand from "@ktibow/iconset-material-symbols/keyboard-arrow-down";
       }
     } catch (_) {}
     if (force) { aiSubjectSummary = null; aiBodySummary = null; }
+    aiDiagnostics = null;
+    diagnosticsSheetOpen = false;
+    lastSummarizedMid = mid;
     summarizing = true;
     try { showSnackbar({ message: 'Summarizing…' }); } catch {}
     try {
@@ -543,22 +619,20 @@ import iconExpand from "@ktibow/iconset-material-symbols/keyboard-arrow-down";
         } catch (_) {}
       }
       // Compute full message summary first (token heavy), then derive subject from it (token light)
-      const bodyTextOut = await aiSummarizeEmail(subject, bodyText, bodyHtml, m.attachments, currentThread?.threadId);
+      const { summary: bodyResult, diagnostics } = await aiSummarizeEmailWithDiagnostics(subject, bodyText, bodyHtml, m.attachments, currentThread?.threadId, mid, { force });
+      const bodyTextOut = bodyResult.text || '';
       const subjectText = await aiSummarizeSubject(subject, undefined, undefined, bodyTextOut);
       aiSubjectSummary = subjectText;
       aiBodySummary = bodyTextOut;
+      aiDiagnostics = diagnostics;
+      diagnosticsSheetOpen = true;
       // Persist AI results to cache to minimize future calls
       try {
         const db = await getDB();
         const ct = currentThread;
         if (ct) {
-          // Compute content hash consistent with precompute
-          function simpleHash(input: string): string {
-            try { let hash = 2166136261; for (let i = 0; i < input.length; i++) { hash ^= input.charCodeAt(i); hash = (hash * 16777619) >>> 0; } return hash.toString(16).padStart(8, '0'); } catch { return `${input.length}`; }
-          }
-          const attText = (m.attachments || []).map((a) => `${a.filename || a.mimeType || 'attachment'}\n${(a.textContent || '').slice(0, 500)}`).join('\n\n');
-          const combined = `${subject}\n\n${bodyText || ''}${!bodyText && bodyHtml ? bodyHtml : ''}${attText ? `\n\n${attText}` : ''}`.trim();
-          const bodyHash = simpleHash(combined || subject || ct.threadId);
+          const { combinedForHash } = prepareEmailSummaryContext(subject, bodyText, bodyHtml, m.attachments);
+          const bodyHash = simpleHash(combinedForHash || subject || ct.threadId);
           const nowMs = Date.now();
           const next = {
             ...ct,
@@ -1052,6 +1126,10 @@ onMount(() => {
             <Icon icon={iconUnsubscribe} />
             {extractingUnsub ? 'Finding…' : 'Unsubscribe'}
           </Button>
+          <Button variant="text" onclick={openDiagnosticsSheet} disabled={!aiDiagnostics} aria-label="Open AI diagnostics">
+            <Icon icon={iconBugReport} />
+            Diagnostics
+          </Button>
         </div>
       {/if}
 
@@ -1406,6 +1484,10 @@ onMount(() => {
             <Icon icon={iconUnsubscribe} />
             {extractingUnsub ? 'Finding…' : 'Unsubscribe'}
           </Button>
+          <Button variant="text" onclick={openDiagnosticsSheet} disabled={!aiDiagnostics} aria-label="Open AI diagnostics">
+            <Icon icon={iconBugReport} />
+            Diagnostics
+          </Button>
         </div>
       {/if}
 
@@ -1575,6 +1657,157 @@ onMount(() => {
       </Button>
     {/snippet}
   </Dialog>
+
+  {#if diagnosticsSheetOpen && aiDiagnostics}
+    {@const diag = aiDiagnostics}
+    <BottomSheet close={() => { diagnosticsSheetOpen = false; }}>
+      <div class="diag-sheet" role="dialog" aria-label="AI diagnostics">
+        <div class="diag-sheet__header">
+          <h2 class="m3-font-title-large">AI Diagnostics</h2>
+          <p class="m3-font-body-small">Model {diag.prompt.model} · Provider {diag.prompt.provider}</p>
+        </div>
+        <div class="diag-sheet__actions">
+          <Button variant="text" onclick={copyAiDiagnostics}>
+            <Icon icon={iconCopy} /> Copy payload
+          </Button>
+          <Button variant="text" onclick={triggerDiagnosticsRerun}>
+            <Icon icon={iconRefresh} /> Rerun
+          </Button>
+          <Button variant="text" onclick={() => { diagnosticsSheetOpen = false; }}>
+            <Icon icon={iconClose} /> Close
+          </Button>
+        </div>
+
+        <div class="diag-grid">
+          <section>
+            <h3 class="m3-font-title-small">Run</h3>
+            <dl>
+              <div>
+                <dt>Run ID</dt>
+                <dd>{diag.runId}</dd>
+              </div>
+              <div>
+                <dt>Started</dt>
+                <dd>{fmtIso(diag.startedAt)}</dd>
+              </div>
+              <div>
+                <dt>Completed</dt>
+                <dd>{fmtIso(diag.completedAt)}</dd>
+              </div>
+              <div>
+                <dt>Queue size</dt>
+                <dd>{diag.queue.pendingBefore} → {diag.queue.pendingAfter}</dd>
+              </div>
+            </dl>
+          </section>
+
+          <section>
+            <h3 class="m3-font-title-small">Prompt</h3>
+            <dl>
+              <div>
+                <dt>Template</dt>
+                <dd>{diag.prompt.template}</dd>
+              </div>
+              <div>
+                <dt>Has body</dt>
+                <dd>{diag.prompt.hasBody ? 'Yes' : 'No'}</dd>
+              </div>
+              <div>
+                <dt>Text prompt</dt>
+                <dd><pre>{diag.prompt.textPrompt || '(n/a)'}</pre></dd>
+              </div>
+            </dl>
+          </section>
+
+          <section>
+            <h3 class="m3-font-title-small">Response</h3>
+            <dl>
+              <div>
+                <dt>Summary</dt>
+                <dd><pre>{diag.summary.text || '(empty)'}</pre></dd>
+              </div>
+              <div>
+                <dt>Duration</dt>
+                <dd>{fmtDuration(diag.summary.metadata?.durationMs)}</dd>
+              </div>
+              <div>
+                <dt>Status</dt>
+                <dd>{diag.summary.metadata?.httpStatus ?? '—'}</dd>
+              </div>
+              <div>
+                <dt>Request ID</dt>
+                <dd>{diag.summary.metadata?.requestId || '—'}</dd>
+              </div>
+              {#if diag.summary.error}
+                <div>
+                  <dt>Error</dt>
+                  <dd><pre>{diag.summary.error.message}</pre></dd>
+                </div>
+              {/if}
+            </dl>
+          </section>
+        </div>
+
+        {#if diag.prompt.attachments.length}
+          <section class="diag-attachments">
+            <h3 class="m3-font-title-small">Attachments ({diag.prompt.attachments.length})</h3>
+            <ul>
+              {#each diag.prompt.attachments as att}
+                <li>
+                  <div class="name">{att.name || att.mimeType || 'Attachment'}</div>
+                  <div class="meta">{att.mimeType || '—'} {att.textLength ? `· ${att.textLength} chars` : ''}</div>
+                  {#if att.textPreview}
+                    <pre>{att.textPreview}</pre>
+                  {/if}
+                </li>
+              {/each}
+            </ul>
+          </section>
+        {/if}
+
+        {#if diag.prompt.partsPreview?.length}
+          <section class="diag-parts">
+            <h3 class="m3-font-title-small">Prompt Parts</h3>
+            <ol>
+              {#each diag.prompt.partsPreview as part, idx}
+                <li>
+                  {#if part.text}
+                    <pre>{part.text}</pre>
+                  {:else if part.inlineData}
+                    <p>Inline data ({part.inlineData.mimeType || 'unknown'}, {part.inlineData.bytes ?? '—'} bytes)</p>
+                  {:else}
+                    <p>(Empty part)</p>
+                  {/if}
+                </li>
+              {/each}
+            </ol>
+          </section>
+        {/if}
+
+        {#if diag.summary.metadata?.headers}
+          {@const headerEntries = Object.entries(diag.summary.metadata.headers).filter(([_, v]) => v)}
+          {#if headerEntries.length}
+            <section class="diag-headers">
+              <h3 class="m3-font-title-small">Response Headers</h3>
+              <dl>
+                {#each headerEntries as [key, value]}
+                  <div>
+                    <dt>{key}</dt>
+                    <dd>{value}</dd>
+                  </div>
+                {/each}
+              </dl>
+            </section>
+          {/if}
+        {/if}
+
+        <section class="diag-hash">
+          <h3 class="m3-font-title-small">Content Hash</h3>
+          <p class="m3-font-body-small">{diag.hashes.content}</p>
+        </section>
+      </div>
+    </BottomSheet>
+  {/if}
 {:else}
   {#if threadLoading}
     <div style="display:flex; justify-content:center; padding:1rem;"><LoadingIndicator size={24} /></div>
@@ -1917,6 +2150,119 @@ onMount(() => {
       opacity: 1;
       transform: translate(-50%, -50%) translateY(0);
     }
+  }
+
+  .diag-sheet {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+    padding: 0 0 2rem;
+    max-height: min(80vh, 38rem);
+    overflow-y: auto;
+  }
+
+  .diag-sheet__header h2 {
+    margin: 0;
+  }
+
+  .diag-sheet__actions {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  .diag-grid {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  }
+
+  .diag-grid section {
+    padding: 0.75rem;
+    border-radius: var(--m3-util-rounding-medium);
+    background: rgb(var(--m3-scheme-surface-container-low));
+  }
+
+  .diag-grid dl {
+    margin: 0;
+    display: grid;
+    gap: 0.5rem;
+  }
+
+  .diag-grid dt {
+    font-weight: 600;
+    font-size: 0.85rem;
+    color: rgb(var(--m3-scheme-on-surface-variant));
+  }
+
+  .diag-grid dd {
+    margin: 0;
+    font-family: var(--m3-font-family-mono);
+    font-size: 0.85rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .diag-attachments ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: grid;
+    gap: 0.5rem;
+  }
+
+  .diag-attachments li {
+    padding: 0.5rem;
+    border-radius: var(--m3-util-rounding-small);
+    background: rgb(var(--m3-scheme-surface-container-lowest));
+  }
+
+  .diag-attachments .name {
+    font-weight: 600;
+  }
+
+  .diag-attachments .meta {
+    font-size: 0.8rem;
+    color: rgb(var(--m3-scheme-on-surface-variant));
+  }
+
+  .diag-parts ol {
+    margin: 0;
+    padding-left: 1.1rem;
+    display: grid;
+    gap: 0.5rem;
+  }
+
+  .diag-parts pre,
+  .diag-attachments pre,
+  .diag-grid pre {
+    margin: 0.25rem 0 0;
+    padding: 0.5rem;
+    border-radius: var(--m3-util-rounding-small);
+    background: rgb(var(--m3-scheme-surface-container-highest));
+    font-family: var(--m3-font-family-mono);
+    font-size: 0.8rem;
+    max-height: 10rem;
+    overflow-y: auto;
+  }
+
+  .diag-headers dl {
+    margin: 0;
+    display: grid;
+    gap: 0.5rem;
+  }
+
+  .diag-hash {
+    padding: 0.75rem;
+    border-radius: var(--m3-util-rounding-medium);
+    background: rgb(var(--m3-scheme-surface-container-low));
+  }
+
+  .diag-hash p {
+    margin: 0;
+    font-family: var(--m3-font-family-mono);
+    font-size: 0.85rem;
+    overflow-wrap: anywhere;
   }
 </style>
 

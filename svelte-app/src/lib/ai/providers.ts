@@ -13,7 +13,387 @@ import {
   getCollegeRecruitingModerationPrompt
 } from './prompts';
 
-export type AIResult = { text: string };
+export type AIResult = {
+  text: string;
+  provider?: 'openai' | 'anthropic' | 'gemini';
+  model?: string;
+  requestId?: string | null;
+  headers?: Record<string, string | null>;
+  raw?: unknown;
+  httpStatus?: number;
+  durationMs?: number;
+  cached?: boolean;
+};
+
+export type AttachmentPreview = {
+  name: string;
+  mimeType?: string;
+  hasInlineData: boolean;
+  hasText: boolean;
+  textPreview?: string;
+  truncated?: boolean;
+  textLength?: number;
+};
+
+export type EmailSummaryRequest = {
+  provider: 'openai' | 'anthropic' | 'gemini';
+  model: string;
+  promptTemplate: string;
+  hasBody: boolean;
+  redactedInput: string;
+  textPrompt: string | null;
+  parts: any[] | null;
+  attachmentsPreview: AttachmentPreview[];
+  hashSource: string;
+};
+
+export type SanitizedPart = {
+  text?: string;
+  inlineData?: { mimeType?: string; bytes?: number };
+};
+
+export type AISummaryDiagnostics = {
+  flow: 'email_summary';
+  runId: string;
+  threadId?: string;
+  messageId?: string;
+  startedAt: string;
+  completedAt: string;
+  queue: { pendingBefore: number; pendingAfter: number };
+  prompt: {
+    template: string;
+    provider: string;
+    model: string;
+    hasBody: boolean;
+    redactedInput: string;
+    textPrompt?: string | null;
+    partsPreview?: SanitizedPart[];
+    attachments: AttachmentPreview[];
+  };
+  summary: {
+    text?: string;
+    metadata?: AIResult;
+    error?: SerializedError;
+  };
+  subject?: {
+    text?: string;
+    metadata?: AIResult;
+    error?: SerializedError;
+    prompt?: string;
+  };
+  hashes: {
+    content?: string;
+  };
+  notes?: string[];
+};
+
+type SerializedError = {
+  name?: string;
+  message: string;
+  stack?: string;
+  status?: number;
+  provider?: string;
+  requestId?: string | null;
+  retryAfterSeconds?: number | null;
+  headers?: Record<string, string | null> | undefined;
+  body?: unknown;
+};
+
+export function simpleHash(input: string): string {
+  try {
+    let hash = 2166136261;
+    for (let i = 0; i < input.length; i++) {
+      hash ^= input.charCodeAt(i);
+      hash = (hash * 16777619) >>> 0;
+    }
+    return hash.toString(16).padStart(8, '0');
+  } catch {
+    return `${input.length}`;
+  }
+}
+
+function serializeError(error: unknown): SerializedError {
+  try {
+    if (error instanceof AIProviderError) {
+      return {
+        name: error.name,
+        message: error.message,
+        stack: error.stack,
+        status: error.status,
+        provider: error.provider,
+        requestId: error.requestId,
+        retryAfterSeconds: error.retryAfterSeconds ?? undefined,
+        headers: error.headers,
+        body: error.body
+      };
+    }
+    if (error instanceof Error) {
+      return {
+        name: error.name,
+        message: error.message,
+        stack: error.stack
+      };
+    }
+    return {
+      message: typeof error === 'string' ? error : JSON.stringify(error)
+    };
+  } catch (e) {
+    return {
+      message: `Failed to serialize error: ${e instanceof Error ? e.message : String(e)}`
+    };
+  }
+}
+
+function finalizeSubjectText(text: string, fallback: string): string {
+  let result = (text || '').replace(/^[\s\-•]+/, '').replace(/\s+/g, ' ').trim();
+  if (!result) return fallback || '';
+  const words = result.split(/\s+/).filter(Boolean);
+  if (words.length > 15) {
+    result = words.slice(0, 15).join(' ');
+  }
+  return result;
+}
+
+function sanitizeParts(parts?: any[] | null): SanitizedPart[] | undefined {
+  if (!parts || !Array.isArray(parts)) return undefined;
+  return parts.map((part) => {
+    if (typeof part?.text === 'string') {
+      const text = part.text;
+      const truncated = text.length > 400;
+      return {
+        text: truncated ? `${text.slice(0, 400)}…` : text
+      };
+    }
+    if (part?.inlineData) {
+      const data = part.inlineData.data;
+      const bytes = typeof data === 'string' ? Math.floor((data.length * 3) / 4) : undefined;
+      return {
+        inlineData: {
+          mimeType: part.inlineData.mimeType,
+          bytes
+        }
+      };
+    }
+    return {};
+  });
+}
+
+export type PreparedEmailSummaryContext = {
+  hasBody: boolean;
+  redacted: string;
+  textPromptBase: string;
+  attBlock: string;
+  attInline: Array<{ name: string; mimeType?: string; dataBase64?: string; text?: string }>;
+  attachmentsPreview: AttachmentPreview[];
+  defaultGeminiModel: string;
+  combinedForHash: string;
+  partsForGemini?: any[];
+  sanitizedParts?: SanitizedPart[];
+};
+
+type PerformEmailSummaryInput = {
+  subject: string;
+  threadId?: string;
+  messageId?: string;
+  hasBody: boolean;
+  redacted: string;
+  textPromptBase: string;
+  attBlock: string;
+  attachments: GmailAttachment[];
+  attInline: Array<{ name: string; mimeType?: string; dataBase64?: string; text?: string }>;
+  attachmentsPreview: AttachmentPreview[];
+  defaultGeminiModel: string;
+  combinedForHash: string;
+  partsForGemini?: any[];
+  sanitizedParts?: SanitizedPart[];
+  runId?: string;
+  includeDiagnostics?: boolean;
+};
+
+async function performEmailSummary(input: PerformEmailSummaryInput): Promise<{
+  summary: { text?: string; metadata?: AIResult; error?: SerializedError };
+  contextModel: string;
+  queueBefore: number;
+  queueAfter: number;
+  runId: string;
+  textPrompt?: string | null;
+  partsPreview?: SanitizedPart[];
+  provider: 'openai' | 'anthropic' | 'gemini';
+  template: string;
+}> {
+  const s = get(settings);
+  const provider = s.aiProvider || 'gemini';
+  const prompt = getEmailSummaryPrompt();
+  let model = s.aiSummaryModel || s.aiModel || (provider === 'gemini' ? input.defaultGeminiModel : provider === 'anthropic' ? 'claude-3-haiku-20240307' : 'gpt-4o-mini');
+  if (provider === 'gemini' && input.attInline.length && !/^gemini-1\.5/i.test(model)) {
+    model = 'gemini-1.5-flash';
+  }
+
+  let out: AIResult | null = null;
+  let error: SerializedError | undefined;
+  const runId = input.runId || `summ:${Math.random().toString(36).slice(2, 9)}`;
+  const queueBefore = getPendingCount();
+  let queueAfter = queueBefore;
+
+  let textPrompt: string | null = null;
+  let partsPreview: SanitizedPart[] | undefined = input.sanitizedParts;
+
+  if (provider === 'gemini' && input.attInline.length && input.partsForGemini) {
+    try {
+      try {
+        const resp = await enqueueGemini({ id: runId, model, parts: input.partsForGemini, streaming: false, priority: 'interactive' });
+        out = { text: resp.text || '', provider: 'gemini', model, cached: true } as AIResult;
+      } catch (e) {
+        out = await callGeminiWithParts(input.partsForGemini, model);
+      } finally {
+        queueAfter = getPendingCount();
+      }
+    } catch (e) {
+      out = null;
+      error = serializeError(e);
+    }
+  } else {
+    const fullPrompt = input.hasBody
+      ? `${prompt}\n\nEmail:\n${input.redacted}${input.attBlock}`
+      : `${prompt}\n\nSubject:\n${input.redacted}${input.attBlock}`;
+    textPrompt = fullPrompt;
+    try {
+      if (provider === 'gemini') {
+        try {
+          const resp = await enqueueGemini({ id: runId, model, prompt: fullPrompt, streaming: false, priority: 'interactive' });
+          out = { text: resp.text || '', provider: 'gemini', model, cached: true } as AIResult;
+        } catch (e) {
+          out = await callGemini(fullPrompt, model);
+        } finally {
+          queueAfter = getPendingCount();
+        }
+      } else {
+        out = provider === 'anthropic' ? await callAnthropic(fullPrompt, model) : await callOpenAI(fullPrompt, model);
+      }
+    } catch (e) {
+      out = null;
+      error = serializeError(e);
+    }
+  }
+
+  const result = {
+    summary: {
+      text: out?.text || undefined,
+      metadata: out
+        ? {
+            ...out,
+            provider,
+            model,
+            requestId: out.requestId || (out.headers && (out.headers['x-request-id'] || out.headers['openai-request-id'])),
+            headers: out.headers
+          }
+        : undefined,
+      error
+    },
+    queueBefore,
+    queueAfter,
+    contextModel: model,
+    runId,
+    textPrompt,
+    partsPreview,
+    provider,
+    template: prompt
+  };
+  return result;
+}
+
+export function prepareEmailSummaryContext(
+  subject: string,
+  bodyText?: string,
+  bodyHtml?: string,
+  attachments?: GmailAttachment[]
+): PreparedEmailSummaryContext {
+  const text = bodyText || htmlToText(bodyHtml) || '';
+  const hasBody = !!(bodyText || bodyHtml);
+  const redacted = redactPII(text ? `${subject}\n\n${text}` : `${subject}`);
+  const attLines: string[] = [];
+  const attInline: Array<{ name: string; mimeType?: string; dataBase64?: string; text?: string }> = [];
+  const attachmentsPreview: AttachmentPreview[] = [];
+
+  if (Array.isArray(attachments) && attachments.length) {
+    for (const a of attachments) {
+      const name = (a.filename || a.mimeType || 'attachment').slice(0, 200);
+      const preface = name ? `Attachment: ${name}` : 'Attachment';
+      const content = (a.textContent || '').trim();
+      const clipped = content ? (content.length > 2000 ? content.slice(0, 2000) : content) : '';
+      if (clipped) attLines.push(`${preface}\n${clipped}`);
+      else attLines.push(`${preface}`);
+      if (a.dataBase64) attInline.push({ name, mimeType: a.mimeType, dataBase64: a.dataBase64 });
+      else if (clipped) attInline.push({ name, text: clipped, mimeType: a.mimeType });
+      attachmentsPreview.push({
+        name,
+        mimeType: a.mimeType,
+        hasInlineData: !!a.dataBase64,
+        hasText: !!content,
+        textPreview: content ? (content.length > 160 ? `${content.slice(0, 160)}…` : content) : undefined,
+        truncated: content ? content.length > 160 : false,
+        textLength: content ? content.length : undefined
+      });
+    }
+  }
+
+  const attBlock = attLines.length ? `\n\nAttachments (summarize each):\n${attLines.join('\n\n')}` : '';
+  const defaultGemini = attInline.length ? 'gemini-1.5-flash' : 'gemini-2.5-flash-lite';
+
+  const attText = attachmentsPreview
+    .map((a) => `${a.name || a.mimeType || 'attachment'}\n${a.hasText && a.textPreview ? a.textPreview : ''}`)
+    .join('\n\n');
+  const combinedForHash = `${subject}\n\n${bodyText || ''}${!bodyText && bodyHtml ? bodyHtml : ''}${attText ? `\n\n${attText}` : ''}`.trim();
+
+  let partsForGemini: any[] | undefined;
+  if (attInline.length) {
+    partsForGemini = [];
+    partsForGemini.push({ text: getEmailSummaryPrompt() });
+    const segments = (redacted || '').split(/\r?\n\r?\n/);
+    const subjectLine = (segments[0] || '').trim();
+    const bodySegment = segments.slice(1).join('\n\n').trim();
+    if (hasBody) {
+      if (subjectLine) partsForGemini.push({ text: `\n\nSubject: ${subjectLine}` });
+      partsForGemini.push({ text: `\n\nEmail:\n${bodySegment || redacted}` });
+    } else {
+      partsForGemini.push({ text: `\n\nSubject:\n${redacted}` });
+    }
+    for (const a of attInline) {
+      const label = a.name ? `Attachment: ${a.name}` : 'Attachment';
+      partsForGemini.push({ text: `\n\n${label}` });
+      if (a.dataBase64 && a.mimeType) partsForGemini.push({ inlineData: { mimeType: a.mimeType, data: a.dataBase64 } });
+      else if (a.text) partsForGemini.push({ text: `\n${a.text}` });
+      else partsForGemini.push({ text: `\n(No attachment content available; summarize by filename/type only.)` });
+    }
+  }
+
+  return {
+    hasBody,
+    redacted,
+    textPromptBase: redacted,
+    attBlock,
+    attInline,
+    attachmentsPreview,
+    defaultGeminiModel: defaultGemini,
+    combinedForHash,
+    partsForGemini,
+    sanitizedParts: sanitizeParts(partsForGemini)
+  };
+}
+
+async function loadCachedThreadSummary(threadId?: string): Promise<string | null> {
+  if (!threadId) return null;
+  try {
+    const db = await getDB();
+    const t = await db.get('threads', threadId);
+    if (t && t.summary && t.summaryStatus === 'ready') {
+      return String(t.summary || '') || '';
+    }
+  } catch (_) {
+    return null;
+  }
+  return null;
+}
 
 export class AIProviderError extends Error {
   provider: 'openai' | 'anthropic' | 'gemini' | 'unknown';
@@ -22,12 +402,14 @@ export class AIProviderError extends Error {
   body?: unknown;
   requestId?: string | null;
   retryAfterSeconds?: number | null;
+  durationMs?: number;
   constructor(opts: {
     provider: 'openai' | 'anthropic' | 'gemini' | 'unknown';
     message: string;
     status: number;
     headers?: Record<string, string | null>;
     body?: unknown;
+    durationMs?: number;
   }) {
     super(opts.message);
     this.name = 'AIProviderError';
@@ -39,6 +421,7 @@ export class AIProviderError extends Error {
     const ra = opts.headers && opts.headers['retry-after'];
     const n = typeof ra === 'string' ? Number(ra) : null;
     this.retryAfterSeconds = Number.isFinite(n as number) ? (n as number) : null;
+    this.durationMs = opts.durationMs;
   }
 }
 
@@ -63,17 +446,18 @@ export function getFriendlyAIErrorMessage(e: unknown, actionLabel?: string): { m
   }
 }
 
-async function safeParseJson(res: Response): Promise<any> {
+async function readBodySafely(res: Response): Promise<{ json?: any; text?: string }> {
   try {
-    const text = await res.text();
-    if (!text) return {};
+    const clone = res.clone();
+    const json = await clone.json();
+    return { json };
+  } catch (_) {
     try {
-      return JSON.parse(text);
+      const text = await res.clone().text();
+      return { text };
     } catch (_) {
       return {};
     }
-  } catch (_) {
-    return {};
   }
 }
 
@@ -156,21 +540,17 @@ async function callOpenAI(prompt: string, modelOverride?: string): Promise<AIRes
     const s = get(settings);
     const model = modelOverride || s.aiModel || 'gpt-4o-mini';
     const url = '/api/openai';
+    const startedAt = performance.now?.() ?? Date.now();
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], temperature: 0.2, apiKey: s.aiApiKey || undefined })
     });
+    const durationMs = (performance.now?.() ?? Date.now()) - startedAt;
     if (!res.ok) {
       const headers = getOpenAIRateLimitHeaders(res);
-      let body: any = undefined;
-      let textFallback: string | undefined = undefined;
-      try {
-        body = await res.clone().json();
-      } catch (_) {
-        try { textFallback = await res.clone().text(); } catch (_) { /* ignore */ }
-      }
-
+      const { json, text } = await readBodySafely(res);
+      const body = json ?? text;
       const errorCode = typeof body?.error?.code === 'string' ? body.error.code : undefined;
       const errorMessageFromBody =
         typeof body?.error === 'string'
@@ -184,8 +564,7 @@ async function callOpenAI(prompt: string, modelOverride?: string): Promise<AIRes
         baseMsg = 'OpenAI invalid API key';
       } else if (res.status === 429) {
         baseMsg = 'OpenAI rate limit exceeded';
-      } else if (errorMessageFromBody) {
-        // Normalize common server error strings
+      } else if (typeof errorMessageFromBody === 'string' && errorMessageFromBody) {
         if (/api key not set/i.test(errorMessageFromBody)) {
           baseMsg = 'OpenAI API key not set';
         } else {
@@ -193,11 +572,21 @@ async function callOpenAI(prompt: string, modelOverride?: string): Promise<AIRes
         }
       }
 
-      throw new AIProviderError({ provider: 'openai', message: baseMsg, status: res.status, headers, body: body ?? textFallback });
+      throw new AIProviderError({ provider: 'openai', message: baseMsg, status: res.status, headers, body, durationMs });
     }
-    const data = await safeParseJson(res);
+    const data = await res.json().catch(() => ({}));
     const text = data?.choices?.[0]?.message?.content?.trim?.() || '';
-    return { text };
+    return {
+      text,
+      provider: 'openai',
+      model,
+      requestId: res.headers.get('x-request-id') || res.headers.get('openai-request-id'),
+      headers: getOpenAIRateLimitHeaders(res),
+      raw: data,
+      httpStatus: res.status,
+      durationMs,
+      cached: res.headers.get('x-cache') === 'HIT'
+    };
   });
 }
 
@@ -207,20 +596,31 @@ async function callAnthropic(prompt: string, modelOverride?: string): Promise<AI
     const key = s.aiApiKey || '';
     const model = modelOverride || s.aiModel || 'claude-3-haiku-20240307';
     const url = 'https://api.anthropic.com/v1/messages';
+    const startedAt = performance.now?.() ?? Date.now();
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
       body: JSON.stringify({ model, max_tokens: 400, messages: [{ role: 'user', content: prompt }] })
     });
+    const durationMs = (performance.now?.() ?? Date.now()) - startedAt;
+    const { json, text } = await readBodySafely(res);
     if (!res.ok) {
-      let body: any = undefined;
-      try { body = await res.clone().json(); } catch (_) { try { body = await res.clone().text(); } catch (_) { body = undefined; } }
       const message = res.status === 429 ? 'Anthropic rate limit exceeded' : `Anthropic error ${res.status}`;
-      throw new AIProviderError({ provider: 'anthropic', message, status: res.status, headers: {}, body });
+      throw new AIProviderError({ provider: 'anthropic', message, status: res.status, headers: {}, body: json ?? text, durationMs });
     }
-    const data = await safeParseJson(res);
-    const text = data?.content?.[0]?.text?.trim?.() || '';
-    return { text };
+    const data = json ?? {};
+    const textOut = data?.content?.[0]?.text?.trim?.() || '';
+    return {
+      text: textOut,
+      provider: 'anthropic',
+      model,
+      requestId: res.headers.get('x-request-id'),
+      headers: {},
+      raw: data,
+      httpStatus: res.status,
+      durationMs,
+      cached: res.headers.get('x-cache') === 'HIT'
+    };
   });
 }
 
@@ -230,20 +630,31 @@ async function callGemini(prompt: string, modelOverride?: string): Promise<AIRes
     const key = s.aiApiKey || '';
     const model = modelOverride || s.aiModel || 'gemini-1.5-flash';
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
+    const startedAt = performance.now?.() ?? Date.now();
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
     });
+    const durationMs = (performance.now?.() ?? Date.now()) - startedAt;
+    const { json, text } = await readBodySafely(res);
     if (!res.ok) {
-      let body: any = undefined;
-      try { body = await res.clone().json(); } catch (_) { try { body = await res.clone().text(); } catch (_) { body = undefined; } }
       const message = res.status === 429 ? 'Gemini rate limit exceeded' : `Gemini error ${res.status}`;
-      throw new AIProviderError({ provider: 'gemini', message, status: res.status, headers: {}, body });
+      throw new AIProviderError({ provider: 'gemini', message, status: res.status, headers: {}, body: json ?? text, durationMs });
     }
-    const data = await safeParseJson(res);
-    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim?.() || '';
-    return { text };
+    const data = json ?? {};
+    const textOut = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim?.() || '';
+    return {
+      text: textOut,
+      provider: 'gemini',
+      model,
+      requestId: res.headers.get('x-request-id'),
+      headers: {},
+      raw: data,
+      httpStatus: res.status,
+      durationMs,
+      cached: res.headers.get('x-cache') === 'HIT'
+    };
   });
 }
 
@@ -253,115 +664,137 @@ async function callGeminiWithParts(parts: any[], modelOverride?: string): Promis
     const key = s.aiApiKey || '';
     const model = modelOverride || s.aiModel || 'gemini-1.5-flash';
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
+    const startedAt = performance.now?.() ?? Date.now();
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ contents: [{ role: 'user', parts }] })
     });
+    const durationMs = (performance.now?.() ?? Date.now()) - startedAt;
+    const { json, text } = await readBodySafely(res);
     if (!res.ok) {
-      let body: any = undefined;
-      try { body = await res.clone().json(); } catch (_) { try { body = await res.clone().text(); } catch (_) { body = undefined; } }
       const message = res.status === 429 ? 'Gemini rate limit exceeded' : `Gemini error ${res.status}`;
-      throw new AIProviderError({ provider: 'gemini', message, status: res.status, headers: {}, body });
+      throw new AIProviderError({ provider: 'gemini', message, status: res.status, headers: {}, body: json ?? text, durationMs });
     }
-    const data = await safeParseJson(res);
-    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim?.() || '';
-    return { text };
+    const data = json ?? {};
+    const textOut = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim?.() || '';
+    return {
+      text: textOut,
+      provider: 'gemini',
+      model,
+      requestId: res.headers.get('x-request-id'),
+      headers: {},
+      raw: data,
+      httpStatus: res.status,
+      durationMs,
+      cached: res.headers.get('x-cache') === 'HIT'
+    };
   });
 }
 
 import { enqueueGemini, getPendingCount } from '$lib/ai/geminiClient';
 
-export async function aiSummarizeEmail(subject: string, bodyText?: string, bodyHtml?: string, attachments?: GmailAttachment[], threadId?: string): Promise<string> {
-  const s = get(settings);
-  // Defensive short-circuit: if caller provides a threadId and a cached summary
-  // exists for that thread, return it immediately to avoid any AI calls.
-  try {
-    if (threadId) {
-      const db = await getDB();
-      try {
-        const t = await db.get('threads', threadId);
-        if (t && t.summary && t.summaryStatus === 'ready') {
-          return String(t.summary || '') || '';
-        }
-      } catch (_) {
-        // ignore DB errors and fall through to normal summarization
+export type AISummaryResult = {
+  summary: {
+    text?: string;
+    metadata?: AIResult;
+    error?: SerializedError;
+  };
+  diagnostics: AISummaryDiagnostics;
+};
+
+export async function aiSummarizeEmailWithDiagnostics(
+  subject: string,
+  bodyText?: string,
+  bodyHtml?: string,
+  attachments?: GmailAttachment[],
+  threadId?: string,
+  messageId?: string,
+  options?: { force?: boolean }
+): Promise<AISummaryResult> {
+  const cached = await loadCachedThreadSummary(threadId);
+  if (cached && !options?.force) {
+    return {
+      summary: { text: cached },
+      diagnostics: {
+        flow: 'email_summary',
+        runId: 'cached',
+        threadId,
+        messageId,
+        startedAt: new Date().toISOString(),
+        completedAt: new Date().toISOString(),
+        queue: { pendingBefore: 0, pendingAfter: 0 },
+        prompt: {
+          template: 'cached',
+          provider: 'gemini',
+          model: 'cached',
+          hasBody: !!(bodyText || bodyHtml),
+          redactedInput: '',
+          attachments: []
+        },
+        summary: { text: cached },
+        hashes: {},
+        notes: ['Used cached summary']
       }
-    }
-  } catch (_) {}
-  const hasBody = !!(bodyText || bodyHtml);
-  const text = bodyText || htmlToText(bodyHtml) || '';
-  const attLines: string[] = [];
-  const attInline: Array<{ name: string; mimeType?: string; dataBase64?: string; text?: string }> = [];
-  if (Array.isArray(attachments) && attachments.length) {
-    for (const a of attachments) {
-      const name = (a.filename || a.mimeType || 'attachment').slice(0, 200);
-      const preface = name ? `Attachment: ${name}` : 'Attachment';
-      const content = (a.textContent || '').trim();
-      // Limit per-attachment content to avoid blowing prompt size
-      const clipped = content ? (content.length > 2000 ? content.slice(0, 2000) : content) : '';
-      if (clipped) attLines.push(`${preface}\n${clipped}`); else attLines.push(`${preface}`);
-      if (a.dataBase64) attInline.push({ name, mimeType: a.mimeType, dataBase64: a.dataBase64 });
-      else if (clipped) attInline.push({ name, text: clipped, mimeType: a.mimeType });
-    }
+    };
   }
-  const redacted = redactPII(text ? `${subject}\n\n${text}` : `${subject}`);
-  const attBlock = attLines.length ? `\n\nAttachments (summarize each):\n${attLines.join('\n\n')}` : '';
-  const prompt = getEmailSummaryPrompt();
-  const provider = s.aiProvider || 'gemini';
-  // Prefer a multimodal Gemini for attachments; otherwise fallback
-  const defaultGemini = attInline.length ? 'gemini-1.5-flash' : 'gemini-2.5-flash-lite';
-  let model = s.aiSummaryModel || s.aiModel || (provider === 'gemini' ? defaultGemini : provider === 'anthropic' ? 'claude-3-haiku-20240307' : 'gpt-4o-mini');
-  if (provider === 'gemini' && attInline.length && !/^gemini-1\.5/i.test(model)) {
-    model = 'gemini-1.5-flash';
-  }
-  let out: AIResult;
-  if (provider === 'gemini' && attInline.length) {
-    // Build multimodal parts so Gemini can read PDFs/DOCX via inlineData
-    const parts: any[] = [];
-    parts.push({ text: prompt });
-    const segments = (redacted || '').split(/\r?\n\r?\n/);
-    const subjectLine = (segments[0] || '').trim();
-    const bodySegment = segments.slice(1).join('\n\n').trim();
-    if (hasBody) {
-      if (subjectLine) parts.push({ text: `\n\nSubject: ${subjectLine}` });
-      parts.push({ text: `\n\nEmail:\n${hasBody ? (bodySegment || redacted) : redacted}` });
-    } else {
-      parts.push({ text: `\n\nSubject:\n${redacted}` });
+  const context = prepareEmailSummaryContext(subject, bodyText, bodyHtml, attachments);
+  const { summary, queueBefore, queueAfter, runId, textPrompt, partsPreview, provider, contextModel, template } = await performEmailSummary({
+    subject,
+    threadId,
+    messageId,
+    hasBody: context.hasBody,
+    redacted: context.redacted,
+    textPromptBase: context.textPromptBase,
+    attBlock: context.attBlock,
+    attachments: attachments || [],
+    attInline: context.attInline,
+    attachmentsPreview: context.attachmentsPreview,
+    defaultGeminiModel: context.defaultGeminiModel,
+    combinedForHash: context.combinedForHash,
+    partsForGemini: context.partsForGemini,
+    sanitizedParts: context.sanitizedParts
+  });
+  const now = new Date().toISOString();
+  const diagnostics: AISummaryDiagnostics = {
+    flow: 'email_summary',
+    runId,
+    threadId,
+    messageId,
+    startedAt: now,
+    completedAt: now,
+    queue: { pendingBefore: queueBefore, pendingAfter: queueAfter },
+    prompt: {
+      template,
+      provider,
+      model: contextModel,
+      hasBody: context.hasBody,
+      redactedInput: context.textPromptBase,
+      textPrompt,
+      partsPreview,
+      attachments: context.attachmentsPreview
+    },
+    summary: {
+      text: summary.text,
+      metadata: summary.metadata,
+      error: summary.error
+    },
+    hashes: {
+      content: simpleHash(context.combinedForHash || subject || threadId || '')
     }
-    for (const a of attInline) {
-      const label = a.name ? `Attachment: ${a.name}` : 'Attachment';
-      parts.push({ text: `\n\n${label}` });
-      if (a.dataBase64 && a.mimeType) parts.push({ inlineData: { mimeType: a.mimeType, data: a.dataBase64 } });
-      else if (a.text) parts.push({ text: `\n${a.text}` });
-      else parts.push({ text: `\n(No attachment content available; summarize by filename/type only.)` });
-    }
-    // Use gemini client batching for non-streaming multimodal requests
-    try {
-      const resp = await enqueueGemini({ id: `summ:${Math.random().toString(36).slice(2,9)}`, model, parts, streaming: false, priority: 'interactive' });
-      out = { text: resp.text || '' } as any;
-    } catch (e) {
-      // fallback to direct call
-      out = await callGeminiWithParts(parts, model);
-    }
-  } else {
-    const fullPrompt = hasBody
-      ? `${prompt}\n\nEmail:\n${redacted}${attBlock}`
-      : `${prompt}\n\nSubject:\n${redacted}${attBlock}`;
-    if (provider === 'gemini') {
-      // For interactive summarization prefer enqueueGemini but allow fallback
-      try {
-        const resp = await enqueueGemini({ id: `summ:${Math.random().toString(36).slice(2,9)}`, model, prompt: fullPrompt, streaming: false, priority: 'interactive' });
-        out = { text: resp.text || '' } as any;
-      } catch (e) {
-        out = await callGemini(fullPrompt, model);
-      }
-    } else {
-      out = provider === 'anthropic' ? await callAnthropic(fullPrompt, model) : await callOpenAI(fullPrompt, model);
-    }
-  }
-  let result = out.text || '';
-  return result;
+  };
+  return { summary, diagnostics };
+}
+
+export async function aiSummarizeEmail(
+  subject: string,
+  bodyText?: string,
+  bodyHtml?: string,
+  attachments?: GmailAttachment[],
+  threadId?: string
+): Promise<string> {
+  const { summary } = await aiSummarizeEmailWithDiagnostics(subject, bodyText, bodyHtml, attachments, threadId);
+  return summary.text || '';
 }
 
 export async function aiSummarizeSubject(subject: string, bodyText?: string, bodyHtml?: string, messageSummary?: string): Promise<string> {
@@ -378,11 +811,7 @@ export async function aiSummarizeSubject(subject: string, bodyText?: string, bod
   const provider = s.aiProvider || 'gemini';
   const model = s.aiSummaryModel || s.aiModel || (provider === 'gemini' ? 'gemini-2.5-flash-lite' : provider === 'anthropic' ? 'claude-3-haiku-20240307' : 'gpt-4o-mini');
   const out = provider === 'anthropic' ? await callAnthropic(prompt, model) : provider === 'gemini' ? await callGemini(prompt, model) : await callOpenAI(prompt, model);
-  let result = out.text || '';
-  // Normalize and hard-cap at 15 words
-  result = result.replace(/^[\s\-•]+/, '').replace(/\s+/g, ' ').trim();
-  const words = result.split(/\s+/).filter(Boolean);
-  if (words.length > 15) result = words.slice(0, 15).join(' ');
+  const result = finalizeSubjectText(out.text || '', subject);
   return result || subject || '';
 }
 
