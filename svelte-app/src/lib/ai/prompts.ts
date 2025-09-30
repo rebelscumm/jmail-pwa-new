@@ -77,6 +77,13 @@ export const AI_PROMPTS = {
      * Prompt for extracting unsubscribe URLs
      */
     EXTRACT_URL: `From the following email content, extract a single unsubscribe URL or mailto link if present. Respond with ONLY the URL, nothing else. If none is present, respond with "NONE".`
+  },
+
+  /**
+   * Auto moderation / classification prompts
+   */
+  AUTO_MODERATION: {
+    COLLEGE_RECRUITING_DETECT: `You are a compliance assistant that determines if an email is a college recruiting email for athletics, admissions outreach, or scholarship recruiting. You MUST answer with ONLY one of these labels: "MATCH" if the email is clearly about college recruiting, "NOT_MATCH" if it is clearly not recruiting, or "UNKNOWN" if the content is insufficient. Consider subject, sender, and body. Treat coaches, scouts, recruiters, or college departments reaching out to prospective students/athletes as recruiting. Do not infer beyond provided text.`
   }
 } as const;
 
@@ -113,3 +120,4 @@ export const getSubjectImprovementCombinedPrompt = () => AI_PROMPTS.SUBJECT_IMPR
 export const getReplyDraftPrompt = () => AI_PROMPTS.REPLY_DRAFT.MAIN;
 export const getAttachmentSummaryPrompt = () => AI_PROMPTS.ATTACHMENT_SUMMARY.MAIN;
 export const getUnsubscribeExtractionPrompt = () => AI_PROMPTS.UNSUBSCRIBE.EXTRACT_URL;
+export const getCollegeRecruitingModerationPrompt = () => AI_PROMPTS.AUTO_MODERATION.COLLEGE_RECRUITING_DETECT;

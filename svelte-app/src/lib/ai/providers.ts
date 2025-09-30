@@ -9,7 +9,8 @@ import {
   getSubjectImprovementWithContentPrompt,
   getReplyDraftPrompt,
   getAttachmentSummaryPrompt,
-  getUnsubscribeExtractionPrompt
+  getUnsubscribeExtractionPrompt,
+  getCollegeRecruitingModerationPrompt
 } from './prompts';
 
 export type AIResult = { text: string };
@@ -466,6 +467,44 @@ export async function aiExtractUnsubscribeUrl(subject: string, bodyText?: string
   if (/^(https?:|mailto:)/i.test(line)) return line;
   const match = line.match(/(https?:[^\s]+|mailto:[^\s]+)/i);
   return match ? match[1] : null;
+}
+
+export async function aiDetectCollegeRecruiting(
+  subject: string,
+  bodyText?: string,
+  bodyHtml?: string,
+  from?: string
+): Promise<{ verdict: 'match' | 'not_match' | 'unknown'; raw: string }> {
+  const s = get(settings);
+  const provider = s.aiProvider || 'gemini';
+  const baseText = bodyText || htmlToText(bodyHtml) || '';
+  const segments: string[] = [];
+  segments.push(`Subject: ${subject || '(no subject)'}`);
+  if (from && from.trim()) segments.push(`From: ${from.trim()}`);
+  if (baseText.trim()) segments.push(`Body:\n${baseText.trim()}`);
+  const redacted = redactPII(segments.join('\n\n'));
+  const prompt = `${getCollegeRecruitingModerationPrompt()}\n\n${redacted}`;
+  const model = s.aiModel || 'gemini-1.5-flash';
+  let out: AIResult;
+  if (provider === 'anthropic') {
+    out = await callAnthropic(prompt, s.aiModel || 'claude-3-haiku-20240307');
+  } else if (provider === 'gemini') {
+    out = await callGemini(prompt, model);
+  } else {
+    out = await callOpenAI(prompt, s.aiModel || 'gpt-4o-mini');
+  }
+  const raw = (out.text || '').trim();
+  const normalized = raw.toUpperCase();
+  if (normalized.startsWith('MATCH')) return { verdict: 'match', raw };
+  if (normalized.startsWith('NOT') || normalized.startsWith('DO NOT MATCH') || normalized.includes('NOT_MATCH') || normalized.includes('NOT MATCH')) {
+    return { verdict: 'not_match', raw };
+  }
+  if (normalized.startsWith('UNKNOWN')) return { verdict: 'unknown', raw };
+  // Fallback: check first token
+  const firstToken = normalized.split(/\s+/)[0] || '';
+  if (firstToken === 'MATCH') return { verdict: 'match', raw };
+  if (firstToken === 'NOT_MATCH' || firstToken === 'NOT') return { verdict: 'not_match', raw };
+  return { verdict: 'unknown', raw };
 }
 
 

@@ -47,6 +47,15 @@ export type GmailThread = {
   subjectVersion?: number;
   /** Last update timestamp for the AI subject (ms epoch) */
   aiSubjectUpdatedAt?: number;
+  /** AI-based auto moderation/classification results keyed by identifier */
+  autoModeration?: Record<string, {
+    status: 'pending' | 'match' | 'not_match' | 'unknown' | 'error';
+    updatedAt: number;
+    promptVersion?: number;
+    raw?: string;
+    lastError?: string;
+    actionTaken?: string;
+  }>;
 };
 
 export type GmailAttachment = {

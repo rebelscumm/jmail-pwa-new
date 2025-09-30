@@ -31,7 +31,7 @@
   import { searchQuery } from '$lib/stores/search';
   import FilterBar from '$lib/utils/FilterBar.svelte';
   import { filters as filtersStore, applyFilterToThreads, loadFilters } from '$lib/stores/filters';
-  import { aiSummarizeSubject, aiSummarizeEmail } from '$lib/ai/providers';
+  import { aiSummarizeSubject, aiSummarizeEmail, aiDetectCollegeRecruiting } from '$lib/ai/providers';
   import Icon from '$lib/misc/_icon.svelte';
   import iconSync from '@ktibow/iconset-material-symbols/sync';
 

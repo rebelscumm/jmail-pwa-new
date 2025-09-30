@@ -1,8 +1,9 @@
 import { get } from 'svelte/store';
 import { settings } from '$lib/stores/settings';
 import { getDB } from '$lib/db/indexeddb';
-import type { GmailMessage, GmailThread } from '$lib/types';
-import { aiSummarizeEmail, aiSummarizeSubject } from '$lib/ai/providers';
+import type { GmailMessage, GmailThread, GmailAttachment } from '$lib/types';
+import { aiSummarizeEmail, aiSummarizeSubject, aiDetectCollegeRecruiting } from '$lib/ai/providers';
+import { trashThread } from '$lib/queue/intents';
 import { precomputeStatus } from '$lib/stores/precompute';
 import { threads } from '$lib/stores/threads';
 import { get as getStore } from 'svelte/store';
@@ -12,6 +13,33 @@ type PrecomputeLogEntry = { ts: number; level: 'debug' | 'warn' | 'error'; messa
 const PRECOMPUTE_LOG_CAP = 1000; // hard cap on retained logs
 const PRECOMPUTE_LOG_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 7; // 7 days
 const _precomputeLogs: PrecomputeLogEntry[] = [];
+
+const MODERATION_RULE_KEY = 'college_recruiting_v1';
+const MODERATION_PROMPT_VERSION = 1;
+
+function shouldRunRecruitingModeration(thread: GmailThread, prepared: { bodyText?: string; bodyHtml?: string }): boolean {
+  try {
+    const labels = thread.labelIds || [];
+    if (!labels.includes('INBOX')) return false;
+    if (labels.includes('TRASH') || labels.includes('SPAM')) return false;
+    if (!prepared.bodyText && !prepared.bodyHtml) return false;
+    const existing = thread.autoModeration?.[MODERATION_RULE_KEY];
+    const lastActivity = Number(thread.lastMsgMeta?.date) || 0;
+    if (!existing) return true;
+    if (existing.status === 'pending' || existing.status === 'error' || existing.status === 'unknown') return true;
+    if (existing.promptVersion !== MODERATION_PROMPT_VERSION) return true;
+    if (existing.status === 'not_match') {
+      return lastActivity > (existing.updatedAt || 0);
+    }
+    if (existing.status === 'match') {
+      if (labels.includes('TRASH')) return false;
+      return existing.actionTaken !== 'trash_enqueued';
+    }
+    return false;
+  } catch (_) {
+    return false;
+  }
+}
 
 function prunePrecomputeLogsIfNeeded() {
   try {
@@ -525,7 +553,7 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
       const lastId = getLastMessageId(t);
       let bodyText: string | undefined;
       let bodyHtml: string | undefined;
-      let attachments: import('$lib/types').GmailAttachment[] | undefined;
+      let attachments: GmailAttachment[] | undefined;
       if (lastId) {
         const full = await tryGetLastMessageFull(lastId);
         if (full) { bodyText = full.bodyText; bodyHtml = full.bodyHtml; attachments = full.attachments; }
@@ -534,7 +562,12 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
       const attText = (attachments || []).map((a) => `${a.filename || a.mimeType || 'attachment'}\n${(a.textContent || '').slice(0, 500)}`).join('\n\n');
       const text = `${subject}\n\n${bodyText || ''}${!bodyText && bodyHtml ? bodyHtml : ''}${attText ? `\n\n${attText}` : ''}`.trim();
       const bodyHash = simpleHash(text || subject || t.threadId);
-      return { thread: t, subject, bodyText, bodyHtml, attachments, text, bodyHash } as any;
+      const moderationEligible = shouldRunRecruitingModeration(t, { bodyText, bodyHtml });
+      return { thread: t, subject, bodyText, bodyHtml, attachments, text, bodyHash, moderationEligible, moderationResult: null as null | {
+        status: 'match' | 'not_match' | 'unknown' | 'error';
+        raw?: string;
+        error?: unknown;
+      } } as any;
     });
 
     // Before marking items as pending, re-check DB state to avoid touching threads the user removed
@@ -667,6 +700,32 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
       }
     }
 
+    // Run college recruiting moderation for eligible threads
+    const moderationTargets = prepared.filter((p) => p.moderationEligible);
+    if (moderationTargets.length) {
+      pushLog('debug', '[Precompute] Running college recruiting moderation for', moderationTargets.length, 'threads');
+      precomputeStatus.updateProgress(
+        summaryTargets.length + wantsSubject.length,
+        `Checking ${moderationTargets.length} recruiting candidates...`
+      );
+
+      await mapWithConcurrency(moderationTargets, 2, async (p) => {
+        try {
+          const result = await aiDetectCollegeRecruiting(p.subject, p.bodyText, p.bodyHtml, p.thread.lastMsgMeta?.from);
+          p.moderationResult = {
+            status:
+              result.verdict === 'match' ? 'match' :
+              result.verdict === 'not_match' ? 'not_match' : 'unknown',
+            raw: result.raw
+          };
+          pushLog('debug', '[Precompute] Moderation verdict for', p.thread.threadId, ':', result.verdict);
+        } catch (e) {
+          p.moderationResult = { status: 'error', error: e instanceof Error ? e.message : String(e) };
+          pushLog('warn', '[Precompute] Moderation failed for', p.thread.threadId, e);
+        }
+      });
+    }
+
     let subjectResults: Record<string, string> = {};
     if (wantsSubject.length) {
       pushLog('debug', '[Precompute] Processing', wantsSubject.length, 'subject targets');
@@ -767,7 +826,8 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
           summaryOk: sumOk,
           subjectOk: subjOk,
           summaryText: sumText ? `${sumText.slice(0, 50)}...` : 'none',
-          subjectText: subjText ? `${subjText.slice(0, 50)}...` : 'none'
+          subjectText: subjText ? `${subjText.slice(0, 50)}...` : 'none',
+          moderationStatus: p.moderationResult?.status
         });
         
         // Be aggressive about persisting AI fields: do not block writes based
@@ -810,6 +870,35 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
           summaryUpdatedAt: (existing && existingHasSummary) ? (existing.summaryUpdatedAt || nowMs) : (setSummaryFields ? nowMs : t.summaryUpdatedAt),
           bodyHash: p.bodyHash
         } as any;
+        if (p.moderationEligible) {
+          const mod = p.moderationResult;
+          const prevModeration = (existing || t).autoModeration || {};
+          const moderationEntry = prevModeration[MODERATION_RULE_KEY] || {};
+          const nextModerationEntry = {
+            ...moderationEntry,
+            status: mod?.status || 'error',
+            raw: mod?.raw,
+            lastError: mod?.error ? String(mod.error) : undefined,
+            promptVersion: MODERATION_PROMPT_VERSION,
+            updatedAt: nowMs,
+            actionTaken: moderationEntry.actionTaken
+          } as GmailThread['autoModeration'][string];
+          (next as any).autoModeration = {
+            ...prevModeration,
+            [MODERATION_RULE_KEY]: nextModerationEntry
+          };
+
+          if (mod?.status === 'match') {
+            try {
+              pushLog('debug', '[Precompute] Enqueuing trash for recruiting match', t.threadId);
+              await trashThread(t.threadId, { optimisticLocal: false });
+              (next as any).autoModeration[MODERATION_RULE_KEY].actionTaken = 'trash_enqueued';
+            } catch (err) {
+              pushLog('error', '[Precompute] Failed to enqueue trash for', t.threadId, err);
+              (next as any).autoModeration[MODERATION_RULE_KEY].lastError = String(err instanceof Error ? err.message : err);
+            }
+          }
+        }
         if (needsSubj) {
           if (subjOk) {
             if (existing && existingHasAiSubject) {
