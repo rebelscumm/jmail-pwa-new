@@ -147,23 +147,20 @@ async function processQueueOnce() {
 
   if (!pickable.length) return;
 
-  // If first pick is background and there are multiple, attempt to batch locally
+  // If first pick is background and there are multiple, attempt a best-effort batch
   const first = pickable[0];
   if (!first.req.streaming && first.req.priority === 'background') {
-    // Build a batch of compatible items
     const batch = [first];
     for (let i = 1; i < pendingQueue.length && batch.length < DEFAULTS.maxBatchSize; i++) {
       const it = pendingQueue[i];
       if (it.req.priority === 'background' && !it.req.streaming && it.req.model === first.req.model) batch.push(it);
     }
 
-    // Remove batch items from pendingQueue
     for (const b of batch) {
       const idx = pendingQueue.indexOf(b);
       if (idx >= 0) pendingQueue.splice(idx, 1);
     }
 
-    // Token accounting: ensure batch doesn't exceed outstanding budget
     const batchTokens = batch.reduce((acc, b) => acc + estimateTokensFor(b.req), 0);
     if (outstandingTokenBudget + batchTokens > MAX_OUTSTANDING_TOKENS) {
       setTimeout(() => { try { processQueueOnce(); } catch {} }, 200);
