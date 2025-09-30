@@ -147,12 +147,11 @@ async function processQueueOnce() {
 
   if (!pickable.length) return;
 
-  // If first pick is background and there are multiple, attempt to batch
+  // If first pick is background and there are multiple, attempt to batch locally
   const first = pickable[0];
   if (!first.req.streaming && first.req.priority === 'background') {
     // Build a batch of compatible items
     const batch = [first];
-    // gather up to maxBatchSize compatible items
     for (let i = 1; i < pendingQueue.length && batch.length < DEFAULTS.maxBatchSize; i++) {
       const it = pendingQueue[i];
       if (it.req.priority === 'background' && !it.req.streaming && it.req.model === first.req.model) batch.push(it);
@@ -167,47 +166,23 @@ async function processQueueOnce() {
     // Token accounting: ensure batch doesn't exceed outstanding budget
     const batchTokens = batch.reduce((acc, b) => acc + estimateTokensFor(b.req), 0);
     if (outstandingTokenBudget + batchTokens > MAX_OUTSTANDING_TOKENS) {
-      // delay batch slightly to allow token budget to free
       setTimeout(() => { try { processQueueOnce(); } catch {} }, 200);
       return;
     }
 
-    // Execute batch as a single API call using server-side batch endpoint if available
     outstandingTokenBudget += batchTokens;
     currentConcurrent += 1;
     try {
-      // Prefer using local server batch proxy if available to consolidate headers and caching
-      const s = get(settings);
-      const apiKey = s.aiApiKey || undefined;
-      const model = batch[0].req.model || s.aiModel;
-      // Send to server endpoint which will call Gemini batch/combined modes
-      const items = batch.map((b) => ({ id: b.req.id, text: b.req.prompt || (b.req.parts && b.req.parts.map((p: any) => p.text || '').join('\n')) || '' }));
-      let resp: any = null;
-      try {
-        const r = await fetch('/api/gemini', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'summarize_batch', items, model, apiKey }) });
-        if (r.ok) resp = await r.json();
-      } catch (e) { /* server batch failed; fall back to per-item */ }
-
-      if (resp && resp.map) {
-        for (const b of batch) {
-          try {
-            const text = String(resp.map[b.req.id] || '');
-            // update cache
-            try { responseCache.set(b.req.prompt || b.req.id, { text, ts: now() }); scheduleCacheFlush(); } catch {}
-            b.resolve({ text });
-          } catch (e) { b.reject(e); }
+      await Promise.all(batch.map(async (b) => {
+        try {
+          const out = await sendWithRetries(b);
+          b.resolve(out);
+        } catch (e) {
+          b.reject(e);
         }
-      } else {
-        // Fall back: call Gemini per item with limited concurrency
-        await Promise.all(batch.map(async (b) => {
-          try {
-            const out = await sendWithRetries(b);
-            b.resolve(out);
-          } catch (e) { b.reject(e); }
-        }));
-      }
+      }));
     } catch (e) {
-      for (const b of pickable) try { b.reject(e); } catch {}
+      for (const b of batch) try { b.reject(e); } catch {}
     } finally {
       currentConcurrent -= 1;
       outstandingTokenBudget = Math.max(0, outstandingTokenBudget - batchTokens);

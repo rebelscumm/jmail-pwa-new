@@ -275,44 +275,12 @@ async function summarizeDirect(subject: string, bodyText?: string, bodyHtml?: st
   return aiSummarizeEmail(subject || '', bodyText, bodyHtml, attachments, threadId);
 }
 
-async function summarizeBatchRemote(items: Array<{ id: string; text: string }>, apiKey?: string, model?: string, useCache?: boolean, combined = false): Promise<Record<string, string>> {
-  try {
-    const action = combined ? 'summarize_batch_combined' : 'summarize_batch';
-    const res = await fetch('/api/gemini', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action, items, model: model || undefined, apiKey: apiKey || undefined, useCache: !!useCache })
-    });
-    if (!res.ok) throw new Error(`Gemini batch endpoint error ${res.status}`);
-    const data = (await res.json()) as { results?: Array<{ id: string; text: string }>; map?: Record<string, string> };
-    const map = data?.map || {};
-    if (data?.results && Array.isArray(data.results)) {
-      for (const r of data.results) map[r.id] = r.text;
-    }
-    return map;
-  } catch (_) {
-    return {};
-  }
+async function summarizeBatchRemote(): Promise<Record<string, string>> {
+  return {};
 }
 
-async function summarizeSubjectBatchRemote(items: Array<{ id: string; text: string }>, apiKey?: string, model?: string, useCache?: boolean, combined = false): Promise<Record<string, string>> {
-  try {
-    const action = combined ? 'subject_batch_combined' : 'subject_batch';
-    const res = await fetch('/api/gemini', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action, items, model: model || undefined, apiKey: apiKey || undefined, useCache: !!useCache })
-    });
-    if (!res.ok) throw new Error(`Gemini subject batch endpoint error ${res.status}`);
-    const data = (await res.json()) as { results?: Array<{ id: string; text: string }>; map?: Record<string, string> };
-    const map = data?.map || {};
-    if (data?.results && Array.isArray(data.results)) {
-      for (const r of data.results) map[r.id] = r.text;
-    }
-    return map;
-  } catch (_) {
-    return {};
-  }
+async function summarizeSubjectBatchRemote(): Promise<Record<string, string>> {
+  return {};
 }
 
 async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
@@ -654,50 +622,29 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
       // Update progress - processing summaries
       precomputeStatus.updateProgress(0, `Processing ${summaryTargets.length} summaries...`);
       
-      // Always attempt server-side combined batch first for cheaper Gemini rates
-      pushLog('debug', '[Precompute] Attempting combined batch mode for summaries');
-      const items = summaryTargets.map((p) => ({ id: p.thread.threadId, text: p.text || p.subject || '' }));
-      // Try combined (single Gemini call for many inputs) first
-      let map = await summarizeBatchRemote(items, s.aiApiKey, s.aiSummaryModel || s.aiModel, s.precomputeUseContextCache, true);
-      if (map && Object.keys(map).length) {
-        summaryResults = map;
-        pushLog('debug', '[Precompute] Combined batch summary results:', Object.keys(map).length);
-      } else {
-        pushLog('debug', '[Precompute] Combined batch failed or returned no results, falling back to parallel per-item server batch');
-        // Fallback to server-side parallel per-item batch (still cheaper than client-side sequential)
-        map = await summarizeBatchRemote(items, s.aiApiKey, s.aiSummaryModel || s.aiModel, s.precomputeUseContextCache, false);
-        if (map && Object.keys(map).length) {
-          summaryResults = map;
-          pushLog('debug', '[Precompute] Server-side parallel batch summary results:', Object.keys(map).length);
-        } else {
-          pushLog('debug', '[Precompute] Server-side parallel batch failed, falling back to direct');
-        }
-      }
-      if (!Object.keys(summaryResults).length) {
-        pushLog('debug', '[Precompute] Using direct mode for summaries');
-        let successCount = 0;
-        let errorCount = 0;
-        const out = await mapWithConcurrency(summaryTargets, 2, async (p: any) => {
-          try {
-            const text = await summarizeDirect(p.subject, p.bodyText, p.bodyHtml, p.attachments);
-            if (text && text.trim()) {
-              pushLog('debug', '[Precompute] Direct summary success for', p.thread.threadId);
-              successCount++;
-              return { id: p.thread.threadId, text };
-            } else {
-              pushLog('debug', '[Precompute] Direct summary returned empty text for', p.thread.threadId);
-              errorCount++;
-              return { id: p.thread.threadId, text: '' };
-            }
-          } catch (e) {
-            pushLog('error', '[Precompute] Direct summary failed for', p.thread.threadId, e);
+      pushLog('debug', '[Precompute] Using direct mode for summaries');
+      let successCount = 0;
+      let errorCount = 0;
+      const out = await mapWithConcurrency(summaryTargets, 2, async (p: any) => {
+        try {
+          const text = await summarizeDirect(p.subject, p.bodyText, p.bodyHtml, p.attachments);
+          if (text && text.trim()) {
+            pushLog('debug', '[Precompute] Direct summary success for', p.thread.threadId);
+            successCount++;
+            return { id: p.thread.threadId, text };
+          } else {
+            pushLog('debug', '[Precompute] Direct summary returned empty text for', p.thread.threadId);
             errorCount++;
             return { id: p.thread.threadId, text: '' };
           }
-        });
-        summaryResults = Object.fromEntries(out.map((o) => [o.id, o.text]));
-        pushLog('debug', '[Precompute] Direct summary results:', Object.keys(summaryResults).length, 'success:', successCount, 'errors:', errorCount);
-      }
+        } catch (e) {
+          pushLog('error', '[Precompute] Direct summary failed for', p.thread.threadId, e);
+          errorCount++;
+          return { id: p.thread.threadId, text: '' };
+        }
+      });
+      summaryResults = Object.fromEntries(out.map((o) => [o.id, o.text]));
+      pushLog('debug', '[Precompute] Direct summary results:', Object.keys(summaryResults).length, 'success:', successCount, 'errors:', errorCount);
     }
 
     // Run college recruiting moderation for eligible threads
@@ -736,63 +683,36 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
         `Processing ${wantsSubject.length} AI subjects...`
       );
       
-      // Always attempt server-side combined batch for subjects first
-      pushLog('debug', '[Precompute] Attempting combined batch mode for subjects');
-      const items = wantsSubject.map((p) => {
-        const t = p.thread as GmailThread;
-        const readySummary = (t.summaryStatus === 'ready' && t.summary) ? t.summary : (summaryResults[t.threadId] || '');
-        const text = readySummary && readySummary.trim()
-          ? `Subject: ${p.subject}\n\nAI Summary:\n${readySummary}`
-          : (p.text || p.subject || '');
-        return { id: p.thread.threadId, text };
-      });
-      // Try combined single-call batch
-      let subjMap = await summarizeSubjectBatchRemote(items, s.aiApiKey, s.aiSummaryModel || s.aiModel, s.precomputeUseContextCache, true);
-      if (subjMap && Object.keys(subjMap).length) {
-        subjectResults = subjMap;
-        pushLog('debug', '[Precompute] Combined batch subject results:', Object.keys(subjMap).length);
-      } else {
-        pushLog('debug', '[Precompute] Combined batch for subjects failed, falling back to server-side parallel batch');
-        subjMap = await summarizeSubjectBatchRemote(items, s.aiApiKey, s.aiSummaryModel || s.aiModel, s.precomputeUseContextCache, false);
-        if (subjMap && Object.keys(subjMap).length) {
-          subjectResults = subjMap;
-          pushLog('debug', '[Precompute] Server-side parallel batch subject results:', Object.keys(subjMap).length);
-        } else {
-          pushLog('debug', '[Precompute] Server-side parallel batch for subjects failed, falling back to direct');
-        }
-      }
-      if (!Object.keys(subjectResults).length) {
-        pushLog('debug', '[Precompute] Using direct mode for subjects');
-        let successCount = 0;
-        let errorCount = 0;
-        const out = await mapWithConcurrency(wantsSubject, 2, async (p) => {
-          try {
-            const t = p.thread as GmailThread;
-            const readySummary = (t.summaryStatus === 'ready' && t.summary) ? t.summary : (summaryResults[t.threadId] || '');
-            let text: string;
-            if (readySummary && readySummary.trim()) {
-              text = await aiSummarizeSubject(p.subject, undefined, undefined, readySummary);
-            } else {
-              text = await aiSummarizeSubject(p.subject, p.bodyText, p.bodyHtml);
-            }
-            if (text && text.trim()) {
-              pushLog('debug', '[Precompute] Direct subject success for', p.thread.threadId);
-              successCount++;
-              return { id: p.thread.threadId, text };
-            } else {
-              pushLog('debug', '[Precompute] Direct subject returned empty text for', p.thread.threadId);
-              errorCount++;
-              return { id: p.thread.threadId, text: '' };
-            }
-          } catch (e) {
-            pushLog('error', '[Precompute] Direct subject failed for', p.thread.threadId, e);
+      pushLog('debug', '[Precompute] Using direct mode for subjects');
+      let successCount = 0;
+      let errorCount = 0;
+      const out = await mapWithConcurrency(wantsSubject, 2, async (p) => {
+        try {
+          const t = p.thread as GmailThread;
+          const readySummary = (t.summaryStatus === 'ready' && t.summary) ? t.summary : (summaryResults[t.threadId] || '');
+          let text: string;
+          if (readySummary && readySummary.trim()) {
+            text = await aiSummarizeSubject(p.subject, undefined, undefined, readySummary);
+          } else {
+            text = await aiSummarizeSubject(p.subject, p.bodyText, p.bodyHtml);
+          }
+          if (text && text.trim()) {
+            pushLog('debug', '[Precompute] Direct subject success for', p.thread.threadId);
+            successCount++;
+            return { id: p.thread.threadId, text };
+          } else {
+            pushLog('debug', '[Precompute] Direct subject returned empty text for', p.thread.threadId);
             errorCount++;
             return { id: p.thread.threadId, text: '' };
           }
-        });
-        subjectResults = Object.fromEntries(out.map((o) => [o.id, o.text]));
-        pushLog('debug', '[Precompute] Direct subject results:', Object.keys(subjectResults).length, 'success:', successCount, 'errors:', errorCount);
-      }
+        } catch (e) {
+          pushLog('error', '[Precompute] Direct subject failed for', p.thread.threadId, e);
+          errorCount++;
+          return { id: p.thread.threadId, text: '' };
+        }
+      });
+      subjectResults = Object.fromEntries(out.map((o) => [o.id, o.text]));
+      pushLog('debug', '[Precompute] Direct subject results:', Object.keys(subjectResults).length, 'success:', successCount, 'errors:', errorCount);
     }
 
     // Update progress - persisting results
