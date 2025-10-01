@@ -323,11 +323,12 @@ import BottomSheet from "$lib/containers/BottomSheet.svelte";
   }
   function gotoPrev() { if (prevThreadId) safeGoto(`/viewer/${prevThreadId}`); }
   function gotoNext() { if (nextThreadId) safeGoto(`/viewer/${nextThreadId}`); }
-  async function navigateToInbox() {
+  async function navigateToInbox(refresh = false) {
     try {
-      try { sessionStorage.setItem('jmail:refreshOnce', '1'); } catch {}
       await goto('/inbox');
-      try { window.dispatchEvent(new CustomEvent('jmail:refresh')); } catch {}
+      if (refresh) {
+        try { window.dispatchEvent(new CustomEvent('jmail:refresh')); } catch {}
+      }
     } catch (_) {
       try { location.href = '/inbox'; } catch {}
     }
@@ -849,7 +850,10 @@ import BottomSheet from "$lib/containers/BottomSheet.svelte";
       // Close the snooze menu
       if (snoozeDetails) snoozeDetails.open = false;
       // Navigate back to inbox
-      await navigateToInbox();
+      await navigateToInbox(true);
+      await navigateToInbox(true);
+      await navigateToInbox(true);
+      await navigateToInbox(true);
     } catch (error) {
       console.error('Failed to snooze thread:', error);
       showSnackbar({ message: 'Failed to snooze thread', closable: true });
@@ -901,10 +905,10 @@ function onKeyDown(e: KeyboardEvent) {
   const ct = currentThread;
   if (!ct) return;
 
-  // Esc: back to inbox
+  // Esc: back to inbox (preserve inbox state; no refresh)
   if (e.key === 'Escape') {
     e.preventDefault();
-    navigateToInbox();
+    navigateToInbox(false);
     return;
   }
   // b: open snooze menu
@@ -935,7 +939,7 @@ function onKeyDown(e: KeyboardEvent) {
     e.preventDefault();
     archiveThread(ct.threadId).then(async () => {
       try { showSnackbar({ message: 'Archived', actions: { Undo: () => undoLast(1) } }); } catch {}
-      await navigateToInbox();
+      await navigateToInbox(true);
     });
     return;
   }
@@ -949,7 +953,7 @@ function onKeyDown(e: KeyboardEvent) {
     e.preventDefault();
     trashThread(ct.threadId).then(async () => {
       try { showSnackbar({ message: 'Deleted', actions: { Undo: () => undoLast(1) } }); } catch {}
-      await navigateToInbox();
+      await navigateToInbox(true);
     });
     return;
   }
@@ -964,7 +968,7 @@ function onKeyDown(e: KeyboardEvent) {
     e.preventDefault();
     snoozeThreadByRule(ct.threadId, '1h').then(async () => {
       showSnackbar({ message: 'Snoozed 1h', actions: { Undo: () => undoLast(1) } });
-      await navigateToInbox();
+      await navigateToInbox(true);
     });
     return;
   }
@@ -973,7 +977,7 @@ function onKeyDown(e: KeyboardEvent) {
     e.preventDefault();
     snoozeThreadByRule(ct.threadId, '2h').then(async () => {
       showSnackbar({ message: 'Snoozed 2h', actions: { Undo: () => undoLast(1) } });
-      await navigateToInbox();
+      await navigateToInbox(true);
     });
     return;
   }
@@ -1055,11 +1059,11 @@ onMount(() => {
     <div class="action-bar" role="toolbar" aria-label="Email actions">
       <!-- Primary Actions Group -->
       <div class="action-group primary-actions">
-        <Button variant="filled" onclick={() => archiveThread(currentThread.threadId).then(async ()=> { showSnackbar({ message: 'Archived', actions: { Undo: () => undoLast(1) } }); await navigateToInbox(); })} aria-label="Archive conversation">
+        <Button variant="filled" onclick={() => archiveThread(currentThread.threadId).then(async ()=> { showSnackbar({ message: 'Archived', actions: { Undo: () => undoLast(1) } }); await navigateToInbox(true); })} aria-label="Archive conversation">
           <Icon icon={iconArchive} />
           Archive
         </Button>
-        <Button variant="tonal" color="error" onclick={() => trashThread(currentThread.threadId).then(async ()=> { showSnackbar({ message: 'Deleted', actions: { Undo: () => undoLast(1) } }); await navigateToInbox(); })} aria-label="Delete conversation">
+        <Button variant="tonal" color="error" onclick={() => trashThread(currentThread.threadId).then(async ()=> { showSnackbar({ message: 'Deleted', actions: { Undo: () => undoLast(1) } }); await navigateToInbox(true); })} aria-label="Delete conversation">
           <Icon icon={iconDelete} />
           Delete
         </Button>
@@ -1079,13 +1083,13 @@ onMount(() => {
             </Button>
           {/if}
           {#if Object.keys($settings.labelMapping || {}).some((k)=>k==='3h' && $settings.labelMapping[k])}
-            <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '3h').then(async ()=> { showSnackbar({ message: 'Snoozed 3h', actions: { Undo: () => undoLast(1) } }); await navigateToInbox(); })}>
+            <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '3h').then(async ()=> { showSnackbar({ message: 'Snoozed 3h', actions: { Undo: () => undoLast(1) } }); await navigateToInbox(true); })}>
               <Icon icon={iconSnooze} />
               3h
             </Button>
           {/if}
           {#if Object.keys($settings.labelMapping || {}).some((k)=>k==='1d' && $settings.labelMapping[k])}
-            <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '1d').then(async ()=> { showSnackbar({ message: 'Snoozed 1d', actions: { Undo: () => undoLast(1) } }); await navigateToInbox(); })}>
+            <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '1d').then(async ()=> { showSnackbar({ message: 'Snoozed 1d', actions: { Undo: () => undoLast(1) } }); await navigateToInbox(true); })}>
               <Icon icon={iconSnooze} />
               1d
             </Button>
@@ -1164,7 +1168,7 @@ onMount(() => {
                 Filter Options
               </MenuItem>
               {#if Object.keys($settings.labelMapping || {}).some((k)=>k==='10m' && $settings.labelMapping[k])}
-                <MenuItem onclick={() => snoozeThreadByRule(currentThread.threadId, '10m').then(async ()=> { showSnackbar({ message: 'Snoozed 10m', actions: { Undo: () => undoLast(1) } }); await navigateToInbox(); })}>
+                <MenuItem onclick={() => snoozeThreadByRule(currentThread.threadId, '10m').then(async ()=> { showSnackbar({ message: 'Snoozed 10m', actions: { Undo: () => undoLast(1) } }); await navigateToInbox(true); })}>
                   <Icon icon={iconSnooze} />
                   Snooze 10m
                 </MenuItem>
@@ -1413,11 +1417,11 @@ onMount(() => {
     <div class="action-bar" role="toolbar" aria-label="Email actions">
       <!-- Primary Actions Group -->
       <div class="action-group primary-actions">
-        <Button variant="filled" onclick={() => archiveThread(currentThread.threadId).then(async ()=> { showSnackbar({ message: 'Archived', actions: { Undo: () => undoLast(1) } }); await navigateToInbox(); })} aria-label="Archive conversation">
+        <Button variant="filled" onclick={() => archiveThread(currentThread.threadId).then(async ()=> { showSnackbar({ message: 'Archived', actions: { Undo: () => undoLast(1) } }); await navigateToInbox(true); })} aria-label="Archive conversation">
           <Icon icon={iconArchive} />
           Archive
         </Button>
-        <Button variant="tonal" color="error" onclick={() => trashThread(currentThread.threadId).then(async ()=> { showSnackbar({ message: 'Deleted', actions: { Undo: () => undoLast(1) } }); await navigateToInbox(); })} aria-label="Delete conversation">
+        <Button variant="tonal" color="error" onclick={() => trashThread(currentThread.threadId).then(async ()=> { showSnackbar({ message: 'Deleted', actions: { Undo: () => undoLast(1) } }); await navigateToInbox(true); })} aria-label="Delete conversation">
           <Icon icon={iconDelete} />
           Delete
         </Button>
@@ -1437,13 +1441,13 @@ onMount(() => {
             </Button>
           {/if}
           {#if Object.keys($settings.labelMapping || {}).some((k)=>k==='3h' && $settings.labelMapping[k])}
-            <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '3h').then(async ()=> { showSnackbar({ message: 'Snoozed 3h', actions: { Undo: () => undoLast(1) } }); await navigateToInbox(); })}>
+            <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '3h').then(async ()=> { showSnackbar({ message: 'Snoozed 3h', actions: { Undo: () => undoLast(1) } }); await navigateToInbox(true); })}>
               <Icon icon={iconSnooze} />
               3h
             </Button>
           {/if}
           {#if Object.keys($settings.labelMapping || {}).some((k)=>k==='1d' && $settings.labelMapping[k])}
-            <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '1d').then(async ()=> { showSnackbar({ message: 'Snoozed 1d', actions: { Undo: () => undoLast(1) } }); await navigateToInbox(); })}>
+            <Button variant="text" onclick={() => snoozeThreadByRule(currentThread.threadId, '1d').then(async ()=> { showSnackbar({ message: 'Snoozed 1d', actions: { Undo: () => undoLast(1) } }); await navigateToInbox(true); })}>
               <Icon icon={iconSnooze} />
               1d
             </Button>
@@ -1522,7 +1526,7 @@ onMount(() => {
                 Filter Options
               </MenuItem>
               {#if Object.keys($settings.labelMapping || {}).some((k)=>k==='10m' && $settings.labelMapping[k])}
-                <MenuItem onclick={() => snoozeThreadByRule(currentThread.threadId, '10m').then(async ()=> { showSnackbar({ message: 'Snoozed 10m', actions: { Undo: () => undoLast(1) } }); await navigateToInbox(); })}>
+                <MenuItem onclick={() => snoozeThreadByRule(currentThread.threadId, '10m').then(async ()=> { showSnackbar({ message: 'Snoozed 10m', actions: { Undo: () => undoLast(1) } }); await navigateToInbox(true); })}>
                   <Icon icon={iconSnooze} />
                   Snooze 10m
                 </MenuItem>
