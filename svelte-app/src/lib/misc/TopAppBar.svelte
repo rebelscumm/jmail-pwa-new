@@ -901,8 +901,10 @@ import { precomputeStatus } from '$lib/stores/precompute';
       // displayed in the topbar align with the inbox view.
       const onInbox = typeof window !== 'undefined' && typeof window.location !== 'undefined' && String(window.location.pathname || '').startsWith('/inbox');
       if (onInbox) {
-        try { renderedInboxCount = Number(baseInboxCount() || 0); } catch { renderedInboxCount = 0; }
-        try { renderedUnreadCount = Number(baseUnreadCount() || 0); } catch { renderedUnreadCount = 0; }
+        // When viewing the inbox, align the topbar counts with the visible list.
+        // Use held-aware counts so numbers reflect swipe animations (trailed holds).
+        try { renderedInboxCount = Number(inboxCount() || 0); } catch { renderedInboxCount = 0; }
+        try { renderedUnreadCount = Number(unreadCount() || 0); } catch { renderedUnreadCount = 0; }
         return;
       }
 
