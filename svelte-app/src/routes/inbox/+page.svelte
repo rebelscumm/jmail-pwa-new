@@ -1646,10 +1646,13 @@
               }
               
               // Also check journal for recent user actions (even if op completed)
+              // Only check entries from last 5 minutes to avoid stale protection
               if (!hasPendingInboxRemoval || !hasPendingLabelChanges) {
+                const recentCutoff = Date.now() - (5 * 60 * 1000);
                 const journalAll = await db.getAll('journal');
                 for (const e of journalAll as any[]) {
                   if (!e || e.threadId !== tid || !e.intent) continue;
+                  if (e.createdAt && e.createdAt < recentCutoff) continue; // Skip old entries
                   const rem = Array.isArray(e.intent.removeLabelIds) ? e.intent.removeLabelIds : [];
                   const add = Array.isArray(e.intent.addLabelIds) ? e.intent.addLabelIds : [];
                   if (rem.includes('INBOX')) {
@@ -1814,13 +1817,16 @@
       }
 
       // Also prefetch journal entries to check for recent user actions
+      // Only consider entries from last 5 minutes to avoid stale protection
       let journalByThread: Record<string, any[]> = {};
       try {
+        const recentCutoff = Date.now() - (5 * 60 * 1000);
         const allJournal = await db.getAll('journal');
         for (const entry of (allJournal || [])) {
           try {
             const e = entry as any;
             if (!e || !e.threadId) continue;
+            if (e.createdAt && e.createdAt < recentCutoff) continue; // Skip old entries
             journalByThread[e.threadId] = journalByThread[e.threadId] || [];
             journalByThread[e.threadId].push(e);
           } catch (_) {}

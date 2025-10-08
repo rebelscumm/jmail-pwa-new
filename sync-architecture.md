@@ -35,12 +35,16 @@ When a user deletes/archives/snoozes an email:
 4. **Optimistic Counter Adjustment**
    - `inboxDelta` tracks pending INBOX changes
    - `unreadDelta` tracks pending UNREAD changes
-   - Display shows: `serverCount + delta`
+   - Display shows: `localCount + delta`
 
 5. **Server Confirmation**
    - Gmail API processes the change
    - Operation removed from queue
-   - Optimistic deltas eventually reset to 0
+   - Optimistic deltas reset to 0
+   - **Important**: Local state is NOT overwritten with server state after operation completes
+     - Gmail's eventual consistency means server might not reflect the change yet
+     - Our optimistic local state is already correct
+     - Authoritative sync will reconcile any real discrepancies later
 
 ---
 
@@ -95,6 +99,7 @@ This prevents showing stale server counts due to eventual consistency delays. On
 - **Protection**: Checks **BOTH** ops queue **AND** journal before modifications
   - Ops queue: Operations still pending/retrying
   - Journal: Recently completed operations (kept for undo even after sync succeeds)
+  - Journal time window: Only checks entries from **last 5 minutes**
   - If EITHER indicates a user action, that thread is skipped during reconciliation
 - **Before Sync**: Attempts to flush pending operations, but preserves them if they fail
 - **Action**: Full reconciliation, adds missing, removes stale (only for threads with no pending/recent actions)
@@ -102,6 +107,7 @@ This prevents showing stale server counts due to eventual consistency delays. On
 - **Important**: 
   - Optimistic counters are only reset if all pending ops successfully complete; otherwise they're recalculated to preserve visual state
   - If unable to check ops/journal due to error, assumes pending changes exist (conservative approach)
+  - After 5 minutes with no activity, sync can freely reconcile with server state
 
 ---
 
@@ -130,6 +136,10 @@ When background sync encounters a user action:
 - **messages**: Full message content and headers
 - **ops**: Queued operations to send to Gmail
 - **journal**: User action history for undo and conflict resolution
+  - **Lifecycle**: Created on user actions, pruned after 10 minutes
+  - **Purpose 1**: Enable undo (keep last 10 minutes)
+  - **Purpose 2**: Protect recent actions during sync (check last 5 minutes)
+  - **Pruning**: Automatic cleanup on each new action to prevent unbounded growth
 - **settings**: Sync state (historyId), user preferences
 
 ### Svelte Stores (Memory)
@@ -163,4 +173,40 @@ When background sync encounters a user action:
 - **Online Check**: No syncing when offline
 - **Mutex Flags**: Prevent overlapping sync operations
 - **Pagination**: Large syncs use cursors to avoid timeouts
+
+---
+
+## Eventual Consistency Handling
+
+Gmail's API exhibits **eventual consistency**: changes made via the API may not immediately appear in subsequent API reads. This is especially noticeable when:
+- User performs an action (archive, delete, snooze)
+- Operation succeeds on server
+- Immediately fetching the same thread returns OLD state
+
+### Our Strategy
+
+1. **Trust optimistic local state** after operations complete
+   - Don't immediately fetch and reconcile with server
+   - Local state already reflects the intended change
+   
+2. **Preserve local state during refresh**
+   - Check journal for recent actions (last 5 minutes for sync, last 2 minutes for counters)
+   - Check ops queue for pending operations
+   - Skip server reconciliation if either exists
+
+3. **Let authoritative sync reconcile later**
+   - Periodic background syncs (60s intervals)
+   - Manual refresh after operations complete
+   - Both respect pending/recent actions via journal checks (5-minute window)
+
+4. **Counter display logic**
+   - Server counters NOT used when there's recent activity
+   - 2-minute grace period for counter updates (eventual consistency)
+   - After grace period, server becomes authoritative again
+
+5. **Journal lifecycle**
+   - Created on every user action
+   - Pruned automatically after 10 minutes
+   - Sync checks last 5 minutes, counters check last 2 minutes
+   - Prevents stale entries from blocking fresh data forever
 

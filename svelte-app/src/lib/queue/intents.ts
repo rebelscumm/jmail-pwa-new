@@ -214,6 +214,39 @@ export async function recordIntent(
   await db.put('journal', entry);
   // Any new forward action should invalidate redo history unless it's from a redo
   if (!options || options.source !== 'redo') undoneStack.length = 0;
+  
+  // Prune old journal entries (older than 10 minutes) to prevent unbounded growth
+  // Journal is used for undo and for protecting recent user actions during sync
+  void pruneOldJournalEntries();
+}
+
+/**
+ * Remove journal entries older than 10 minutes
+ * Journal entries serve two purposes:
+ * 1. Enable undo functionality (keep recent entries)
+ * 2. Protect user actions during sync (only need last few minutes)
+ */
+export async function pruneOldJournalEntries(maxAgeMs = 10 * 60 * 1000): Promise<number> {
+  try {
+    const db = await getDB();
+    const cutoff = Date.now() - maxAgeMs;
+    const allEntries = await db.getAll('journal');
+    const toDelete = allEntries.filter((e: any) => e && e.createdAt && e.createdAt < cutoff);
+    
+    if (toDelete.length > 0) {
+      const tx = db.transaction('journal', 'readwrite');
+      for (const entry of toDelete) {
+        await tx.store.delete((entry as any).id);
+      }
+      await tx.done;
+      console.log(`[Journal] Pruned ${toDelete.length} old entries (cutoff: ${new Date(cutoff).toISOString()})`);
+    }
+    
+    return toDelete.length;
+  } catch (e) {
+    console.warn('[Journal] Failed to prune old entries:', e);
+    return 0;
+  }
 }
 
 export async function undoLast(n = 1): Promise<void> {

@@ -4,7 +4,6 @@ import type { QueuedOp } from '$lib/types';
 import { backoffDelay, getDueOps, pruneDuplicateOps } from './ops';
 import { refreshSyncState } from '$lib/stores/queue';
 import { copyGmailDiagnosticsToClipboard } from '$lib/gmail/api';
-import { applyRemoteLabels } from './intents';
 
 export async function flushOnce(now = Date.now()): Promise<void> {
   // In server-managed auth mode, we rely on the server session; proceed and handle 401s per-call.
@@ -50,25 +49,15 @@ export async function flushOnce(now = Date.now()): Promise<void> {
     const removeLabelIds = ops[0].op.removeLabelIds;
     try {
       await batchModify(ids, addLabelIds, removeLabelIds);
-      // After success, reconcile local labels per thread using server data (server wins)
-      try {
-        // Group by scopeKey (threadId)
-        const byThread = new Map<string, string[]>();
-        for (const o of ops) {
-          const arr = byThread.get(o.scopeKey) || [];
-          for (const id of o.op.ids) arr.push(id);
-          byThread.set(o.scopeKey, Array.from(new Set(arr)));
-        }
-        for (const [threadId, messageIds] of byThread) {
-          const labelsByMessage: Record<string, string[]> = {};
-          for (const id of messageIds) {
-            const m = await (await import('$lib/gmail/api')).getMessageMetadata(id);
-            labelsByMessage[id] = m.labelIds || [];
-          }
-          await applyRemoteLabels(threadId, labelsByMessage);
-        }
-      } catch (_) {}
-      // Success: delete ops
+      // After success, DO NOT immediately reconcile with server state because:
+      // 1. Gmail's eventual consistency means server might not reflect our change yet
+      // 2. Our optimistic local state is already correct
+      // 3. Authoritative sync will handle any real discrepancies later
+      // 
+      // Previously this would fetch fresh server state and overwrite local state,
+      // causing threads to "reappear" after deletion due to eventual consistency lag.
+      
+      // Success: delete ops from queue
       const tx = db.transaction('ops', 'readwrite');
       for (const o of ops) await tx.store.delete(o.id);
       await tx.done;
@@ -81,17 +70,8 @@ export async function flushOnce(now = Date.now()): Promise<void> {
         const message = e instanceof Error ? e.message : String(e);
         o.lastError = message;
         await tx.store.put(o);
-        // Minimal reconcile: fetch server state for one thread and apply locally (server wins)
-        try {
-          const threadId = o.scopeKey;
-          // Fetch messages for thread (ids known), then update local labels
-          const labelsByMessage: Record<string, string[]> = {};
-          for (const id of o.op.ids) {
-            const m = await (await import('$lib/gmail/api')).getMessageMetadata(id);
-            labelsByMessage[id] = m.labelIds || [];
-          }
-          await applyRemoteLabels(threadId, labelsByMessage);
-        } catch (_) {}
+        // DO NOT reconcile with server state on failure - preserve optimistic local state
+        // The operation will be retried, and authoritative sync will handle discrepancies
       }
       await tx.done;
       // Clipboard diagnostics with summary
