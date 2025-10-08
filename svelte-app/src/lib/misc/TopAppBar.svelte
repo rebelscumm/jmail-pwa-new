@@ -96,28 +96,36 @@ import { precomputeStatus } from '$lib/stores/precompute';
   }
   async function doComprehensiveRefresh() {
     console.log('[TopAppBar] ===== COMPREHENSIVE REFRESH STARTED =====');
-    try {
-      showSnackbar({ message: 'Refreshing everything…' });
-    } catch {}
     
     try {
-      // Step 1: Refresh authentication session
+      // Step 1: Show initial message
+      showSnackbar({ message: 'Starting inbox refresh…' });
+      
+      // Step 2: Refresh authentication session
       console.log('[TopAppBar] Step 1: Refreshing session...');
       try {
         const { sessionManager } = await import('$lib/auth/session-manager');
         await sessionManager.refreshSession();
         console.log('[TopAppBar] Step 1: Session refresh completed');
+        showSnackbar({ message: 'Session refreshed', timeout: 1500 });
       } catch (e) {
         console.warn('[TopAppBar] Step 1: Session refresh failed (continuing):', e);
+        showSnackbar({ message: 'Session refresh skipped (may not be needed)', timeout: 1500 });
       }
       
-      // Step 2: Sync queue operations
-      console.log('[TopAppBar] Step 2: Syncing queue...');
-      const { syncNow } = await import('$lib/stores/queue');
-      await syncNow();
-      console.log('[TopAppBar] Step 2: Queue sync completed');
+      // Step 3: Sync pending queue operations first
+      console.log('[TopAppBar] Step 2: Syncing pending operations...');
+      try {
+        const { syncNow } = await import('$lib/stores/queue');
+        await syncNow();
+        console.log('[TopAppBar] Step 2: Queue sync completed');
+        showSnackbar({ message: 'Pending operations synced', timeout: 1500 });
+      } catch (e) {
+        console.error('[TopAppBar] Step 2: Queue sync failed:', e);
+        showSnackbar({ message: 'Warning: Some pending operations may not have synced', timeout: 2000 });
+      }
       
-      // Step 3: Clear holds
+      // Step 4: Clear visual holds to prepare for fresh data
       try {
         console.log('[TopAppBar] Step 3: Clearing holds...');
         const { clearAllHolds } = await import('$lib/stores/holds');
@@ -127,47 +135,129 @@ import { precomputeStatus } from '$lib/stores/precompute';
         console.error('[TopAppBar] Step 3: Failed to clear holds:', e);
       }
       
-      // Step 4: Perform authoritative inbox sync if on inbox page
+      // Step 5: Get pre-sync counts for comparison
+      let preCount = 0;
+      let preUnreadCount = 0;
       try {
-        console.log('[TopAppBar] Step 4: Checking for inbox page...');
-        const isInboxPage = typeof window !== 'undefined' && window.location.pathname.includes('/inbox');
-        if (isInboxPage) {
-          console.log('[TopAppBar] Step 4: Triggering authoritative inbox sync...');
-          // Dispatch event to inbox page to perform authoritative sync
-          window.dispatchEvent(new CustomEvent('jmail:performAuthoritativeSync'));
-        }
-        console.log('[TopAppBar] Step 4: Inbox sync trigger completed');
+        const { getDB } = await import('$lib/db/indexeddb');
+        const db = await getDB();
+        const threads = await db.getAll('threads');
+        const inboxThreads = threads.filter((t: any) => 
+          Array.isArray(t.labelIds) && t.labelIds.includes('INBOX')
+        );
+        preCount = inboxThreads.length;
+        preUnreadCount = inboxThreads.filter((t: any) => 
+          Array.isArray(t.labelIds) && t.labelIds.includes('UNREAD')
+        ).length;
+        console.log('[TopAppBar] Pre-sync: ', preCount, 'inbox threads,', preUnreadCount, 'unread');
       } catch (e) {
-        console.error('[TopAppBar] Step 4: Failed to trigger inbox sync:', e);
+        console.warn('[TopAppBar] Could not get pre-sync counts:', e);
       }
       
-      // Step 5: Reset and reload inbox cache
-      try {
-        console.log('[TopAppBar] Step 5: Resetting inbox cache...');
-        const mod = await import('../../routes/inbox/+page.svelte');
-        if (typeof (mod as any).resetInboxCache === 'function') {
-          await (mod as any).resetInboxCache();
-          console.log('[TopAppBar] Step 5: resetInboxCache() called');
+      // Step 6: Perform authoritative inbox sync
+      console.log('[TopAppBar] Step 4: Performing authoritative inbox sync...');
+      showSnackbar({ message: 'Syncing with Gmail server…', timeout: null });
+      
+      const isInboxPage = typeof window !== 'undefined' && window.location.pathname.includes('/inbox');
+      if (isInboxPage) {
+        try {
+          // Call the sync function directly from inbox page if available
+          const w = window as any;
+          if (typeof w.__performAuthoritativeSync === 'function') {
+            console.log('[TopAppBar] Calling __performAuthoritativeSync directly');
+            await w.__performAuthoritativeSync();
+          } else {
+            console.log('[TopAppBar] __performAuthoritativeSync not available, dispatching event');
+            // Fallback: dispatch event and wait a bit
+            window.dispatchEvent(new CustomEvent('jmail:performAuthoritativeSync'));
+            // Wait for sync to complete (listen for completion event or timeout)
+            await new Promise((resolve) => {
+              let resolved = false;
+              const handler = () => {
+                if (!resolved) {
+                  resolved = true;
+                  resolve(undefined);
+                }
+              };
+              window.addEventListener('jmail:authSyncComplete', handler, { once: true });
+              // Timeout after 60 seconds
+              setTimeout(() => {
+                if (!resolved) {
+                  resolved = true;
+                  window.removeEventListener('jmail:authSyncComplete', handler);
+                  resolve(undefined);
+                }
+              }, 60000);
+            });
+          }
+          console.log('[TopAppBar] Step 4: Authoritative sync completed');
+        } catch (e) {
+          console.error('[TopAppBar] Step 4: Authoritative sync failed:', e);
+          showSnackbar({ 
+            message: `Sync failed: ${e instanceof Error ? e.message : 'Unknown error'}`, 
+            closable: true,
+            timeout: 5000
+          });
+          return;
         }
-        if (typeof (mod as any).reloadFromCache === 'function') {
-          await (mod as any).reloadFromCache();
-          console.log('[TopAppBar] Step 5: reloadFromCache() called');
-        }
-      } catch (e) {
-        console.error('[TopAppBar] Step 5: Failed to reset/reload cache:', e);
+      } else {
+        console.log('[TopAppBar] Not on inbox page, skipping authoritative sync');
+        showSnackbar({ message: 'Not on inbox page, skipping sync', timeout: 2000 });
       }
+      
+      // Step 7: Get post-sync counts and show detailed results
+      try {
+        const { getDB } = await import('$lib/db/indexeddb');
+        const db = await getDB();
+        const threads = await db.getAll('threads');
+        const inboxThreads = threads.filter((t: any) => 
+          Array.isArray(t.labelIds) && t.labelIds.includes('INBOX')
+        );
+        const postCount = inboxThreads.length;
+        const postUnreadCount = inboxThreads.filter((t: any) => 
+          Array.isArray(t.labelIds) && t.labelIds.includes('UNREAD')
+        ).length;
+        
+        console.log('[TopAppBar] Post-sync:', postCount, 'inbox threads,', postUnreadCount, 'unread');
+        
+        const added = Math.max(0, postCount - preCount);
+        const removed = Math.max(0, preCount - postCount);
+        const unreadChange = postUnreadCount - preUnreadCount;
+        
+        let message = `Inbox synced: ${postCount} threads`;
+        if (added > 0 || removed > 0) {
+          const parts = [];
+          if (added > 0) parts.push(`+${added} new`);
+          if (removed > 0) parts.push(`-${removed} removed`);
+          message += ` (${parts.join(', ')})`;
+        }
+        if (postUnreadCount > 0) {
+          message += `, ${postUnreadCount} unread`;
+          if (unreadChange !== 0) {
+            message += ` (${unreadChange > 0 ? '+' : ''}${unreadChange})`;
+          }
+        }
+        
+        showSnackbar({ message, timeout: 4000, closable: true });
+      } catch (e) {
+        console.warn('[TopAppBar] Could not get post-sync counts:', e);
+        showSnackbar({ message: 'Inbox synced successfully', timeout: 2500 });
+      }
+      
+      // Step 8: Dispatch global refresh event for other components
+      console.log('[TopAppBar] Step 5: Dispatching global refresh event...');
+      window.dispatchEvent(new CustomEvent('jmail:refresh'));
+      console.log('[TopAppBar] Step 5: Global refresh event dispatched');
+      
     } catch (e) {
       console.error('[TopAppBar] Comprehensive refresh failed:', e);
+      showSnackbar({ 
+        message: `Refresh failed: ${e instanceof Error ? e.message : 'Unknown error'}`, 
+        closable: true,
+        timeout: 5000
+      });
     }
     
-    try {
-      console.log('[TopAppBar] Step 6: Dispatching global refresh event...');
-      window.dispatchEvent(new CustomEvent('jmail:refresh'));
-      console.log('[TopAppBar] Step 6: Global refresh event dispatched');
-      showSnackbar({ message: 'Refresh complete', timeout: 2500 });
-    } catch (e) {
-      console.error('[TopAppBar] Failed to dispatch refresh event:', e);
-    }
     onSyncNow && onSyncNow();
     console.log('[TopAppBar] ===== COMPREHENSIVE REFRESH COMPLETE =====');
   }

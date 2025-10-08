@@ -194,11 +194,80 @@
   
   // Listen for authoritative sync requests from TopAppBar
   onMount(() => {
-    const handleAuthoritativeSync = () => {
-      performAuthoritativeInboxSync().catch(console.error);
+    const handleAuthoritativeSync = async () => {
+      try {
+        await performAuthoritativeInboxSync();
+        // Emit completion event for TopAppBar
+        window.dispatchEvent(new CustomEvent('jmail:authSyncComplete'));
+      } catch (e) {
+        console.error('[Inbox] Authoritative sync failed:', e);
+        // Still emit completion event so TopAppBar doesn't hang
+        window.dispatchEvent(new CustomEvent('jmail:authSyncComplete'));
+        throw e;
+      }
     };
+    
+    // Expose sync function on window for TopAppBar to call directly
+    (window as any).__performAuthoritativeSync = handleAuthoritativeSync;
+    
     window.addEventListener('jmail:performAuthoritativeSync', handleAuthoritativeSync);
-    return () => window.removeEventListener('jmail:performAuthoritativeSync', handleAuthoritativeSync);
+    return () => {
+      window.removeEventListener('jmail:performAuthoritativeSync', handleAuthoritativeSync);
+      delete (window as any).__performAuthoritativeSync;
+    };
+  });
+
+  // Periodic background sync to keep inbox fresh
+  onMount(() => {
+    console.log('[Inbox] Starting periodic background sync (every 2 minutes when visible)');
+    
+    // Initial check after a short delay to let the initial load complete
+    const initialTimeout = setTimeout(() => {
+      if (!backgroundSyncing && !syncing && ready) {
+        console.log('[Inbox] Running initial background check');
+        maybeRemoteRefresh().catch(console.error);
+      }
+    }, 30000); // Wait 30 seconds after page load
+    
+    // Then check periodically
+    const syncInterval = setInterval(() => {
+      // Only sync if page is visible, online, not already syncing, and ready
+      const isVisible = typeof document !== 'undefined' && (document as any).visibilityState !== 'hidden';
+      const isOnline = typeof navigator !== 'undefined' && navigator.onLine;
+      
+      if (isVisible && isOnline && !backgroundSyncing && !syncing && ready) {
+        console.log('[Inbox] Running periodic background check');
+        maybeRemoteRefresh().catch(console.error);
+      } else {
+        console.log('[Inbox] Skipping periodic check:', {
+          isVisible,
+          isOnline,
+          backgroundSyncing,
+          syncing,
+          ready
+        });
+      }
+    }, 120000); // Check every 2 minutes
+    
+    // Also check when page becomes visible again
+    const handleVisibilityChange = () => {
+      if (typeof document !== 'undefined' && (document as any).visibilityState === 'visible') {
+        console.log('[Inbox] Page became visible, checking for updates');
+        setTimeout(() => {
+          if (!backgroundSyncing && !syncing && ready) {
+            maybeRemoteRefresh().catch(console.error);
+          }
+        }, 1000); // Small delay to let page settle
+      }
+    };
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    
+    return () => {
+      clearTimeout(initialTimeout);
+      clearInterval(syncInterval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   });
   // Lightweight remote change detection state
   let lastRemoteCheckAtMs: number | null = $state(null);
@@ -219,12 +288,60 @@
       const localThreadsTotal = inboxThreads.length;
       const localThreadsUnread = inboxThreads.filter((t) => (t.labelIds || []).includes('UNREAD')).length;
       const differs = remoteThreadsTotal !== localThreadsTotal || remoteThreadsUnread !== localThreadsUnread;
-      try { if (import.meta.env.DEV) console.debug('[InboxUI] remoteCheck', { remoteThreadsTotal, localThreadsTotal, remoteThreadsUnread, localThreadsUnread, differs }); } catch {}
+      
+      const addedCount = Math.max(0, remoteThreadsTotal - localThreadsTotal);
+      const removedCount = Math.max(0, localThreadsTotal - remoteThreadsTotal);
+      const unreadDiff = remoteThreadsUnread - localThreadsUnread;
+      
+      try { 
+        if (import.meta.env.DEV) {
+          console.debug('[InboxUI] remoteCheck', { 
+            remoteThreadsTotal, 
+            localThreadsTotal, 
+            remoteThreadsUnread, 
+            localThreadsUnread, 
+            differs,
+            addedCount,
+            removedCount,
+            unreadDiff
+          }); 
+        }
+      } catch {}
+      
       if (differs) {
-        try { syncing = true; await hydrate(); } finally { syncing = false; }
+        // Use authoritative sync for background refresh to ensure stale messages are removed
+        try { 
+          backgroundSyncing = true;
+          console.log('[InboxUI] Starting background authoritative sync due to differences');
+          await performAuthoritativeInboxSync({ 
+            perPageTimeoutMs: 15000, // Shorter timeout for background sync
+            maxRetries: 1 // Fewer retries for background
+          });
+          
+          // Show subtle notification about what changed
+          let message = 'Inbox updated';
+          if (addedCount > 0 || removedCount > 0) {
+            const parts = [];
+            if (addedCount > 0) parts.push(`${addedCount} new`);
+            if (removedCount > 0) parts.push(`${removedCount} removed`);
+            message += `: ${parts.join(', ')}`;
+          }
+          if (remoteThreadsUnread > 0 && unreadDiff !== 0) {
+            message += ` (${remoteThreadsUnread} unread)`;
+          }
+          
+          showSnackbar({ message, timeout: 3000, closable: true });
+          console.log('[InboxUI] Background sync completed:', message);
+        } catch (e) {
+          console.error('[InboxUI] Background sync failed:', e);
+          // Don't show error snackbar for background sync failures - they're not user-initiated
+        } finally { 
+          backgroundSyncing = false; 
+        }
       }
-    } catch (_) {
-      // ignore transient errors
+    } catch (e) {
+      // ignore transient errors but log them
+      console.warn('[InboxUI] Remote check failed:', e);
     } finally {
       lastRemoteCheckAtMs = nowMs;
       remoteCheckInFlight = false;
