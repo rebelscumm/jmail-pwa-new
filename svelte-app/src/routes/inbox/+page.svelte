@@ -1570,26 +1570,15 @@
                 // Check for pending operations before storing thread
                 // Check pending ops with retries to avoid transient IDB errors
                 const pendingOps = await getPendingOpsWithRetry(db, f.thread.threadId, 3);
-                if (pendingOps === null) {
-                  // couldn't determine pending ops; prompt user before resurrecting many threads
-                  const wouldResurrect = 1; // per-thread count
-                  const choice = await promptSnackbarChoice(`Unable to determine pending operations for some threads. This thread would be re-imported. Proceed with this thread?`, ['Proceed', 'Skip']);
-                  if (choice !== 'Proceed') {
-                    console.log(`[AuthSync] Skipping thread ${f.thread.threadId} storage - user chose Skip`);
-                  } else {
-                    await txThreads.store.put(f.thread);
-                    storedThreads++;
-                    console.log(`[AuthSync] Stored thread ${f.thread.threadId} with labels: ${f.thread.labelIds.join(',')}`);
-                  }
+                // For NEW threads from Gmail, null or empty means "no ops found" which is normal
+                // Only skip if we found actual pending ops that affect INBOX
+                const hasPendingLabelChanges = pendingOps && pendingOps.length > 0 && pendingOps.some((op: any) => op.op?.type === 'batchModify' && ((op.op.addLabelIds || []).includes('INBOX') || (op.op.removeLabelIds || []).includes('INBOX')));
+                if (hasPendingLabelChanges) {
+                  console.log(`[AuthSync] Skipping thread ${f.thread.threadId} storage - has ${pendingOps?.length || 0} pending INBOX operations`);
                 } else {
-                  const hasPendingLabelChanges = pendingOps.some((op: any) => op.op?.type === 'batchModify' && ((op.op.addLabelIds || []).includes('INBOX') || (op.op.removeLabelIds || []).includes('INBOX')));
-                  if (hasPendingLabelChanges) {
-                    console.log(`[AuthSync] Skipping thread ${f.thread.threadId} storage - has pending operations`);
-                  } else {
-                    await txThreads.store.put(f.thread);
-                    storedThreads++;
-                    console.log(`[AuthSync] Stored thread ${f.thread.threadId} with labels: ${f.thread.labelIds.join(',')}`);
-                  }
+                  await txThreads.store.put(f.thread);
+                  storedThreads++;
+                  console.log(`[AuthSync] Stored thread ${f.thread.threadId} with labels: ${f.thread.labelIds.join(',')}`);
                 }
               } catch (e) {
                 console.error(`[AuthSync] Failed to store thread ${f.thread.threadId}:`, e);
@@ -1750,17 +1739,16 @@
               try {
                 // Check pending ops with retry to avoid transient IDB errors
                 const pendingOps = await getPendingOpsWithRetry(db, f.thread.threadId, 3);
-                if (pendingOps !== null) {
-                  const hasPendingLabelChanges = (pendingOps || []).some((op: any) => op.op?.type === 'batchModify' && ((op.op.addLabelIds || []).includes('INBOX') || (op.op.removeLabelIds || []).includes('INBOX')));
+                // For NEW threads from Gmail, null means "no ops found" which is expected
+                // Only skip if we found ops that affect INBOX
+                if (pendingOps !== null && pendingOps.length > 0) {
+                  const hasPendingLabelChanges = pendingOps.some((op: any) => op.op?.type === 'batchModify' && ((op.op.addLabelIds || []).includes('INBOX') || (op.op.removeLabelIds || []).includes('INBOX')));
                   if (hasPendingLabelChanges) {
-                    console.log(`[AuthSync] Phase 1b: Skipping new thread ${f.thread.threadId} - has pending label operations`);
+                    console.log(`[AuthSync] Phase 1b: Skipping new thread ${f.thread.threadId} - has ${pendingOps.length} pending label operations`);
                     continue;
                   }
-                } else {
-                  // If we couldn't determine pending ops, skip this thread to be safe
-                  console.log(`[AuthSync] Phase 1b: Skipping new thread ${f.thread.threadId} - pending-ops lookup unavailable`);
-                  continue;
                 }
+                // If pendingOps is null or empty, proceed - no conflicts for this new thread
 
                 // Per-thread short transaction
                 const tx = db.transaction(['messages', 'threads'], 'readwrite');

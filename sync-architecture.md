@@ -106,7 +106,9 @@ This prevents showing stale server counts due to eventual consistency delays. On
 - **Result**: Nuclear option for complete accuracy
 - **Important**: 
   - Optimistic counters are only reset if all pending ops successfully complete; otherwise they're recalculated to preserve visual state
-  - If unable to check ops/journal due to error, assumes pending changes exist (conservative approach)
+  - **New threads from Gmail**: Always fetched and stored (no pending ops can exist for unseen threads)
+  - **Existing threads**: Only modified if no pending/recent actions found
+  - If ops/journal lookup returns `null` or empty, proceed (means no conflicts exist)
   - After 5 minutes with no activity, sync can freely reconcile with server state
 
 ---
