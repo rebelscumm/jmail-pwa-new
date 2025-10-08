@@ -1599,12 +1599,52 @@
         // Phase 1a: Update existing threads with INBOX label (fast path)
         if (toUpdateLabelsOnly.length > 0) {
           console.log(`[AuthSync] Phase 1a: Adding INBOX labels to existing threads (batched)...`);
+          
+          // Prefetch pending operations for all threads to avoid transaction issues
+          const threadIdsToUpdate = toUpdateLabelsOnly.map(item => item.threadId);
+          const pendingOpsByThread = new Map<string, any[]>();
+          try {
+            const allPendingOps = await db.getAll('ops');
+            for (const op of allPendingOps) {
+              const scopeKey = op.scopeKey || '';
+              if (threadIdsToUpdate.includes(scopeKey)) {
+                if (!pendingOpsByThread.has(scopeKey)) {
+                  pendingOpsByThread.set(scopeKey, []);
+                }
+                pendingOpsByThread.get(scopeKey)!.push(op);
+              }
+            }
+          } catch (e) {
+            console.error(`[AuthSync] Phase 1a: Failed to prefetch pending operations:`, e);
+          }
+          
           const txThreadsUpdate = db.transaction('threads', 'readwrite');
           const putPromises: Array<Promise<any>> = [];
           let quickUpdates = 0;
+          let skippedDueToPendingOps = 0;
 
           for (const {threadId, existing} of toUpdateLabelsOnly) {
             try {
+              // Check if this thread has pending INBOX operations
+              const pendingOps = pendingOpsByThread.get(threadId) || [];
+              const hasPendingInboxOps = pendingOps.some((op: any) => 
+                op.op?.type === 'batchModify' && 
+                (op.op.addLabelIds?.includes('INBOX') || op.op.removeLabelIds?.includes('INBOX'))
+              );
+              
+              if (hasPendingInboxOps) {
+                console.log(`[AuthSync] Phase 1a: Skipping thread ${threadId} - has pending INBOX operations`);
+                skippedDueToPendingOps++;
+                continue;
+              }
+              
+              // Also skip if there are ANY pending operations as a safety measure
+              if (pendingOps.length > 0) {
+                console.log(`[AuthSync] Phase 1a: Skipping thread ${threadId} - has ${pendingOps.length} pending operations`);
+                skippedDueToPendingOps++;
+                continue;
+              }
+              
               const labels = new Set<string>(existing.labelIds || []);
               labels.add('INBOX');
               const updatedThread = { ...existing, labelIds: Array.from(labels) } as any;
@@ -1620,7 +1660,7 @@
           try {
             await Promise.all(putPromises);
             await txThreadsUpdate.done;
-            console.log(`[AuthSync] Phase 1a: Quick INBOX label updates completed: ${quickUpdates} threads`);
+            console.log(`[AuthSync] Phase 1a: Quick INBOX label updates completed: ${quickUpdates} threads, ${skippedDueToPendingOps} skipped due to pending operations`);
           } catch (e) {
             console.error(`[AuthSync] Phase 1a: Transaction completion failed:`, e);
           }
