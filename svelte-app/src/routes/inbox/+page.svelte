@@ -1380,6 +1380,15 @@
 
       console.log(`[AuthSync] Starting authoritative inbox sync with pageSize: ${pageSize}`);
       console.log(`[AuthSync] Database has ${preSyncThreads.length} threads, ${preSyncInboxThreads.length} with INBOX label`);
+      
+      // Get Gmail's reported count
+      try {
+        const inboxLabel = await getLabel('INBOX');
+        console.log(`[AuthSync] Gmail reports: ${inboxLabel.threadsTotal} total INBOX threads, ${inboxLabel.threadsUnread} unread`);
+        console.log(`[AuthSync] Discrepancy: Gmail has ${(inboxLabel.threadsTotal || 0) - preSyncInboxThreads.length} more threads than local DB`);
+      } catch (e) {
+        console.warn(`[AuthSync] Could not fetch Gmail INBOX label stats:`, e);
+      }
 
       // Try to compute a dynamic page limit based on INBOX size to avoid premature stop for large inboxes
       try {
@@ -1866,6 +1875,10 @@
 
       if (updates.length > 0) {
         try {
+          console.log(`[AuthSync] Phase 2: Removing INBOX from ${updates.length} threads not seen in Gmail:`);
+          updates.slice(0, 5).forEach((u: any) => console.log(`[AuthSync] Phase 2:   - ${u.threadId} (labels: ${u.labelIds?.join(',') || 'none'})`));
+          if (updates.length > 5) console.log(`[AuthSync] Phase 2:   - ... and ${updates.length - 5} more`);
+          
           const txThreadsPut = db.transaction('threads', 'readwrite');
           for (const u of updates) {
             try { txThreadsPut.store.put(u); } catch (e) { console.error('[AuthSync] Phase 2: put failed for thread', u.threadId, e); }
@@ -1876,7 +1889,7 @@
           console.error(`[AuthSync] Phase 2: Transaction completion failed:`, e);
         }
       } else {
-        console.log(`[AuthSync] Phase 2: Reconciliation complete - removed INBOX from ${threadsUpdated} stale threads`);
+        console.log(`[AuthSync] Phase 2: Reconciliation complete - removed INBOX from ${threadsUpdated} stale threads (no updates needed)`);
       }
       authoritativeSyncProgress = { ...authoritativeSyncProgress, running: false };
 
@@ -1908,6 +1921,25 @@
       console.log(`[AuthSync]   - Threads processed: ${totalThreadsProcessed}`);
       console.log(`[AuthSync]   - Final inbox threads: ${finalInboxThreads.length}`);
       console.log(`[AuthSync]   - Stale threads cleaned: ${threadsUpdated}`);
+      console.log(`[AuthSync]   - Change: ${finalInboxThreads.length - preSyncInboxThreads.length} net threads (${preSyncInboxThreads.length} → ${finalInboxThreads.length})`);
+      
+      // Compare with Gmail
+      try {
+        const inboxLabel = await getLabel('INBOX');
+        const gmailTotal = inboxLabel.threadsTotal || 0;
+        const localTotal = finalInboxThreads.length;
+        const discrepancy = gmailTotal - localTotal;
+        console.log(`[AuthSync] Gmail vs Local: ${gmailTotal} (Gmail) vs ${localTotal} (Local) = ${discrepancy > 0 ? '+' : ''}${discrepancy} discrepancy`);
+        if (discrepancy > 0) {
+          console.warn(`[AuthSync] ⚠️ Still missing ${discrepancy} threads from Gmail!`);
+        } else if (discrepancy < 0) {
+          console.warn(`[AuthSync] ⚠️ Local has ${Math.abs(discrepancy)} more threads than Gmail reports!`);
+        } else {
+          console.log(`[AuthSync] ✅ Counts match!`);
+        }
+      } catch (e) {
+        console.warn(`[AuthSync] Could not compare with Gmail counts:`, e);
+      }
       
       if (finalInboxThreads.length === 0 && seenThreadIds.size > 0) {
         console.error(`[AuthSync] CRITICAL ERROR: Sync completed but 0 inbox threads despite seeing ${seenThreadIds.size} from Gmail!`);
