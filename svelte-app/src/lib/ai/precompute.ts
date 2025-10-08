@@ -413,7 +413,7 @@ async function runGeminiCombinedBatch(
   mode: GeminiBatchMode = 'summary'
 ): Promise<Record<string, string>> {
   const key = (apiKey || '').trim();
-  const modelName = (model || '').trim() || 'gemini-1.5-flash';
+  const modelName = (model || '').trim() || 'gemini-2.5-flash-lite';
   if (!key || !items.length) return {};
 
   const results: Record<string, string> = {};

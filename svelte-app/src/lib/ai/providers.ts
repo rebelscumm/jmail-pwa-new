@@ -226,7 +226,7 @@ async function performEmailSummary(input: PerformEmailSummaryInput): Promise<{
   const prompt = getEmailSummaryPrompt();
   let model = s.aiSummaryModel || s.aiModel || (provider === 'gemini' ? input.defaultGeminiModel : provider === 'anthropic' ? 'claude-3-haiku-20240307' : 'gpt-4o-mini');
   if (provider === 'gemini' && input.attInline.length && !/^gemini-1\.5/i.test(model)) {
-    model = 'gemini-1.5-flash';
+    model = 'gemini-2.5-flash-lite';
   }
 
   let out: AIResult | null = null;
@@ -338,7 +338,7 @@ export function prepareEmailSummaryContext(
   }
 
   const attBlock = attLines.length ? `\n\nAttachments (summarize each):\n${attLines.join('\n\n')}` : '';
-  const defaultGemini = attInline.length ? 'gemini-1.5-flash' : 'gemini-2.5-flash-lite';
+  const defaultGemini = attInline.length ? 'gemini-2.5-flash-lite' : 'gemini-2.5-flash-lite';
 
   const attText = attachmentsPreview
     .map((a) => `${a.name || a.mimeType || 'attachment'}\n${a.hasText && a.textPreview ? a.textPreview : ''}`)
@@ -628,7 +628,7 @@ async function callGemini(prompt: string, modelOverride?: string): Promise<AIRes
   return await withQuotaGuard('gemini', async () => {
     const s = get(settings);
     const key = s.aiApiKey || '';
-    const model = modelOverride || s.aiModel || 'gemini-1.5-flash';
+    const model = modelOverride || s.aiSummaryModel || s.aiModel || 'gemini-2.5-flash-lite';
     
     // Validate API key before making request
     if (!key || key.trim() === '') {
@@ -699,7 +699,7 @@ async function callGeminiWithParts(parts: any[], modelOverride?: string): Promis
   return await withQuotaGuard('gemini', async () => {
     const s = get(settings);
     const key = s.aiApiKey || '';
-    const model = modelOverride || s.aiModel || 'gemini-1.5-flash';
+    const model = modelOverride || s.aiSummaryModel || s.aiModel || 'gemini-2.5-flash-lite';
     
     // Validate API key before making request
     if (!key || key.trim() === '') {
@@ -904,10 +904,10 @@ export async function aiSummarizeAttachment(subject: string | undefined, attachm
   const s = get(settings);
   const provider = s.aiProvider || 'gemini';
   // Prefer multimodal for attachments that include bytes
-  let model = s.aiSummaryModel || s.aiModel || (provider === 'gemini' ? 'gemini-1.5-flash' : provider === 'anthropic' ? 'claude-3-haiku-20240307' : 'gpt-4o-mini');
+  let model = s.aiSummaryModel || s.aiModel || (provider === 'gemini' ? 'gemini-2.5-flash-lite' : provider === 'anthropic' ? 'claude-3-haiku-20240307' : 'gpt-4o-mini');
   if (provider === 'gemini') {
     // Ensure a 1.5 model for inline files when possible
-    if (!/^gemini-1\.5/i.test(model)) model = 'gemini-1.5-flash';
+    if (!/^gemini-1\.5/i.test(model)) model = 'gemini-2.5-flash-lite';
   }
 
   const name = (attachment.filename || attachment.mimeType || 'attachment').slice(0, 200);
@@ -987,14 +987,17 @@ export async function aiDetectCollegeRecruiting(
   if (baseText.trim()) segments.push(`Body:\n${baseText.trim()}`);
   const redacted = redactPII(segments.join('\n\n'));
   const prompt = `${getCollegeRecruitingModerationPrompt()}\n\n${redacted}`;
-  const model = s.aiModel || 'gemini-1.5-flash';
+  
+  // Use the summary model from settings, falling back to appropriate defaults
+  const model = s.aiSummaryModel || s.aiModel || (provider === 'gemini' ? 'gemini-2.5-flash-lite' : provider === 'anthropic' ? 'claude-3-haiku-20240307' : 'gpt-4o-mini');
+  
   let out: AIResult;
   if (provider === 'anthropic') {
-    out = await callAnthropic(prompt, s.aiModel || 'claude-3-haiku-20240307');
+    out = await callAnthropic(prompt, s.aiSummaryModel || s.aiModel || 'claude-3-haiku-20240307');
   } else if (provider === 'gemini') {
     out = await callGemini(prompt, model);
   } else {
-    out = await callOpenAI(prompt, s.aiModel || 'gpt-4o-mini');
+    out = await callOpenAI(prompt, s.aiSummaryModel || s.aiModel || 'gpt-4o-mini');
   }
   const raw = (out.text || '').trim();
   const normalized = raw.toUpperCase();
