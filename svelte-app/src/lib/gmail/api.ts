@@ -651,6 +651,19 @@ export async function listHistory(startHistoryId: string): Promise<any> {
   return data;
 }
 
+export async function createLabel(name: string): Promise<GmailLabel & { id: string }> {
+  const data = await api<GmailLabel & { id: string }>(`/labels`, {
+    method: 'POST',
+    body: JSON.stringify({
+      name,
+      labelListVisibility: 'labelShow',
+      messageListVisibility: 'show'
+    })
+  });
+  pushGmailDiag({ type: 'label_created', id: data.id, name: data.name });
+  return data;
+}
+
 export async function getLabel(labelId: string): Promise<GmailLabel & { id: string }> {
   type LabelResponse = GmailLabel & {
     messageListVisibility?: string;

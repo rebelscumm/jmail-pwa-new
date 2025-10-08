@@ -455,8 +455,8 @@ async function readBodySafely(res: Response): Promise<{ json?: any; text?: strin
     try {
       const text = await res.clone().text();
       return { text };
-    } catch (_) {
-      return {};
+  } catch (_) {
+    return {};
     }
   }
 }

@@ -7,7 +7,7 @@ import {
   getEmailSummaryCombinedPrompt,
   getSubjectImprovementCombinedPrompt
 } from '$lib/ai/prompts';
-import { trashThread } from '$lib/queue/intents';
+import { queueThreadModify } from '$lib/queue/intents';
 import { precomputeStatus } from '$lib/stores/precompute';
 import { threads } from '$lib/stores/threads';
 import { get as getStore } from 'svelte/store';
@@ -20,6 +20,36 @@ const _precomputeLogs: PrecomputeLogEntry[] = [];
 
 const MODERATION_RULE_KEY = 'college_recruiting_v1';
 const MODERATION_PROMPT_VERSION = 1;
+const COLLEGE_RECRUITING_LABEL_NAME = 'college_recruiting';
+
+// Cache for the college recruiting label ID
+let _collegeRecruitingLabelId: string | null = null;
+
+async function ensureCollegeRecruitingLabel(): Promise<string | null> {
+  if (_collegeRecruitingLabelId) return _collegeRecruitingLabelId;
+  
+  try {
+    const { listLabels, createLabel } = await import('$lib/gmail/api');
+    const labels = await listLabels();
+    const existing = labels.find((l) => l.name === COLLEGE_RECRUITING_LABEL_NAME);
+    
+    if (existing && existing.id) {
+      _collegeRecruitingLabelId = existing.id;
+      pushLog('debug', '[Precompute] Found existing college_recruiting label:', existing.id);
+      return existing.id;
+    }
+    
+    // Create the label
+    pushLog('debug', '[Precompute] Creating college_recruiting label');
+    const newLabel = await createLabel(COLLEGE_RECRUITING_LABEL_NAME);
+    _collegeRecruitingLabelId = newLabel.id;
+    pushLog('debug', '[Precompute] Created college_recruiting label:', newLabel.id);
+    return newLabel.id;
+  } catch (e) {
+    pushLog('error', '[Precompute] Failed to ensure college_recruiting label:', e);
+    return null;
+  }
+}
 
 function shouldRunRecruitingModeration(thread: GmailThread, prepared: { bodyText?: string; bodyHtml?: string }): boolean {
   try {
@@ -27,6 +57,11 @@ function shouldRunRecruitingModeration(thread: GmailThread, prepared: { bodyText
     if (!labels.includes('INBOX')) return false;
     if (labels.includes('TRASH') || labels.includes('SPAM')) return false;
     if (!prepared.bodyText && !prepared.bodyHtml) return false;
+    
+    // Skip if already labeled as college recruiting
+    const hasCollegeLabel = labels.some(l => l.includes('college_recruiting') || l === _collegeRecruitingLabelId);
+    if (hasCollegeLabel) return false;
+    
     const existing = thread.autoModeration?.[MODERATION_RULE_KEY];
     const lastActivity = Number(thread.lastMsgMeta?.date) || 0;
     if (!existing) return true;
@@ -36,8 +71,7 @@ function shouldRunRecruitingModeration(thread: GmailThread, prepared: { bodyText
       return lastActivity > (existing.updatedAt || 0);
     }
     if (existing.status === 'match') {
-      if (labels.includes('TRASH')) return false;
-      return existing.actionTaken !== 'trash_enqueued';
+      return existing.actionTaken !== 'label_enqueued';
     }
     return false;
   } catch (_) {
@@ -493,12 +527,13 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
         for (const t of threadList) {
           try {
             const existing = await txThreads.store.get(t.threadId as any) as GmailThread | undefined;
+            const existingHasInbox = existing ? (Array.isArray(existing.labelIds) && existing.labelIds.includes('INBOX')) : false;
+            const incomingHasInbox = Array.isArray((t as any).labelIds) && (t as any).labelIds.includes('INBOX');
+            
             if (existing) {
               // Compute last-activity markers to decide whether to overwrite
               const existingLast = Math.max(Number(existing.lastMsgMeta?.date) || 0, Number((existing as any).aiSubjectUpdatedAt) || 0, Number(existing.summaryUpdatedAt) || 0);
               const incomingLast = Number((t as any).lastMsgMeta?.date) || 0;
-              const existingHasInbox = Array.isArray(existing.labelIds) && existing.labelIds.includes('INBOX');
-              const incomingHasInbox = Array.isArray((t as any).labelIds) && (t as any).labelIds.includes('INBOX');
               // If the local copy removed INBOX (archived/snoozed/deleted locally), prefer local and skip overwrite
               if (!existingHasInbox && incomingHasInbox) {
                 pushLog('debug', '[Precompute] Skipping thread prime for', t.threadId, 'because local has removed INBOX');
@@ -631,10 +666,9 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
       pushLog('debug', '[Precompute] No pending items found');
       // Check if this is because all items already have summaries
       const allHaveSummaries = candidates.every(t => {
-        const summaryVersionMismatch = (t.summaryVersion || 0) !== nowVersion;
-        const needsSummary = !t.summary || t.summaryStatus === 'none' || t.summaryStatus === 'error' || summaryVersionMismatch;
-        const subjectVersionMismatch = (t.subjectVersion || 0) !== nowVersion;
-        const needsSubject = !t.aiSubject || t.aiSubjectStatus === 'none' || t.aiSubjectStatus === 'error' || subjectVersionMismatch;
+        // Version checks disabled (binary cache), so mismatch is always false
+        const needsSummary = !t.summary || t.summaryStatus === 'none' || t.summaryStatus === 'error';
+        const needsSubject = !t.aiSubject || t.aiSubjectStatus === 'none' || t.aiSubjectStatus === 'error';
         return !needsSummary && !needsSubject;
       });
       
@@ -983,7 +1017,7 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
         if (p.moderationEligible) {
           const mod = p.moderationResult;
           const prevModeration = (existing || t).autoModeration || {};
-          const moderationEntry = prevModeration[MODERATION_RULE_KEY] || {};
+          const moderationEntry = (prevModeration as any)[MODERATION_RULE_KEY] || {};
           const nextModerationEntry = {
             ...moderationEntry,
             status: mod?.status || 'error',
@@ -992,7 +1026,7 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
             promptVersion: MODERATION_PROMPT_VERSION,
             updatedAt: nowMs,
             actionTaken: moderationEntry.actionTaken
-          } as GmailThread['autoModeration'][string];
+          };
           (next as any).autoModeration = {
             ...prevModeration,
             [MODERATION_RULE_KEY]: nextModerationEntry
@@ -1000,11 +1034,18 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
 
           if (mod?.status === 'match') {
             try {
-              pushLog('debug', '[Precompute] Enqueuing trash for recruiting match', t.threadId);
-              await trashThread(t.threadId, { optimisticLocal: false });
-              (next as any).autoModeration[MODERATION_RULE_KEY].actionTaken = 'trash_enqueued';
+              // Ensure the college recruiting label exists
+              const labelId = await ensureCollegeRecruitingLabel();
+              if (labelId) {
+                pushLog('debug', '[Precompute] Enqueuing label for recruiting match', t.threadId, 'labelId:', labelId);
+                await queueThreadModify(t.threadId, [labelId], ['INBOX'], { optimisticLocal: false });
+                (next as any).autoModeration[MODERATION_RULE_KEY].actionTaken = 'label_enqueued';
+              } else {
+                pushLog('error', '[Precompute] Could not get college_recruiting label ID for', t.threadId);
+                (next as any).autoModeration[MODERATION_RULE_KEY].lastError = 'Failed to get label ID';
+              }
             } catch (err) {
-              pushLog('error', '[Precompute] Failed to enqueue trash for', t.threadId, err);
+              pushLog('error', '[Precompute] Failed to enqueue label for', t.threadId, err);
               (next as any).autoModeration[MODERATION_RULE_KEY].lastError = String(err instanceof Error ? err.message : err);
             }
           }

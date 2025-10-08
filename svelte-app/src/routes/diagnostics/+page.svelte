@@ -98,6 +98,109 @@ let androidDiagnostics: {
 	running: false
 };
 
+// College recruiting moderation diagnostics state
+let recruitingDiagnostics: {
+	stats: {
+		total: number;
+		match: number;
+		not_match: number;
+		unknown: number;
+		error: number;
+		labeled: number;
+	} | null;
+	threads: Array<any>;
+	running: boolean;
+} = {
+	stats: null,
+	threads: [],
+	running: false
+};
+
+async function runRecruitingDiagnostics() {
+	recruitingDiagnostics.running = true;
+	try {
+		const { getDB } = await import('$lib/db/indexeddb');
+		const db = await getDB();
+		const allThreads = await db.getAll('threads');
+		
+		const stats = {
+			total: 0,
+			match: 0,
+			not_match: 0,
+			unknown: 0,
+			error: 0,
+			labeled: 0
+		};
+		
+		const threadsWithModeration: any[] = [];
+		
+		for (const thread of allThreads) {
+			const moderation = thread.autoModeration?.college_recruiting_v1;
+			if (moderation) {
+				stats.total++;
+				if (moderation.status === 'match') stats.match++;
+				if (moderation.status === 'not_match') stats.not_match++;
+				if (moderation.status === 'unknown') stats.unknown++;
+				if (moderation.status === 'error') stats.error++;
+				if (moderation.actionTaken === 'label_enqueued') stats.labeled++;
+				
+				threadsWithModeration.push({
+					threadId: thread.threadId,
+					subject: thread.lastMsgMeta?.subject || '(no subject)',
+					from: thread.lastMsgMeta?.from || '(unknown)',
+					status: moderation.status,
+					actionTaken: moderation.actionTaken,
+					raw: moderation.raw,
+					updatedAt: new Date(moderation.updatedAt).toLocaleString(),
+					lastError: moderation.lastError,
+					labels: thread.labelIds
+				});
+			}
+		}
+		
+		recruitingDiagnostics.stats = stats;
+		recruitingDiagnostics.threads = threadsWithModeration.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+		showSnackbar({ message: `Found ${stats.total} threads with moderation results`, closable: true });
+	} catch (e) {
+		showSnackbar({ message: `Failed to load moderation diagnostics: ${String(e)}`, closable: true });
+	} finally {
+		recruitingDiagnostics.running = false;
+	}
+}
+
+async function clearRecruitingModeration() {
+	if (!confirm('Clear all college recruiting moderation data? This will cause threads to be re-checked on next precompute.')) return;
+	
+	try {
+		const { getDB } = await import('$lib/db/indexeddb');
+		const db = await getDB();
+		const allThreads = await db.getAll('threads');
+		
+		const tx = db.transaction('threads', 'readwrite');
+		let cleared = 0;
+		
+		for (const thread of allThreads) {
+			if (thread.autoModeration?.college_recruiting_v1) {
+				const updated = { ...thread };
+				if (updated.autoModeration) {
+					delete updated.autoModeration.college_recruiting_v1;
+					if (Object.keys(updated.autoModeration).length === 0) {
+						delete updated.autoModeration;
+					}
+				}
+				await tx.store.put(updated);
+				cleared++;
+			}
+		}
+		
+		await tx.done;
+		showSnackbar({ message: `Cleared moderation data from ${cleared} threads`, closable: true });
+		await runRecruitingDiagnostics(); // Refresh
+	} catch (e) {
+		showSnackbar({ message: `Failed to clear moderation data: ${String(e)}`, closable: true });
+	}
+}
+
 // Comprehensive diagnostics runner
 async function runFullDiagnostics() {
 	fullDiagnostics.running = true;
@@ -3060,6 +3163,92 @@ pre.diag {
 				<strong>Inbox Sync Diagnostics</strong>
 				<pre style="white-space:pre-wrap">{JSON.stringify(inboxDiagnostics, null, 2)}</pre>
 			</div>
+		{/if}
+	</Card>
+
+	<Card variant="outlined">
+		<div class="section-header">
+			<div class="section-title">
+				<h2>College Recruiting Moderation</h2>
+			</div>
+			<Button variant="text" iconType="left" class="copy-button" onclick={() => copySection('College Recruiting Moderation', recruitingDiagnostics)}>
+				<Icon icon={iconCopy} />
+				Copy Section
+			</Button>
+		</div>
+		<p style="color: rgb(var(--m3-scheme-on-surface-variant)); margin-bottom: 1rem;">View statistics and results from AI-powered college recruiting email detection and auto-labeling.</p>
+		<div class="controls">
+			<Button variant="filled" onclick={runRecruitingDiagnostics} disabled={recruitingDiagnostics.running}>
+				<Icon icon={iconDiagnostics} />
+				{recruitingDiagnostics.running ? 'Loading...' : 'Load Moderation Stats'}
+			</Button>
+			<Button variant="outlined" color="error" onclick={clearRecruitingModeration}>Clear All Moderation Data</Button>
+		</div>
+		{#if recruitingDiagnostics.stats}
+			<div class="summary" style="margin-top: 1rem;">
+				<strong>Moderation Statistics</strong>
+				<div style="margin-top: 0.5rem; display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.75rem;">
+					<div style="background: rgb(var(--m3-scheme-surface-variant)); padding: 1rem; border-radius: 12px;">
+						<div style="font-size: 0.875rem; color: rgb(var(--m3-scheme-on-surface-variant));">Total Checked</div>
+						<div style="font-size: 1.5rem; font-weight: 500; color: rgb(var(--m3-scheme-on-surface));">{recruitingDiagnostics.stats.total}</div>
+					</div>
+					<div style="background: rgb(var(--m3-scheme-error-container)); padding: 1rem; border-radius: 12px;">
+						<div style="font-size: 0.875rem; color: rgb(var(--m3-scheme-on-error-container));">Matches</div>
+						<div style="font-size: 1.5rem; font-weight: 500; color: rgb(var(--m3-scheme-on-error-container));">{recruitingDiagnostics.stats.match}</div>
+					</div>
+					<div style="background: rgb(var(--m3-scheme-tertiary-container)); padding: 1rem; border-radius: 12px;">
+						<div style="font-size: 0.875rem; color: rgb(var(--m3-scheme-on-tertiary-container));">Labeled</div>
+						<div style="font-size: 1.5rem; font-weight: 500; color: rgb(var(--m3-scheme-on-tertiary-container));">{recruitingDiagnostics.stats.labeled}</div>
+					</div>
+					<div style="background: rgb(var(--m3-scheme-surface-variant)); padding: 1rem; border-radius: 12px;">
+						<div style="font-size: 0.875rem; color: rgb(var(--m3-scheme-on-surface-variant));">Not Match</div>
+						<div style="font-size: 1.5rem; font-weight: 500; color: rgb(var(--m3-scheme-on-surface));">{recruitingDiagnostics.stats.not_match}</div>
+					</div>
+					<div style="background: rgb(var(--m3-scheme-surface-variant)); padding: 1rem; border-radius: 12px;">
+						<div style="font-size: 0.875rem; color: rgb(var(--m3-scheme-on-surface-variant));">Unknown</div>
+						<div style="font-size: 1.5rem; font-weight: 500; color: rgb(var(--m3-scheme-on-surface));">{recruitingDiagnostics.stats.unknown}</div>
+					</div>
+					<div style="background: rgb(var(--m3-scheme-error-container)); padding: 1rem; border-radius: 12px;">
+						<div style="font-size: 0.875rem; color: rgb(var(--m3-scheme-on-error-container));">Errors</div>
+						<div style="font-size: 1.5rem; font-weight: 500; color: rgb(var(--m3-scheme-on-error-container));">{recruitingDiagnostics.stats.error}</div>
+					</div>
+				</div>
+			</div>
+			
+			{#if recruitingDiagnostics.threads.length > 0}
+				<div style="margin-top: 1.5rem;">
+					<strong>Recent Moderation Results</strong>
+					<div style="margin-top: 0.75rem; max-height: 400px; overflow-y: auto;">
+						{#each recruitingDiagnostics.threads.slice(0, 20) as thread}
+							<div style="background: rgb(var(--m3-scheme-surface-container)); padding: 0.75rem; border-radius: 8px; margin-bottom: 0.5rem;">
+								<div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.5rem;">
+									<div style="font-weight: 500; flex: 1;">{thread.subject}</div>
+									<div style="font-size: 0.75rem; padding: 0.25rem 0.5rem; border-radius: 12px; background: {thread.status === 'match' ? 'rgb(var(--m3-scheme-error-container))' : thread.status === 'not_match' ? 'rgb(var(--m3-scheme-tertiary-container))' : 'rgb(var(--m3-scheme-surface-variant))'}; color: {thread.status === 'match' ? 'rgb(var(--m3-scheme-on-error-container))' : thread.status === 'not_match' ? 'rgb(var(--m3-scheme-on-tertiary-container))' : 'rgb(var(--m3-scheme-on-surface-variant))'}">{thread.status}</div>
+								</div>
+								<div style="font-size: 0.875rem; color: rgb(var(--m3-scheme-on-surface-variant)); margin-bottom: 0.25rem;">From: {thread.from}</div>
+								<div style="font-size: 0.75rem; color: rgb(var(--m3-scheme-on-surface-variant));">Updated: {thread.updatedAt}</div>
+								{#if thread.actionTaken}
+									<div style="font-size: 0.75rem; color: rgb(var(--m3-scheme-tertiary)); margin-top: 0.25rem;">Action: {thread.actionTaken}</div>
+								{/if}
+								{#if thread.lastError}
+									<div style="font-size: 0.75rem; color: rgb(var(--m3-scheme-error)); margin-top: 0.25rem;">Error: {thread.lastError}</div>
+								{/if}
+								{#if thread.raw}
+									<details style="margin-top: 0.5rem; font-size: 0.75rem;">
+										<summary style="cursor: pointer; color: rgb(var(--m3-scheme-primary));">AI Response</summary>
+										<pre style="white-space: pre-wrap; margin-top: 0.25rem; padding: 0.5rem; background: rgb(var(--m3-scheme-surface)); border-radius: 4px; overflow-x: auto;">{thread.raw}</pre>
+									</details>
+								{/if}
+							</div>
+						{/each}
+					</div>
+					{#if recruitingDiagnostics.threads.length > 20}
+						<div style="text-align: center; margin-top: 0.5rem; font-size: 0.875rem; color: rgb(var(--m3-scheme-on-surface-variant));">
+							Showing 20 of {recruitingDiagnostics.threads.length} threads
+						</div>
+					{/if}
+				</div>
+			{/if}
 		{/if}
 	</Card>
 
