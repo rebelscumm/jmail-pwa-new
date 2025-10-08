@@ -84,8 +84,10 @@ Display Unread Total = Server Unread Total + Unread Delta
 ### 3. Authoritative Sync (On startup / manual refresh)
 - Enumerates all inbox threads from Gmail
 - **Protection**: Checks both ops queue and journal before modifications
+- **Before Sync**: Attempts to flush pending operations, but preserves them if they fail
 - **Action**: Full reconciliation, adds missing, removes stale
 - **Result**: Nuclear option for complete accuracy
+- **Important**: Optimistic counters are only reset if all pending ops successfully complete; otherwise they're recalculated to preserve visual state
 
 ---
 
