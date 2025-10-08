@@ -10,7 +10,7 @@
   import { fade } from 'svelte/transition';
   import { DEFAULTS, normalizeRuleKey, resolveRule } from '$lib/snooze/rules';
   import { holdThread } from '$lib/stores/holds';
-  import SnoozePanel from '$lib/snooze/SnoozePanel.svelte';
+  import CalendarPopover from '$lib/snooze/CalendarPopover.svelte';
   import { lastSelectedSnoozeRuleKey } from '$lib/stores/snooze';
   import Icon from '$lib/misc/_icon.svelte';
   import iconGmail from '$lib/icons/gmail';
@@ -994,7 +994,7 @@
           <div class="snooze-menu" onpointerdown={(e: PointerEvent) => { e.preventDefault(); e.stopPropagation(); }} ontouchstart={(e: TouchEvent) => { e.preventDefault(); e.stopPropagation(); }}>
             <Menu>
               {#if mappedKeys.length > 0}
-                <SnoozePanel onSelect={(rk) => { lastSelectedSnoozeRuleKey.set(normalizeRuleKey(rk)); trySnooze(rk); const d = snoozeDetails; if (d) d.open = false; }} />
+                <CalendarPopover onSelect={(rk) => { lastSelectedSnoozeRuleKey.set(normalizeRuleKey(rk)); trySnooze(rk); const d = snoozeDetails; if (d) d.open = false; }} />
               {:else}
                 <div style="padding:0.5rem 0.75rem; max-width: 21rem;" class="m3-font-body-small">No snooze labels configured. Map them in Settings.</div>
               {/if}

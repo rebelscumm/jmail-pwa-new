@@ -66,7 +66,7 @@ import iconExpand from "@ktibow/iconset-material-symbols/keyboard-arrow-down";
   import { searchQuery } from "$lib/stores/search";
   import RecipientBadges from "$lib/utils/RecipientBadges.svelte";
   import { getGmailMessageUrl, getGmailThreadUrl, openGmailPopup, openGmailMessagePopup } from "$lib/utils/gmail-links";
-  import SnoozePanel from "$lib/snooze/SnoozePanel.svelte";
+  import CalendarPopover from "$lib/snooze/CalendarPopover.svelte";
 import Layer from "$lib/misc/Layer.svelte";
 import BottomSheet from "$lib/containers/BottomSheet.svelte";
   // Derive threadId defensively in case params are briefly undefined during navigation
@@ -1106,7 +1106,7 @@ onMount(() => {
               </summary>
               <div class="snooze-menu-content">
                 <Menu>
-                  <SnoozePanel onSelect={onSnoozeSelect} />
+                  <CalendarPopover onSelect={onSnoozeSelect} />
                 </Menu>
               </div>
             </details>
@@ -1464,7 +1464,7 @@ onMount(() => {
               </summary>
               <div class="snooze-menu-content">
                 <Menu>
-                  <SnoozePanel onSelect={onSnoozeSelect} />
+                  <CalendarPopover onSelect={onSnoozeSelect} />
                 </Menu>
               </div>
             </details>
@@ -1570,7 +1570,7 @@ onMount(() => {
 
     <!-- Bottom Navigation Bar -->
     <div class="bottom-navigation" role="navigation" aria-label="Page navigation">
-      <Button variant="text" iconType="left" onclick={navigateToInbox} aria-label="Back to inbox">
+      <Button variant="text" iconType="left" onclick={() => navigateToInbox(false)} aria-label="Back to inbox">
         {#snippet children()}
           <Icon icon={iconBack} />
           <span class="label">Back to inbox</span>

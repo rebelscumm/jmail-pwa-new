@@ -131,7 +131,7 @@ export async function updateAppSettings(patch: Partial<AppSettings>): Promise<vo
 
 export function seedDefaultMapping(): Record<string, string> {
   // Placeholder IDs; user must map these in Settings after label discovery.
-  // Canonical keys matching SnoozePanel options and rules.
+  // Canonical keys matching CalendarPopover options and rules.
   const keys = [
     '10m','30m','1h','2h','3h',
     '6am','2pm','7pm',

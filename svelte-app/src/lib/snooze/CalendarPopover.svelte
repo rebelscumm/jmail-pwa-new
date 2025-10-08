@@ -23,7 +23,11 @@
     preview = dt.toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit', month: 'short', day: 'numeric' });
   }
 
-  function pick(ruleKey: string) {
+  function pick(ruleKey: string, event?: Event) {
+    if (event) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
     computePreview(ruleKey);
     onSelect(ruleKey);
   }
@@ -70,7 +74,7 @@
     <div class="grid" role="group" aria-label="Snooze presets">
       {#each orderedLabels as label}
         {#if isMappedDisplay(label)}
-          <Chip variant="assist" onclick={() => pick(displayToRule[label])} aria-label={`Snooze ${label}`}>{label}</Chip>
+          <Chip variant="assist" onclick={(e: Event) => pick(displayToRule[label], e)} aria-label={`Snooze ${label}`}>{label}</Chip>
         {/if}
       {/each}
     </div>
