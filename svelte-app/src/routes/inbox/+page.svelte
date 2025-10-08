@@ -5,6 +5,7 @@
   import { listLabels, listInboxMessageIds, listThreadIdsByLabelId, getMessageMetadata, GmailApiError, getProfile, copyGmailDiagnosticsToClipboard, getAndClearGmailDiagnostics, listHistory, getThreadSummary } from '$lib/gmail/api';
   import { labels as labelsStore } from '$lib/stores/labels';
   import { threads as threadsStore, messages as messagesStore } from '$lib/stores/threads';
+  import { optimisticCounters } from '$lib/stores/optimistic-counters';
   import { getDB } from '$lib/db/indexeddb';
   import VirtualList from '$lib/utils/VirtualList.svelte';
   import ThreadListRow from '$lib/utils/ThreadListRow.svelte';
@@ -194,11 +195,80 @@
   
   // Listen for authoritative sync requests from TopAppBar
   onMount(() => {
-    const handleAuthoritativeSync = () => {
-      performAuthoritativeInboxSync().catch(console.error);
+    const handleAuthoritativeSync = async () => {
+      try {
+        await performAuthoritativeInboxSync();
+        // Emit completion event for TopAppBar
+        window.dispatchEvent(new CustomEvent('jmail:authSyncComplete'));
+      } catch (e) {
+        console.error('[Inbox] Authoritative sync failed:', e);
+        // Still emit completion event so TopAppBar doesn't hang
+        window.dispatchEvent(new CustomEvent('jmail:authSyncComplete'));
+        throw e;
+      }
     };
+    
+    // Expose sync function on window for TopAppBar to call directly
+    (window as any).__performAuthoritativeSync = handleAuthoritativeSync;
+    
     window.addEventListener('jmail:performAuthoritativeSync', handleAuthoritativeSync);
-    return () => window.removeEventListener('jmail:performAuthoritativeSync', handleAuthoritativeSync);
+    return () => {
+      window.removeEventListener('jmail:performAuthoritativeSync', handleAuthoritativeSync);
+      delete (window as any).__performAuthoritativeSync;
+    };
+  });
+
+  // Periodic background sync to keep inbox fresh
+  onMount(() => {
+    console.log('[Inbox] Starting periodic background sync (every 2 minutes when visible)');
+    
+    // Initial check after a short delay to let the initial load complete
+    const initialTimeout = setTimeout(() => {
+      if (!backgroundSyncing && !syncing && ready) {
+        console.log('[Inbox] Running initial background check');
+        maybeRemoteRefresh().catch(console.error);
+      }
+    }, 30000); // Wait 30 seconds after page load
+    
+    // Then check periodically
+    const syncInterval = setInterval(() => {
+      // Only sync if page is visible, online, not already syncing, and ready
+      const isVisible = typeof document !== 'undefined' && (document as any).visibilityState !== 'hidden';
+      const isOnline = typeof navigator !== 'undefined' && navigator.onLine;
+      
+      if (isVisible && isOnline && !backgroundSyncing && !syncing && ready) {
+        console.log('[Inbox] Running periodic background check');
+        maybeRemoteRefresh().catch(console.error);
+      } else {
+        console.log('[Inbox] Skipping periodic check:', {
+          isVisible,
+          isOnline,
+          backgroundSyncing,
+          syncing,
+          ready
+        });
+      }
+    }, 120000); // Check every 2 minutes
+    
+    // Also check when page becomes visible again
+    const handleVisibilityChange = () => {
+      if (typeof document !== 'undefined' && (document as any).visibilityState === 'visible') {
+        console.log('[Inbox] Page became visible, checking for updates');
+        setTimeout(() => {
+          if (!backgroundSyncing && !syncing && ready) {
+            maybeRemoteRefresh().catch(console.error);
+          }
+        }, 1000); // Small delay to let page settle
+      }
+    };
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    
+    return () => {
+      clearTimeout(initialTimeout);
+      clearInterval(syncInterval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   });
   // Lightweight remote change detection state
   let lastRemoteCheckAtMs: number | null = $state(null);
@@ -219,12 +289,60 @@
       const localThreadsTotal = inboxThreads.length;
       const localThreadsUnread = inboxThreads.filter((t) => (t.labelIds || []).includes('UNREAD')).length;
       const differs = remoteThreadsTotal !== localThreadsTotal || remoteThreadsUnread !== localThreadsUnread;
-      try { if (import.meta.env.DEV) console.debug('[InboxUI] remoteCheck', { remoteThreadsTotal, localThreadsTotal, remoteThreadsUnread, localThreadsUnread, differs }); } catch {}
+      
+      const addedCount = Math.max(0, remoteThreadsTotal - localThreadsTotal);
+      const removedCount = Math.max(0, localThreadsTotal - remoteThreadsTotal);
+      const unreadDiff = remoteThreadsUnread - localThreadsUnread;
+      
+      try { 
+        if (import.meta.env.DEV) {
+          console.debug('[InboxUI] remoteCheck', { 
+            remoteThreadsTotal, 
+            localThreadsTotal, 
+            remoteThreadsUnread, 
+            localThreadsUnread, 
+            differs,
+            addedCount,
+            removedCount,
+            unreadDiff
+          }); 
+        }
+      } catch {}
+      
       if (differs) {
-        try { syncing = true; await hydrate(); } finally { syncing = false; }
+        // Use authoritative sync for background refresh to ensure stale messages are removed
+        try { 
+          backgroundSyncing = true;
+          console.log('[InboxUI] Starting background authoritative sync due to differences');
+          await performAuthoritativeInboxSync({ 
+            perPageTimeoutMs: 15000, // Shorter timeout for background sync
+            maxRetries: 1 // Fewer retries for background
+          });
+          
+          // Show subtle notification about what changed
+          let message = 'Inbox updated';
+          if (addedCount > 0 || removedCount > 0) {
+            const parts = [];
+            if (addedCount > 0) parts.push(`${addedCount} new`);
+            if (removedCount > 0) parts.push(`${removedCount} removed`);
+            message += `: ${parts.join(', ')}`;
+          }
+          if (remoteThreadsUnread > 0 && unreadDiff !== 0) {
+            message += ` (${remoteThreadsUnread} unread)`;
+          }
+          
+          showSnackbar({ message, timeout: 3000, closable: true });
+          console.log('[InboxUI] Background sync completed:', message);
+        } catch (e) {
+          console.error('[InboxUI] Background sync failed:', e);
+          // Don't show error snackbar for background sync failures - they're not user-initiated
+        } finally { 
+          backgroundSyncing = false; 
+        }
       }
-    } catch (_) {
-      // ignore transient errors
+    } catch (e) {
+      // ignore transient errors but log them
+      console.warn('[InboxUI] Remote check failed:', e);
     } finally {
       lastRemoteCheckAtMs = nowMs;
       remoteCheckInFlight = false;
@@ -506,6 +624,27 @@
   async function bulkArchive() {
     const ids = Object.keys(selectedMap);
     if (!ids.length) return;
+    
+    // Calculate optimistic counter adjustments before archiving
+    const db = await getDB();
+    let inboxDelta = 0;
+    let unreadDelta = 0;
+    for (const id of ids) {
+      const thread = await db.get('threads', id);
+      if (thread) {
+        const isInInbox = (thread.labelIds || []).includes('INBOX');
+        const isUnread = (thread.labelIds || []).includes('UNREAD');
+        if (isInInbox) inboxDelta--;
+        if (isUnread) unreadDelta--;
+      }
+    }
+    
+    // Apply optimistic adjustment immediately
+    if (inboxDelta !== 0 || unreadDelta !== 0) {
+      const { adjustOptimisticCounters } = await import('$lib/stores/optimistic-counters');
+      adjustOptimisticCounters(inboxDelta, unreadDelta);
+    }
+    
     for (const id of ids) await archiveThread(id, { optimisticLocal: false });
     selectedMap = {};
     showSnackbar({ message: 'Archived', actions: { Undo: () => undoLast(ids.length) } });
@@ -513,6 +652,27 @@
   async function bulkDelete() {
     const ids = Object.keys(selectedMap);
     if (!ids.length) return;
+    
+    // Calculate optimistic counter adjustments before deleting
+    const db = await getDB();
+    let inboxDelta = 0;
+    let unreadDelta = 0;
+    for (const id of ids) {
+      const thread = await db.get('threads', id);
+      if (thread) {
+        const isInInbox = (thread.labelIds || []).includes('INBOX');
+        const isUnread = (thread.labelIds || []).includes('UNREAD');
+        if (isInInbox) inboxDelta--;
+        if (isUnread) unreadDelta--;
+      }
+    }
+    
+    // Apply optimistic adjustment immediately
+    if (inboxDelta !== 0 || unreadDelta !== 0) {
+      const { adjustOptimisticCounters } = await import('$lib/stores/optimistic-counters');
+      adjustOptimisticCounters(inboxDelta, unreadDelta);
+    }
+    
     for (const id of ids) await trashThread(id, { optimisticLocal: false });
     selectedMap = {};
     showSnackbar({ message: 'Deleted', actions: { Undo: () => undoLast(ids.length) } });
@@ -536,6 +696,20 @@
     }
   });
   let inboxLabelStats = $state<{ messagesTotal?: number; messagesUnread?: number; threadsTotal?: number; threadsUnread?: number } | null>(null);
+  
+  // Optimistically adjusted counters that update immediately when processing messages
+  const adjustedInboxTotal = $derived.by(() => {
+    const base = inboxLabelStats?.threadsTotal ?? 0;
+    const delta = $optimisticCounters.inboxDelta;
+    return Math.max(0, base + delta);
+  });
+  
+  const adjustedInboxUnread = $derived.by(() => {
+    const base = inboxLabelStats?.threadsUnread ?? 0;
+    const delta = $optimisticCounters.unreadDelta;
+    return Math.max(0, base + delta);
+  });
+  
   const visibleThreadsCount = $derived.by(() => {
     try {
       return Array.isArray(filteredThreads) ? filteredThreads.length : 0;
@@ -1400,22 +1574,36 @@
           try {
             const existing = await db.get('threads', tid) as any | undefined;
             // Determine if there are pending ops that would conflict with label updates
+            let hasPendingInboxRemoval = false;
             let hasPendingLabelChanges = false;
             try {
               const pendingOps = await db.getAllFromIndex('ops', 'by_scopeKey', tid);
-              hasPendingLabelChanges = pendingOps.some(op => op.op?.type === 'batchModify' && (op.op.addLabelIds?.includes('INBOX') || op.op.removeLabelIds?.includes('INBOX')));
+              for (const op of pendingOps) {
+                if (op.op?.type === 'batchModify') {
+                  if (op.op.removeLabelIds?.includes('INBOX')) {
+                    hasPendingInboxRemoval = true;
+                  }
+                  if (op.op.addLabelIds?.includes('INBOX') || op.op.removeLabelIds?.includes('INBOX')) {
+                    hasPendingLabelChanges = true;
+                  }
+                }
+              }
             } catch (_) {
               // If index lookup fails, conservatively mark pending as false so we attempt fetch/update
               hasPendingLabelChanges = false;
+              hasPendingInboxRemoval = false;
             }
 
             if (!existing) {
               console.log(`[AuthSync] Thread ${tid} missing from database, will fetch`);
               toFetch.push(tid);
             } else if (!Array.isArray(existing.labelIds) || !existing.labelIds.includes('INBOX')) {
-              if (hasPendingLabelChanges) {
+              if (hasPendingInboxRemoval) {
+                console.log(`[AuthSync] Thread ${tid} exists but has pending INBOX removal; SKIPPING to preserve user edit`);
+                // Don't re-add INBOX if user just removed it
+              } else if (hasPendingLabelChanges) {
                 console.log(`[AuthSync] Thread ${tid} exists but has pending ops; skipping label update`);
-                // skip quick update; will be handled by Phase 1b or later
+                // skip quick update for other pending changes
               } else {
                 console.log(`[AuthSync] Thread ${tid} exists but missing INBOX label, current labels: ${existing.labelIds?.join(',') || 'none'}`);
                 toUpdateLabelsOnly.push({threadId: tid, existing});
@@ -1558,9 +1746,18 @@
           const labels = Array.isArray(t.labelIds) ? t.labelIds.slice() : [];
           if (labels.includes('INBOX') && !seenThreadIds.has(t.threadId)) {
             const pendingOps = opsByScope[t.threadId] || [];
-            const hasPendingOperations = pendingOps.length > 0;
-            if (hasPendingOperations) {
-              console.log(`[AuthSync] Phase 2: Skipping INBOX removal from thread ${t.threadId} - has pending operations`);
+            // Check if there are any pending operations that affect INBOX label
+            const hasPendingInboxOps = pendingOps.some((op: any) => 
+              op.op?.type === 'batchModify' && 
+              (op.op.addLabelIds?.includes('INBOX') || op.op.removeLabelIds?.includes('INBOX'))
+            );
+            if (hasPendingInboxOps) {
+              console.log(`[AuthSync] Phase 2: Skipping INBOX removal from thread ${t.threadId} - has pending INBOX operations`);
+              continue;
+            }
+            // Also check if there are ANY pending operations as a safety measure
+            if (pendingOps.length > 0) {
+              console.log(`[AuthSync] Phase 2: Skipping INBOX removal from thread ${t.threadId} - has pending operations (${pendingOps.length})`);
               continue;
             }
             const next = { ...t, labelIds: labels.filter((l) => l !== 'INBOX') } as any;
@@ -1866,10 +2063,23 @@
           const serverHasInbox = Array.isArray(base.labelIds) && base.labelIds.includes('INBOX');
           const wasOptimisticallyModified = !localHasInbox && serverHasInbox;
           
+          // Also check for pending operations that would affect labels
+          let hasPendingLabelOps = false;
+          try {
+            const pendingOps = await db.getAllFromIndex('ops', 'by_scopeKey', threadId);
+            hasPendingLabelOps = pendingOps.some((op: any) => 
+              op.op?.type === 'batchModify' && 
+              (op.op.addLabelIds?.length > 0 || op.op.removeLabelIds?.length > 0)
+            );
+          } catch (_) {
+            // If we can't check pending ops, assume no pending ops
+            hasPendingLabelOps = false;
+          }
+          
           const carry: import('$lib/types').GmailThread = {
             ...base,
-            // Preserve local labelIds if they were optimistically modified
-            labelIds: wasOptimisticallyModified ? prev.labelIds : base.labelIds,
+            // Preserve local labelIds if they were optimistically modified OR have pending operations
+            labelIds: (wasOptimisticallyModified || hasPendingLabelOps) ? prev.labelIds : base.labelIds,
             summary: prev.summary,
             summaryStatus: prev.summaryStatus,
             // drop legacy summaryVersion preservation
@@ -1902,7 +2112,7 @@
     for (const m of msgs) await txMsgs.store.put(m);
     await txMsgs.done;
     
-    // Persist threads, but don't overwrite optimistically modified ones
+    // Persist threads, but don't overwrite optimistically modified ones or those with pending ops
     const txThreads = db.transaction('threads', 'readwrite');
     for (const t of threadList) {
       const existing = await txThreads.store.get(t.threadId);
@@ -1911,8 +2121,20 @@
         const serverHasInbox = Array.isArray(t.labelIds) && t.labelIds.includes('INBOX');
         const wasOptimisticallyModified = !localHasInbox && serverHasInbox;
         
-        // Only update if not optimistically modified, or preserve the optimistic changes
-        if (!wasOptimisticallyModified) {
+        // Check for pending operations
+        let hasPendingLabelOps = false;
+        try {
+          const pendingOps = await db.getAllFromIndex('ops', 'by_scopeKey', t.threadId);
+          hasPendingLabelOps = pendingOps.some((op: any) => 
+            op.op?.type === 'batchModify' && 
+            (op.op.addLabelIds?.length > 0 || op.op.removeLabelIds?.length > 0)
+          );
+        } catch (_) {
+          hasPendingLabelOps = false;
+        }
+        
+        // Only update if not optimistically modified and no pending ops, or preserve the optimistic changes
+        if (!wasOptimisticallyModified && !hasPendingLabelOps) {
           await txThreads.store.put(t);
         } else {
           // Update everything except labelIds to preserve optimistic changes
@@ -3038,8 +3260,8 @@
       <h3 class="m3-font-title-medium" style="margin:0">Inbox</h3>
       {#if inboxLabelStats}
         <div style="display:flex; gap:0.75rem; align-items:center; color:rgb(var(--m3-scheme-on-surface-variant)); font-size:0.875rem;">
-          <span>Total: <strong style="color:rgb(var(--m3-scheme-on-surface))">{inboxLabelStats.threadsTotal ?? 0}</strong></span>
-          <span>Unread: <strong style="color:rgb(var(--m3-scheme-on-surface))">{inboxLabelStats.threadsUnread ?? 0}</strong></span>
+          <span>Total: <strong style="color:rgb(var(--m3-scheme-on-surface))">{adjustedInboxTotal}</strong></span>
+          <span>Unread: <strong style="color:rgb(var(--m3-scheme-on-surface))">{adjustedInboxUnread}</strong></span>
         </div>
       {/if}
     </div>
