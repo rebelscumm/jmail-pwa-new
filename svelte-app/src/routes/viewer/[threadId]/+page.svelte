@@ -327,13 +327,13 @@ import BottomSheet from "$lib/containers/BottomSheet.svelte";
         isInInbox: thread.labelIds?.includes('INBOX')
       };
       
-      recruitingDiagOpen = true;
-      
-      showSnackbar({ 
-        message: `AI verdict: ${result.verdict.toUpperCase()}`, 
-        timeout: 4000,
-        closable: true 
-      });
+             recruitingDiagOpen = true;
+             
+             showSnackbar({ 
+               message: `AI verdict: ${result.verdict.toUpperCase()}`, 
+               timeout: 4000,
+               closable: true
+             });
            } catch (e) {
              console.error('[Viewer] Recruiting diagnostic failed:', e);
              
@@ -1855,6 +1855,39 @@ onMount(() => {
     {/snippet}
     {#snippet buttons()}
       {#if recruitingDiagResult && !runningRecruitingDiag}
+        {#if recruitingDiagResult.verdict === 'match'}
+          <Button variant="filled" color="error" onclick={async () => {
+            try {
+              const { moderateThreadManually } = await import('$lib/ai/precompute');
+              const moderationResult = await moderateThreadManually(threadId);
+              if (moderationResult.success) {
+                showSnackbar({ 
+                  message: moderationResult.message, 
+                  timeout: 4000,
+                  closable: true 
+                });
+                recruitingDiagOpen = false;
+                // Refresh the page to show updated labels
+                setTimeout(() => location.reload(), 1000);
+              } else {
+                showSnackbar({ 
+                  message: `Failed to apply label: ${moderationResult.message}`, 
+                  timeout: 5000,
+                  closable: true 
+                });
+              }
+            } catch (e) {
+              showSnackbar({ 
+                message: `Error applying label: ${e instanceof Error ? e.message : String(e)}`, 
+                timeout: 5000,
+                closable: true 
+              });
+            }
+          }}>
+            <Icon icon={iconSchool} />
+            Apply Label
+          </Button>
+        {/if}
         <Button variant="text" onclick={() => {
           try {
             navigator.clipboard.writeText(JSON.stringify(recruitingDiagResult, null, 2));

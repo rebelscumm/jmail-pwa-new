@@ -54,27 +54,54 @@ async function ensureCollegeRecruitingLabel(): Promise<string | null> {
 function shouldRunRecruitingModeration(thread: GmailThread, prepared: { bodyText?: string; bodyHtml?: string }): boolean {
   try {
     const labels = thread.labelIds || [];
-    if (!labels.includes('INBOX')) return false;
-    if (labels.includes('TRASH') || labels.includes('SPAM')) return false;
-    if (!prepared.bodyText && !prepared.bodyHtml) return false;
+    if (!labels.includes('INBOX')) {
+      pushLog('debug', '[Precompute] Thread not in INBOX:', thread.threadId);
+      return false;
+    }
+    if (labels.includes('TRASH') || labels.includes('SPAM')) {
+      pushLog('debug', '[Precompute] Thread in TRASH/SPAM:', thread.threadId);
+      return false;
+    }
+    if (!prepared.bodyText && !prepared.bodyHtml) {
+      pushLog('debug', '[Precompute] Thread has no body content:', thread.threadId);
+      return false;
+    }
     
     // Skip if already labeled as college recruiting
     const hasCollegeLabel = labels.some(l => l.includes('college_recruiting') || l === _collegeRecruitingLabelId);
-    if (hasCollegeLabel) return false;
+    if (hasCollegeLabel) {
+      pushLog('debug', '[Precompute] Thread already has college_recruiting label:', thread.threadId);
+      return false;
+    }
     
     const existing = thread.autoModeration?.[MODERATION_RULE_KEY];
     const lastActivity = Number(thread.lastMsgMeta?.date) || 0;
-    if (!existing) return true;
-    if (existing.status === 'pending' || existing.status === 'error' || existing.status === 'unknown') return true;
-    if (existing.promptVersion !== MODERATION_PROMPT_VERSION) return true;
+    if (!existing) {
+      pushLog('debug', '[Precompute] Thread eligible for moderation (no existing):', thread.threadId);
+      return true;
+    }
+    if (existing.status === 'pending' || existing.status === 'error' || existing.status === 'unknown') {
+      pushLog('debug', '[Precompute] Thread eligible for moderation (retry):', thread.threadId, 'status:', existing.status);
+      return true;
+    }
+    if (existing.promptVersion !== MODERATION_PROMPT_VERSION) {
+      pushLog('debug', '[Precompute] Thread eligible for moderation (version mismatch):', thread.threadId);
+      return true;
+    }
     if (existing.status === 'not_match') {
-      return lastActivity > (existing.updatedAt || 0);
+      const shouldRetry = lastActivity > (existing.updatedAt || 0);
+      pushLog('debug', '[Precompute] Thread not_match, retry:', shouldRetry, thread.threadId);
+      return shouldRetry;
     }
     if (existing.status === 'match') {
-      return existing.actionTaken !== 'label_enqueued';
+      const shouldRetry = existing.actionTaken !== 'label_enqueued';
+      pushLog('debug', '[Precompute] Thread match, retry:', shouldRetry, thread.threadId, 'actionTaken:', existing.actionTaken);
+      return shouldRetry;
     }
+    pushLog('debug', '[Precompute] Thread not eligible for moderation:', thread.threadId);
     return false;
-  } catch (_) {
+  } catch (e) {
+    pushLog('warn', '[Precompute] Error checking moderation eligibility:', thread.threadId, e);
     return false;
   }
 }
@@ -1122,6 +1149,108 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
 export async function precomputeNow(limit = 25): Promise<{ processed: number; total: number }> {
   const result = await tickPrecompute(limit);
   return result;
+}
+
+/**
+ * Manually trigger college recruiting moderation for a specific thread
+ * Useful for debugging why a thread wasn't processed automatically
+ */
+export async function moderateThreadManually(threadId: string): Promise<{ success: boolean; message: string; result?: any }> {
+  try {
+    const db = await getDB();
+    const thread = await db.get('threads', threadId);
+    
+    if (!thread) {
+      return { success: false, message: 'Thread not found in local database' };
+    }
+    
+    // Get the last message with full body
+    const lastMsgId = thread.messageIds?.[thread.messageIds.length - 1];
+    if (!lastMsgId) {
+      return { success: false, message: 'No messages found in thread' };
+    }
+    
+    const { getMessageFull } = await import('$lib/gmail/api');
+    const msg = await getMessageFull(lastMsgId);
+    const subject = thread.lastMsgMeta?.subject || msg.headers?.Subject || '';
+    const from = thread.lastMsgMeta?.from || msg.headers?.From || '';
+    
+    // Run AI detection
+    const result = await aiDetectCollegeRecruiting(subject, msg.bodyText, msg.bodyHtml, from);
+    
+    // If it's a match, apply the label
+    if (result.verdict === 'match') {
+      const labelId = await ensureCollegeRecruitingLabel();
+      if (labelId) {
+        await queueThreadModify(threadId, [labelId], ['INBOX'], { optimisticLocal: false });
+        
+        // Update local thread data
+        const nowMs = Date.now();
+        const prevModeration = thread.autoModeration || {};
+        const moderationEntry = (prevModeration as any)[MODERATION_RULE_KEY] || {};
+        const nextModerationEntry = {
+          ...moderationEntry,
+          status: 'match',
+          raw: result.raw,
+          promptVersion: MODERATION_PROMPT_VERSION,
+          updatedAt: nowMs,
+          actionTaken: 'label_enqueued'
+        };
+        
+        const updatedThread = {
+          ...thread,
+          autoModeration: {
+            ...prevModeration,
+            [MODERATION_RULE_KEY]: nextModerationEntry
+          }
+        };
+        
+        await db.put('threads', updatedThread);
+        
+        return { 
+          success: true, 
+          message: `Thread labeled as college recruiting and removed from inbox`,
+          result: { verdict: result.verdict, raw: result.raw, labelId }
+        };
+      } else {
+        return { success: false, message: 'Failed to get college_recruiting label ID' };
+      }
+    } else {
+      // Update local thread data even for non-matches
+      const nowMs = Date.now();
+      const prevModeration = thread.autoModeration || {};
+      const moderationEntry = (prevModeration as any)[MODERATION_RULE_KEY] || {};
+      const nextModerationEntry = {
+        ...moderationEntry,
+        status: result.verdict === 'not_match' ? 'not_match' : 'unknown',
+        raw: result.raw,
+        promptVersion: MODERATION_PROMPT_VERSION,
+        updatedAt: nowMs,
+        actionTaken: moderationEntry.actionTaken
+      };
+      
+      const updatedThread = {
+        ...thread,
+        autoModeration: {
+          ...prevModeration,
+          [MODERATION_RULE_KEY]: nextModerationEntry
+        }
+      };
+      
+      await db.put('threads', updatedThread);
+      
+      return { 
+        success: true, 
+        message: `Thread classified as ${result.verdict}`,
+        result: { verdict: result.verdict, raw: result.raw }
+      };
+    }
+  } catch (e) {
+    return { 
+      success: false, 
+      message: `Error moderating thread: ${e instanceof Error ? e.message : String(e)}` 
+    };
+  }
 }
 
 
