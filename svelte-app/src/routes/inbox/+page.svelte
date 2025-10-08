@@ -288,19 +288,28 @@
       const remoteThreadsUnread = inboxLabel.threadsUnread ?? 0;
       const localThreadsTotal = inboxThreads.length;
       const localThreadsUnread = inboxThreads.filter((t) => (t.labelIds || []).includes('UNREAD')).length;
-      const differs = remoteThreadsTotal !== localThreadsTotal || remoteThreadsUnread !== localThreadsUnread;
       
-      const addedCount = Math.max(0, remoteThreadsTotal - localThreadsTotal);
-      const removedCount = Math.max(0, localThreadsTotal - remoteThreadsTotal);
-      const unreadDiff = remoteThreadsUnread - localThreadsUnread;
+      // Account for optimistic adjustments when comparing
+      const optimisticInboxTotal = remoteThreadsTotal + $optimisticCounters.inboxDelta;
+      const optimisticUnreadTotal = remoteThreadsUnread + $optimisticCounters.unreadDelta;
+      
+      const differs = Math.abs(optimisticInboxTotal - localThreadsTotal) > 2 || 
+                     Math.abs(optimisticUnreadTotal - localThreadsUnread) > 2;
+      
+      const addedCount = Math.max(0, optimisticInboxTotal - localThreadsTotal);
+      const removedCount = Math.max(0, localThreadsTotal - optimisticInboxTotal);
+      const unreadDiff = optimisticUnreadTotal - localThreadsUnread;
       
       try { 
         if (import.meta.env.DEV) {
           console.debug('[InboxUI] remoteCheck', { 
             remoteThreadsTotal, 
-            localThreadsTotal, 
+            localThreadsTotal,
+            optimisticInboxTotal,
             remoteThreadsUnread, 
-            localThreadsUnread, 
+            localThreadsUnread,
+            optimisticUnreadTotal,
+            optimisticDelta: $optimisticCounters.inboxDelta,
             differs,
             addedCount,
             removedCount,
@@ -310,34 +319,28 @@
       } catch {}
       
       if (differs) {
-        // Use authoritative sync for background refresh to ensure stale messages are removed
+        // Only use hydrate for background refresh - it's gentler and respects optimistic updates
         try { 
-          backgroundSyncing = true;
-          console.log('[InboxUI] Starting background authoritative sync due to differences');
-          await performAuthoritativeInboxSync({ 
-            perPageTimeoutMs: 15000, // Shorter timeout for background sync
-            maxRetries: 1 // Fewer retries for background
-          });
+          syncing = true;
+          console.log('[InboxUI] Starting background hydrate due to differences');
+          await hydrate();
           
-          // Show subtle notification about what changed
-          let message = 'Inbox updated';
-          if (addedCount > 0 || removedCount > 0) {
+          // Show subtle notification about what changed if significant
+          if (addedCount > 5 || removedCount > 5) {
+            let message = 'Inbox updated';
             const parts = [];
             if (addedCount > 0) parts.push(`${addedCount} new`);
             if (removedCount > 0) parts.push(`${removedCount} removed`);
             message += `: ${parts.join(', ')}`;
+            
+            showSnackbar({ message, timeout: 3000, closable: true });
           }
-          if (remoteThreadsUnread > 0 && unreadDiff !== 0) {
-            message += ` (${remoteThreadsUnread} unread)`;
-          }
-          
-          showSnackbar({ message, timeout: 3000, closable: true });
-          console.log('[InboxUI] Background sync completed:', message);
+          console.log('[InboxUI] Background hydrate completed');
         } catch (e) {
-          console.error('[InboxUI] Background sync failed:', e);
+          console.error('[InboxUI] Background hydrate failed:', e);
           // Don't show error snackbar for background sync failures - they're not user-initiated
         } finally { 
-          backgroundSyncing = false; 
+          syncing = false; 
         }
       }
     } catch (e) {
@@ -373,6 +376,27 @@
       }
       const history = Array.isArray((data || {}).history) ? (data as any).history : [];
       if (!history.length) return;
+      
+      // Build a map of threads with recent journal entries (user actions) to preserve
+      const recentUserActions = new Set<string>();
+      try {
+        const journalEntries = await db.getAll('journal') as any[];
+        const fiveMinutesAgo = Date.now() - 300000; // 5 minutes
+        for (const entry of journalEntries) {
+          if (entry && entry.threadId && entry.createdAt > fiveMinutesAgo) {
+            // Check if this was an INBOX removal action
+            if (entry.intent && Array.isArray(entry.intent.removeLabelIds) && 
+                entry.intent.removeLabelIds.includes('INBOX')) {
+              recentUserActions.add(entry.threadId);
+            }
+          }
+        }
+      } catch (_) {
+        // If we can't read journal, be conservative and don't apply any changes
+        console.warn('[HistorySync] Could not read journal, skipping history sync to be safe');
+        return;
+      }
+      
       const txThreads = db.transaction('threads', 'readwrite');
       const txMsgs = db.transaction('messages', 'readwrite');
       for (const h of history) {
@@ -393,6 +417,13 @@
           if (h.threadId || h.messages) {
             const threadId = h.threadId || (h.messages && h.messages[0] && h.messages[0].threadId);
             if (!threadId) continue;
+            
+            // Skip threads with recent user actions
+            if (recentUserActions.has(threadId)) {
+              console.log(`[HistorySync] Skipping ${threadId} - recent user action`);
+              continue;
+            }
+            
             try {
               const existing = await txThreads.store.get(threadId) as any;
               if (!existing) continue;
@@ -414,6 +445,7 @@
                   for (const lr of (h.labelsRemoved || [])) { const idx = labels.indexOf(lr); if (idx >= 0) labels.splice(idx, 1); }
                 } else {
                   // Apply server changes but preserve INBOX removal
+                  console.log(`[HistorySync] Preserving optimistic INBOX removal for ${threadId}`);
                   for (const la of (h.labelsAdded || [])) { 
                     if (!labels.includes(la) && la !== 'INBOX') labels.push(la); 
                   }
@@ -432,9 +464,7 @@
       }
       await txMsgs.done;
       await txThreads.done;
-      // Notify user when there were actual changes applied by history so the
-      // update is visible but non-disruptive. If no changes, stay silent.
-      try { showSnackbar({ message: 'Inbox synchronized', timeout: 2000 }); } catch (_) {}
+      // Don't show snackbar for background history sync - it's too noisy
       // Update lastHistoryId if provided
       const newHistoryId = (data || {}).historyId;
       if (newHistoryId) {
