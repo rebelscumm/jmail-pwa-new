@@ -5,6 +5,7 @@
   import { listLabels, listInboxMessageIds, listThreadIdsByLabelId, getMessageMetadata, GmailApiError, getProfile, copyGmailDiagnosticsToClipboard, getAndClearGmailDiagnostics, listHistory, getThreadSummary } from '$lib/gmail/api';
   import { labels as labelsStore } from '$lib/stores/labels';
   import { threads as threadsStore, messages as messagesStore } from '$lib/stores/threads';
+  import { optimisticCounters } from '$lib/stores/optimistic-counters';
   import { getDB } from '$lib/db/indexeddb';
   import VirtualList from '$lib/utils/VirtualList.svelte';
   import ThreadListRow from '$lib/utils/ThreadListRow.svelte';
@@ -601,6 +602,27 @@
   async function bulkArchive() {
     const ids = Object.keys(selectedMap);
     if (!ids.length) return;
+    
+    // Calculate optimistic counter adjustments before archiving
+    const db = await getDB();
+    let inboxDelta = 0;
+    let unreadDelta = 0;
+    for (const id of ids) {
+      const thread = await db.get('threads', id);
+      if (thread) {
+        const isInInbox = (thread.labelIds || []).includes('INBOX');
+        const isUnread = (thread.labelIds || []).includes('UNREAD');
+        if (isInInbox) inboxDelta--;
+        if (isUnread) unreadDelta--;
+      }
+    }
+    
+    // Apply optimistic adjustment immediately
+    if (inboxDelta !== 0 || unreadDelta !== 0) {
+      const { adjustOptimisticCounters } = await import('$lib/stores/optimistic-counters');
+      adjustOptimisticCounters(inboxDelta, unreadDelta);
+    }
+    
     for (const id of ids) await archiveThread(id, { optimisticLocal: false });
     selectedMap = {};
     showSnackbar({ message: 'Archived', actions: { Undo: () => undoLast(ids.length) } });
@@ -608,6 +630,27 @@
   async function bulkDelete() {
     const ids = Object.keys(selectedMap);
     if (!ids.length) return;
+    
+    // Calculate optimistic counter adjustments before deleting
+    const db = await getDB();
+    let inboxDelta = 0;
+    let unreadDelta = 0;
+    for (const id of ids) {
+      const thread = await db.get('threads', id);
+      if (thread) {
+        const isInInbox = (thread.labelIds || []).includes('INBOX');
+        const isUnread = (thread.labelIds || []).includes('UNREAD');
+        if (isInInbox) inboxDelta--;
+        if (isUnread) unreadDelta--;
+      }
+    }
+    
+    // Apply optimistic adjustment immediately
+    if (inboxDelta !== 0 || unreadDelta !== 0) {
+      const { adjustOptimisticCounters } = await import('$lib/stores/optimistic-counters');
+      adjustOptimisticCounters(inboxDelta, unreadDelta);
+    }
+    
     for (const id of ids) await trashThread(id, { optimisticLocal: false });
     selectedMap = {};
     showSnackbar({ message: 'Deleted', actions: { Undo: () => undoLast(ids.length) } });
@@ -631,6 +674,20 @@
     }
   });
   let inboxLabelStats = $state<{ messagesTotal?: number; messagesUnread?: number; threadsTotal?: number; threadsUnread?: number } | null>(null);
+  
+  // Optimistically adjusted counters that update immediately when processing messages
+  const adjustedInboxTotal = $derived.by(() => {
+    const base = inboxLabelStats?.threadsTotal ?? 0;
+    const delta = $optimisticCounters.inboxDelta;
+    return Math.max(0, base + delta);
+  });
+  
+  const adjustedInboxUnread = $derived.by(() => {
+    const base = inboxLabelStats?.threadsUnread ?? 0;
+    const delta = $optimisticCounters.unreadDelta;
+    return Math.max(0, base + delta);
+  });
+  
   const visibleThreadsCount = $derived.by(() => {
     try {
       return Array.isArray(filteredThreads) ? filteredThreads.length : 0;
@@ -3133,8 +3190,8 @@
       <h3 class="m3-font-title-medium" style="margin:0">Inbox</h3>
       {#if inboxLabelStats}
         <div style="display:flex; gap:0.75rem; align-items:center; color:rgb(var(--m3-scheme-on-surface-variant)); font-size:0.875rem;">
-          <span>Total: <strong style="color:rgb(var(--m3-scheme-on-surface))">{inboxLabelStats.threadsTotal ?? 0}</strong></span>
-          <span>Unread: <strong style="color:rgb(var(--m3-scheme-on-surface))">{inboxLabelStats.threadsUnread ?? 0}</strong></span>
+          <span>Total: <strong style="color:rgb(var(--m3-scheme-on-surface))">{adjustedInboxTotal}</strong></span>
+          <span>Unread: <strong style="color:rgb(var(--m3-scheme-on-surface))">{adjustedInboxUnread}</strong></span>
         </div>
       {/if}
     </div>
