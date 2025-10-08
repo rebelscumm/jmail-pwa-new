@@ -1310,6 +1310,30 @@
   });
 
   function setApiError(e: unknown) {
+    // Handle transient IndexedDB errors with a snackbar instead of blocking UI
+    const errorMessage = e instanceof Error ? e.message : String(e);
+    const isTransientDBError = errorMessage.includes('IDBTransaction') || 
+                               errorMessage.includes('transaction has finished') ||
+                               errorMessage.includes('objectStore');
+    
+    if (isTransientDBError) {
+      // Show as a dismissible snackbar - these errors often self-resolve
+      showSnackbar({
+        message: 'Database sync issue detected (may self-resolve)',
+        timeout: 5000,
+        closable: true,
+        actions: {
+          'Details': () => {
+            console.error('[Inbox] IndexedDB error details:', e);
+          }
+        }
+      });
+      // Still log to console for debugging
+      console.warn('[Inbox] Transient IndexedDB error (shown as snackbar):', e);
+      return;
+    }
+    
+    // For all other errors, show the full error card
     if (e instanceof GmailApiError) {
       apiErrorStatus = e.status;
       apiErrorMessage = e.message || `Gmail API error ${e.status}`;
@@ -1604,9 +1628,11 @@
           try {
             const existing = await db.get('threads', tid) as any | undefined;
             // Determine if there are pending ops that would conflict with label updates
+            // CHECK BOTH ops queue AND journal (for recently completed operations that haven't cleared yet)
             let hasPendingInboxRemoval = false;
             let hasPendingLabelChanges = false;
             try {
+              // Check ops queue
               const pendingOps = await db.getAllFromIndex('ops', 'by_scopeKey', tid);
               for (const op of pendingOps) {
                 if (op.op?.type === 'batchModify') {
@@ -1618,10 +1644,27 @@
                   }
                 }
               }
+              
+              // Also check journal for recent user actions (even if op completed)
+              if (!hasPendingInboxRemoval || !hasPendingLabelChanges) {
+                const journalAll = await db.getAll('journal');
+                for (const e of journalAll as any[]) {
+                  if (!e || e.threadId !== tid || !e.intent) continue;
+                  const rem = Array.isArray(e.intent.removeLabelIds) ? e.intent.removeLabelIds : [];
+                  const add = Array.isArray(e.intent.addLabelIds) ? e.intent.addLabelIds : [];
+                  if (rem.includes('INBOX')) {
+                    hasPendingInboxRemoval = true;
+                    hasPendingLabelChanges = true;
+                  }
+                  if (add.includes('INBOX') || rem.includes('INBOX')) {
+                    hasPendingLabelChanges = true;
+                  }
+                }
+              }
             } catch (_) {
-              // If index lookup fails, conservatively mark pending as false so we attempt fetch/update
-              hasPendingLabelChanges = false;
-              hasPendingInboxRemoval = false;
+              // If lookup fails, be CONSERVATIVE: assume there ARE pending changes to avoid undoing user actions
+              hasPendingLabelChanges = true;
+              hasPendingInboxRemoval = true;
             }
 
             if (!existing) {
@@ -1770,6 +1813,22 @@
         opsByScope = {};
       }
 
+      // Also prefetch journal entries to check for recent user actions
+      let journalByThread: Record<string, any[]> = {};
+      try {
+        const allJournal = await db.getAll('journal');
+        for (const entry of (allJournal || [])) {
+          try {
+            const e = entry as any;
+            if (!e || !e.threadId) continue;
+            journalByThread[e.threadId] = journalByThread[e.threadId] || [];
+            journalByThread[e.threadId].push(e);
+          } catch (_) {}
+        }
+      } catch (_) {
+        journalByThread = {};
+      }
+
       const updates: any[] = [];
       for (const t of (allThreads || [])) {
         try {
@@ -1788,6 +1847,17 @@
             // Also check if there are ANY pending operations as a safety measure
             if (pendingOps.length > 0) {
               console.log(`[AuthSync] Phase 2: Skipping INBOX removal from thread ${t.threadId} - has pending operations (${pendingOps.length})`);
+              continue;
+            }
+            
+            // Check journal for recent user actions that added INBOX back
+            const journalEntries = journalByThread[t.threadId] || [];
+            const hasJournalInboxAddition = journalEntries.some((e: any) => {
+              const add = Array.isArray(e.intent?.addLabelIds) ? e.intent.addLabelIds : [];
+              return add.includes('INBOX');
+            });
+            if (hasJournalInboxAddition) {
+              console.log(`[AuthSync] Phase 2: Skipping INBOX removal from thread ${t.threadId} - journal shows user added INBOX back`);
               continue;
             }
             const next = { ...t, labelIds: labels.filter((l) => l !== 'INBOX') } as any;

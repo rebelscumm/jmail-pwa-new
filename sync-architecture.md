@@ -83,11 +83,16 @@ Display Unread Total = Server Unread Total + Unread Delta
 
 ### 3. Authoritative Sync (On startup / manual refresh)
 - Enumerates all inbox threads from Gmail
-- **Protection**: Checks both ops queue and journal before modifications
+- **Protection**: Checks **BOTH** ops queue **AND** journal before modifications
+  - Ops queue: Operations still pending/retrying
+  - Journal: Recently completed operations (kept for undo even after sync succeeds)
+  - If EITHER indicates a user action, that thread is skipped during reconciliation
 - **Before Sync**: Attempts to flush pending operations, but preserves them if they fail
-- **Action**: Full reconciliation, adds missing, removes stale
+- **Action**: Full reconciliation, adds missing, removes stale (only for threads with no pending/recent actions)
 - **Result**: Nuclear option for complete accuracy
-- **Important**: Optimistic counters are only reset if all pending ops successfully complete; otherwise they're recalculated to preserve visual state
+- **Important**: 
+  - Optimistic counters are only reset if all pending ops successfully complete; otherwise they're recalculated to preserve visual state
+  - If unable to check ops/journal due to error, assumes pending changes exist (conservative approach)
 
 ---
 
