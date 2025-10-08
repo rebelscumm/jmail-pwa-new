@@ -38,6 +38,7 @@ import { precomputeStatus } from '$lib/stores/precompute';
   import iconNotifications from '@ktibow/iconset-material-symbols/notifications';
   import iconTerminal from '@ktibow/iconset-material-symbols/terminal';
   import iconDiagnostics from '@ktibow/iconset-material-symbols/bug-report';
+  import iconSchool from '@ktibow/iconset-material-symbols/school';
   import { onMount, tick } from 'svelte';
   import { cacheVersion as cacheVersionStore } from '$lib/utils/cacheVersion';
   import { trailingHolds } from '$lib/stores/holds';
@@ -309,7 +310,7 @@ import { precomputeStatus } from '$lib/stores/precompute';
             message: 'No email threads found. Sync your inbox first.', 
             timeout: 4000,
             actions: {
-              'Sync Now': () => { doSync(); }
+              'Sync Now': () => { if (onSyncNow) onSyncNow(); }
             }
           });
           return;
@@ -379,6 +380,77 @@ import { precomputeStatus } from '$lib/stores/precompute';
       console.log('[TopAppBar] About dialog should now be open:', aboutOpen);
     } catch (e) {
       console.error('[TopAppBar] Error opening About dialog:', e);
+    }
+  }
+
+  async function doRunRecruitingModeration() {
+    try {
+      overflowDetails.open = false;
+      const s = get(settings);
+      
+      if (!s?.precomputeSummaries) {
+        showSnackbar({ 
+          message: 'Precompute is disabled. Enable it in Settings to use recruiting moderation.', 
+          timeout: 6000,
+          actions: {
+            'Go to Settings': () => { location.href = '/settings'; }
+          }
+        });
+        return;
+      }
+      
+      if (!s?.aiApiKey) {
+        showSnackbar({ 
+          message: 'AI API key is missing. Set it in Settings > API', 
+          timeout: 6000,
+          actions: {
+            'Go to Settings': () => { location.href = '/settings'; }
+          }
+        });
+        return;
+      }
+      
+      // Check for inbox threads
+      try {
+        const { getDB } = await import('$lib/db/indexeddb');
+        const db = await getDB();
+        const allThreads = await db.getAll('threads');
+        const inboxThreads = allThreads.filter(t => t.labelIds?.includes('INBOX'));
+        
+        if (inboxThreads.length === 0) {
+          showSnackbar({ 
+            message: 'No inbox threads found. Sync your inbox first.', 
+            timeout: 4000,
+            actions: {
+              'Sync Now': () => { if (onSyncNow) onSyncNow(); }
+            }
+          });
+          return;
+        }
+        
+        showSnackbar({ message: `Starting college recruiting moderation for ${inboxThreads.length} inbox threads...`, timeout: 3000 });
+      } catch (e) {
+        console.error('Error checking inbox threads:', e);
+      }
+      
+      // Run precompute which includes moderation
+      const { precomputeNow } = await import('$lib/ai/precompute');
+      const result: any = await precomputeNow(50); // Process more threads
+      
+      if (result && result.processed > 0) {
+        showSnackbar({ 
+          message: `College recruiting moderation complete! Processed ${result.processed} threads. Check Diagnostics for results.`, 
+          timeout: 6000,
+          actions: {
+            'View Results': () => { location.href = '/diagnostics'; }
+          }
+        });
+      } else {
+        showSnackbar({ message: 'No threads needed processing', timeout: 4000 });
+      }
+    } catch (e) {
+      const errorMsg = e instanceof Error ? e.message : String(e);
+      showSnackbar({ message: `College recruiting moderation failed: ${errorMsg}`, timeout: 5000 });
     }
   }
 
@@ -857,6 +929,7 @@ import { precomputeStatus } from '$lib/stores/precompute';
       // Check if there are recent user actions or pending operations
       // If so, prefer local counts over potentially stale server counts
       let hasRecentActivity = false;
+      let activityReason = '';
       try {
         const { getDB } = await import('$lib/db/indexeddb');
         const db = await getDB();
@@ -865,28 +938,36 @@ import { precomputeStatus } from '$lib/stores/precompute';
         const pendingOps = await db.getAll('ops');
         if (pendingOps && pendingOps.length > 0) {
           hasRecentActivity = true;
+          activityReason = `${pendingOps.length} pending ops`;
         }
         
         // Check for recent journal entries (last 2 minutes)
         if (!hasRecentActivity) {
           const recentCutoff = Date.now() - (2 * 60 * 1000);
           const journalEntries = await db.getAll('journal');
-          hasRecentActivity = journalEntries.some((e: any) => 
+          const recentEntries = journalEntries.filter((e: any) => 
             e && e.createdAt && e.createdAt > recentCutoff
           );
+          if (recentEntries.length > 0) {
+            hasRecentActivity = true;
+            activityReason = `${recentEntries.length} journal entries from last 2min`;
+          }
+          console.log(`[TopAppBar] Journal check: ${journalEntries.length} total, ${recentEntries.length} recent (cutoff: ${new Date(recentCutoff).toISOString()})`);
         }
-      } catch (_) {
+      } catch (e) {
         // If we can't check, be conservative and assume there might be recent activity
         hasRecentActivity = true;
+        activityReason = `check failed: ${e}`;
       }
       
       // Only overwrite rendered counts with server values if there's no recent activity
       // This prevents showing stale server counts when user just performed actions
       if (!hasRecentActivity) {
+        console.log(`[TopAppBar] Using server counts - no recent activity (server: ${tt} inbox, ${tu} unread)`);
         if (typeof tt === 'number') renderedInboxCount = tt;
         if (typeof tu === 'number') renderedUnreadCount = tu;
       } else {
-        console.log('[TopAppBar] Skipping server count update - recent user activity detected');
+        console.log(`[TopAppBar] Skipping server count update - ${activityReason} (server: ${tt}, local: ${renderedInboxCount})`);
       }
     } catch (e) {
       inboxMessagesTotal = undefined;
@@ -989,23 +1070,13 @@ import { precomputeStatus } from '$lib/stores/precompute';
     } catch {}
     _labelRefreshTimer = window.setTimeout(() => { try { refreshLabelStats(); } catch {} }, 800);
   }
-  // React to derived value changes (these are reactive primitives, not Svelte stores)
+  // Schedule label refresh when optimistic counts change
+  // Don't set renderedInboxCount here - let the main effect below handle that
   $effect(() => {
     try { 
-      const count = optimisticInboxCount();
-      renderedInboxCount = Number(count || 0); 
-    } catch { 
-      renderedInboxCount = 0; 
-    }
-    scheduleLabelRefresh();
-  });
-  $effect(() => {
-    try { 
-      const count = optimisticUnreadCount();
-      renderedUnreadCount = Number(count || 0); 
-    } catch { 
-      renderedUnreadCount = 0; 
-    }
+      optimisticInboxCount(); // Subscribe to changes
+      optimisticUnreadCount(); // Subscribe to changes
+    } catch {}
     scheduleLabelRefresh();
   });
   // Cleanup timer when component unmounts
@@ -1024,9 +1095,10 @@ import { precomputeStatus } from '$lib/stores/precompute';
       const onInbox = typeof window !== 'undefined' && typeof window.location !== 'undefined' && String(window.location.pathname || '').startsWith('/inbox');
       if (onInbox) {
         // When viewing the inbox, align the topbar counts with the visible list.
-        // Use held-aware counts so numbers reflect swipe animations (trailed holds).
-        try { renderedInboxCount = Number(inboxCount() || 0); } catch { renderedInboxCount = 0; }
-        try { renderedUnreadCount = Number(unreadCount() || 0); } catch { renderedUnreadCount = 0; }
+        // Use OPTIMISTIC counts that include pending operations, not just base counts
+        try { renderedInboxCount = Number(optimisticInboxCount() || 0); } catch { renderedInboxCount = 0; }
+        try { renderedUnreadCount = Number(optimisticUnreadCount() || 0); } catch { renderedUnreadCount = 0; }
+        console.log(`[TopAppBar] Inbox route - using optimistic counts: ${renderedInboxCount} inbox, ${renderedUnreadCount} unread`);
         return;
       }
 
@@ -1162,6 +1234,7 @@ import { precomputeStatus } from '$lib/stores/precompute';
         
         <div class="menu-section-header">AI Features</div>
         <MenuItem icon={iconSparkles} onclick={doPrecompute}>Run Precompute</MenuItem>
+        <MenuItem icon={iconSchool} onclick={doRunRecruitingModeration}>Run College Recruiting Filter</MenuItem>
         <MenuItem icon={iconSmartToy} onclick={doShowPrecomputeSummary}>Precompute Summary</MenuItem>
         <MenuItem icon={iconLogs} onclick={doShowPrecomputeLogs}>Review Precompute Logs</MenuItem>
         <MenuItem icon={iconSparkles} onclick={doBackfillSummaryVersions}>Backfill AI Summary Versions</MenuItem>

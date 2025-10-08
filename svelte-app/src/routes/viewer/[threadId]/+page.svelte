@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { get } from 'svelte/store';
   import { page } from "$app/stores";
   import { goto } from "$app/navigation";
   import { messages, threads } from "$lib/stores/threads";
@@ -54,6 +55,7 @@ import iconUnsubscribe from "@ktibow/iconset-material-symbols/unsubscribe";
 import iconBugReport from "@ktibow/iconset-material-symbols/bug-report";
 import iconKey from "@ktibow/iconset-material-symbols/key";
 import iconLogin from "@ktibow/iconset-material-symbols/login";
+import iconSchool from "@ktibow/iconset-material-symbols/school";
 import iconRefresh from "@ktibow/iconset-material-symbols/refresh";
 import iconDownload from "@ktibow/iconset-material-symbols/download";
 import iconClose from "@ktibow/iconset-material-symbols/close";
@@ -164,6 +166,10 @@ import BottomSheet from "$lib/containers/BottomSheet.svelte";
   let aiDiagnostics: AISummaryDiagnostics | null = $state(null);
   let diagnosticsSheetOpen: boolean = $state(false);
   let lastSummarizedMid: string | null = $state(null);
+  // Recruiting moderation diagnostic state
+  let recruitingDiagOpen: boolean = $state(false);
+  let recruitingDiagResult: any = $state(null);
+  let runningRecruitingDiag: boolean = $state(false);
   // Attachment summary dialog state
   let attDialogOpen: boolean = $state(false);
   let attDialogTitle: string | null = $state(null);
@@ -262,6 +268,86 @@ import BottomSheet from "$lib/containers/BottomSheet.svelte";
     diagnosticsSheetOpen = false;
     summarize(lastSummarizedMid, true);
   }
+
+  async function runRecruitingDiagnostic() {
+    try {
+      runningRecruitingDiag = true;
+      recruitingDiagResult = null;
+      
+      if (!currentThread) {
+        showSnackbar({ message: 'No thread loaded', closable: true });
+        return;
+      }
+      
+      const s = get(settings);
+      if (!s?.aiApiKey) {
+        showSnackbar({ message: 'AI API key required. Set it in Settings.', timeout: 5000 });
+        return;
+      }
+      
+      // Get thread data from IndexedDB
+      const db = await getDB();
+      const thread = await db.get('threads', threadId);
+      
+      if (!thread) {
+        showSnackbar({ message: 'Thread not found in local database', closable: true });
+        return;
+      }
+      
+      // Get the last message with full body
+      const lastMsgId = thread.messageIds?.[thread.messageIds.length - 1];
+      if (!lastMsgId) {
+        showSnackbar({ message: 'No messages found in thread', closable: true });
+        return;
+      }
+      
+      const msg = await getMessageFull(lastMsgId);
+      const subject = thread.lastMsgMeta?.subject || msg.headers?.Subject || '';
+      const from = thread.lastMsgMeta?.from || msg.headers?.From || '';
+      
+      // Import and run the AI detection
+      const { aiDetectCollegeRecruiting } = await import('$lib/ai/providers');
+      const startTime = Date.now();
+      const result = await aiDetectCollegeRecruiting(subject, msg.bodyText, msg.bodyHtml, from);
+      const duration = Date.now() - startTime;
+      
+      // Check if thread has existing moderation data
+      const existingModeration = thread.autoModeration?.college_recruiting_v1;
+      
+      recruitingDiagResult = {
+        verdict: result.verdict,
+        raw: result.raw,
+        duration,
+        subject,
+        from,
+        hasBody: !!(msg.bodyText || msg.bodyHtml),
+        bodyPreview: (msg.bodyText || msg.bodyHtml || '').slice(0, 500),
+        existingModeration,
+        threadLabels: thread.labelIds,
+        isInInbox: thread.labelIds?.includes('INBOX')
+      };
+      
+      recruitingDiagOpen = true;
+      
+      showSnackbar({ 
+        message: `AI verdict: ${result.verdict.toUpperCase()}`, 
+        timeout: 4000,
+        closable: true 
+      });
+    } catch (e) {
+      console.error('[Viewer] Recruiting diagnostic failed:', e);
+      showSnackbar({ 
+        message: `Diagnostic failed: ${e instanceof Error ? e.message : String(e)}`, 
+        timeout: 5000 
+      });
+      recruitingDiagResult = {
+        error: e instanceof Error ? e.message : String(e)
+      };
+    } finally {
+      runningRecruitingDiag = false;
+    }
+  }
+
   function getSubject(a: import('$lib/types').GmailThread): string { return (a.lastMsgMeta.subject || '').toLowerCase(); }
   function getDate(a: import('$lib/types').GmailThread): number { return num(a.lastMsgMeta.date) || 0; }
   function isUnread(a: import('$lib/types').GmailThread): boolean { return (a.labelIds || []).includes('UNREAD'); }
@@ -1173,6 +1259,16 @@ onMount(() => {
                   Snooze 10m
                 </MenuItem>
               {/if}
+              <MenuItem onclick={(e) => {
+                runRecruitingDiagnostic();
+                if (e?.target && e.target instanceof HTMLElement) {
+                  const details = e.target.closest('details');
+                  if (details) details.open = false;
+                }
+              }} disabled={runningRecruitingDiag}>
+                <Icon icon={iconSchool} />
+                {runningRecruitingDiag ? 'Checking...' : 'Test Recruiting Filter'}
+              </MenuItem>
               <MenuItem onclick={() => relogin(currentThread.messageIds?.[0])}>
                 <Icon icon={iconLogin} />
                 Re-login
@@ -1531,6 +1627,16 @@ onMount(() => {
                   Snooze 10m
                 </MenuItem>
               {/if}
+              <MenuItem onclick={(e) => {
+                runRecruitingDiagnostic();
+                if (e?.target && e.target instanceof HTMLElement) {
+                  const details = e.target.closest('details');
+                  if (details) details.open = false;
+                }
+              }} disabled={runningRecruitingDiag}>
+                <Icon icon={iconSchool} />
+                {runningRecruitingDiag ? 'Checking...' : 'Test Recruiting Filter'}
+              </MenuItem>
               <MenuItem onclick={() => relogin(currentThread.messageIds?.[0])}>
                 <Icon icon={iconLogin} />
                 Re-login
@@ -1656,6 +1762,98 @@ onMount(() => {
         Copy
       </Button>
       <Button variant="text" onclick={() => { attDialogOpen = false; }}>
+        <Icon icon={iconClose} />
+        Close
+      </Button>
+    {/snippet}
+  </Dialog>
+
+  <Dialog headline="College Recruiting Filter Test" bind:open={recruitingDiagOpen} closeOnClick={true}>
+    {#snippet children()}
+      {#if runningRecruitingDiag}
+        <div style="display:flex; justify-content:center; padding:2rem;">
+          <LoadingIndicator size={24} />
+        </div>
+      {:else if recruitingDiagResult}
+        {#if recruitingDiagResult.error}
+          <div style="padding: 1rem; background: rgb(var(--m3-scheme-error-container)); border-radius: 12px; color: rgb(var(--m3-scheme-on-error-container));">
+            <strong>Error:</strong> {recruitingDiagResult.error}
+          </div>
+        {:else}
+          <div style="display: flex; flex-direction: column; gap: 1rem;">
+            <div style="background: {recruitingDiagResult.verdict === 'match' ? 'rgb(var(--m3-scheme-error-container))' : recruitingDiagResult.verdict === 'not_match' ? 'rgb(var(--m3-scheme-tertiary-container))' : 'rgb(var(--m3-scheme-surface-variant))'}; padding: 1rem; border-radius: 12px;">
+              <div style="font-weight: 500; margin-bottom: 0.5rem;">AI Verdict</div>
+              <div style="font-size: 1.5rem; font-weight: 600; text-transform: uppercase; color: {recruitingDiagResult.verdict === 'match' ? 'rgb(var(--m3-scheme-on-error-container))' : recruitingDiagResult.verdict === 'not_match' ? 'rgb(var(--m3-scheme-on-tertiary-container))' : 'rgb(var(--m3-scheme-on-surface-variant))'}">{recruitingDiagResult.verdict}</div>
+              <div style="font-size: 0.875rem; margin-top: 0.5rem; opacity: 0.8;">Processed in {recruitingDiagResult.duration}ms</div>
+            </div>
+            
+            <div>
+              <strong>Subject:</strong>
+              <div style="margin-top: 0.25rem; padding: 0.5rem; background: rgb(var(--m3-scheme-surface-container)); border-radius: 8px;">{recruitingDiagResult.subject || '(no subject)'}</div>
+            </div>
+            
+            <div>
+              <strong>From:</strong>
+              <div style="margin-top: 0.25rem; padding: 0.5rem; background: rgb(var(--m3-scheme-surface-container)); border-radius: 8px;">{recruitingDiagResult.from || '(unknown)'}</div>
+            </div>
+            
+            <div>
+              <strong>Email Status:</strong>
+              <div style="margin-top: 0.5rem; display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                <span style="padding: 0.25rem 0.75rem; background: rgb(var(--m3-scheme-surface-variant)); border-radius: 16px; font-size: 0.75rem;">
+                  {recruitingDiagResult.isInInbox ? '📥 In INBOX' : '📭 Not in INBOX'}
+                </span>
+                <span style="padding: 0.25rem 0.75rem; background: rgb(var(--m3-scheme-surface-variant)); border-radius: 16px; font-size: 0.75rem;">
+                  {recruitingDiagResult.hasBody ? '✅ Has body content' : '❌ No body content'}
+                </span>
+              </div>
+            </div>
+            
+            {#if recruitingDiagResult.existingModeration}
+              <div style="padding: 0.75rem; background: rgb(var(--m3-scheme-tertiary-container)); border-radius: 8px;">
+                <strong style="color: rgb(var(--m3-scheme-on-tertiary-container));">Previous Result:</strong>
+                <div style="margin-top: 0.5rem; font-size: 0.875rem; color: rgb(var(--m3-scheme-on-tertiary-container));">
+                  Status: {recruitingDiagResult.existingModeration.status}<br/>
+                  {#if recruitingDiagResult.existingModeration.actionTaken}
+                    Action: {recruitingDiagResult.existingModeration.actionTaken}<br/>
+                  {/if}
+                  Updated: {new Date(recruitingDiagResult.existingModeration.updatedAt).toLocaleString()}
+                </div>
+              </div>
+            {/if}
+            
+            {#if recruitingDiagResult.raw}
+              <details style="background: rgb(var(--m3-scheme-surface-container)); padding: 0.75rem; border-radius: 8px;">
+                <summary style="cursor: pointer; font-weight: 500; color: rgb(var(--m3-scheme-primary));">View AI Response</summary>
+                <pre style="white-space: pre-wrap; margin-top: 0.5rem; padding: 0.5rem; background: rgb(var(--m3-scheme-surface)); border-radius: 4px; overflow-x: auto; font-size: 0.875rem;">{recruitingDiagResult.raw}</pre>
+              </details>
+            {/if}
+            
+            {#if recruitingDiagResult.bodyPreview}
+              <details style="background: rgb(var(--m3-scheme-surface-container)); padding: 0.75rem; border-radius: 8px;">
+                <summary style="cursor: pointer; font-weight: 500;">View Body Preview (first 500 chars)</summary>
+                <pre style="white-space: pre-wrap; margin-top: 0.5rem; padding: 0.5rem; background: rgb(var(--m3-scheme-surface)); border-radius: 4px; overflow-x: auto; font-size: 0.75rem;">{recruitingDiagResult.bodyPreview}</pre>
+              </details>
+            {/if}
+          </div>
+        {/if}
+      {/if}
+    {/snippet}
+    {#snippet buttons()}
+      {#if recruitingDiagResult && !runningRecruitingDiag}
+        <Button variant="text" onclick={() => {
+          try {
+            navigator.clipboard.writeText(JSON.stringify(recruitingDiagResult, null, 2));
+            showSnackbar({ message: 'Diagnostic results copied', closable: true });
+          } catch (e) {
+            showSnackbar({ message: 'Failed to copy', closable: true });
+          }
+        }}>
+          <Icon icon={iconCopy} />
+          Copy
+        </Button>
+      {/if}
+      <Button variant="text" onclick={() => { recruitingDiagOpen = false; }}>
         <Icon icon={iconClose} />
         Close
       </Button>
