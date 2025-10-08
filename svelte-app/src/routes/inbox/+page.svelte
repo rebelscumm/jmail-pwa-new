@@ -1552,22 +1552,36 @@
           try {
             const existing = await db.get('threads', tid) as any | undefined;
             // Determine if there are pending ops that would conflict with label updates
+            let hasPendingInboxRemoval = false;
             let hasPendingLabelChanges = false;
             try {
               const pendingOps = await db.getAllFromIndex('ops', 'by_scopeKey', tid);
-              hasPendingLabelChanges = pendingOps.some(op => op.op?.type === 'batchModify' && (op.op.addLabelIds?.includes('INBOX') || op.op.removeLabelIds?.includes('INBOX')));
+              for (const op of pendingOps) {
+                if (op.op?.type === 'batchModify') {
+                  if (op.op.removeLabelIds?.includes('INBOX')) {
+                    hasPendingInboxRemoval = true;
+                  }
+                  if (op.op.addLabelIds?.includes('INBOX') || op.op.removeLabelIds?.includes('INBOX')) {
+                    hasPendingLabelChanges = true;
+                  }
+                }
+              }
             } catch (_) {
               // If index lookup fails, conservatively mark pending as false so we attempt fetch/update
               hasPendingLabelChanges = false;
+              hasPendingInboxRemoval = false;
             }
 
             if (!existing) {
               console.log(`[AuthSync] Thread ${tid} missing from database, will fetch`);
               toFetch.push(tid);
             } else if (!Array.isArray(existing.labelIds) || !existing.labelIds.includes('INBOX')) {
-              if (hasPendingLabelChanges) {
+              if (hasPendingInboxRemoval) {
+                console.log(`[AuthSync] Thread ${tid} exists but has pending INBOX removal; SKIPPING to preserve user edit`);
+                // Don't re-add INBOX if user just removed it
+              } else if (hasPendingLabelChanges) {
                 console.log(`[AuthSync] Thread ${tid} exists but has pending ops; skipping label update`);
-                // skip quick update; will be handled by Phase 1b or later
+                // skip quick update for other pending changes
               } else {
                 console.log(`[AuthSync] Thread ${tid} exists but missing INBOX label, current labels: ${existing.labelIds?.join(',') || 'none'}`);
                 toUpdateLabelsOnly.push({threadId: tid, existing});
@@ -1710,9 +1724,18 @@
           const labels = Array.isArray(t.labelIds) ? t.labelIds.slice() : [];
           if (labels.includes('INBOX') && !seenThreadIds.has(t.threadId)) {
             const pendingOps = opsByScope[t.threadId] || [];
-            const hasPendingOperations = pendingOps.length > 0;
-            if (hasPendingOperations) {
-              console.log(`[AuthSync] Phase 2: Skipping INBOX removal from thread ${t.threadId} - has pending operations`);
+            // Check if there are any pending operations that affect INBOX label
+            const hasPendingInboxOps = pendingOps.some((op: any) => 
+              op.op?.type === 'batchModify' && 
+              (op.op.addLabelIds?.includes('INBOX') || op.op.removeLabelIds?.includes('INBOX'))
+            );
+            if (hasPendingInboxOps) {
+              console.log(`[AuthSync] Phase 2: Skipping INBOX removal from thread ${t.threadId} - has pending INBOX operations`);
+              continue;
+            }
+            // Also check if there are ANY pending operations as a safety measure
+            if (pendingOps.length > 0) {
+              console.log(`[AuthSync] Phase 2: Skipping INBOX removal from thread ${t.threadId} - has pending operations (${pendingOps.length})`);
               continue;
             }
             const next = { ...t, labelIds: labels.filter((l) => l !== 'INBOX') } as any;
@@ -2018,10 +2041,23 @@
           const serverHasInbox = Array.isArray(base.labelIds) && base.labelIds.includes('INBOX');
           const wasOptimisticallyModified = !localHasInbox && serverHasInbox;
           
+          // Also check for pending operations that would affect labels
+          let hasPendingLabelOps = false;
+          try {
+            const pendingOps = await db.getAllFromIndex('ops', 'by_scopeKey', threadId);
+            hasPendingLabelOps = pendingOps.some((op: any) => 
+              op.op?.type === 'batchModify' && 
+              (op.op.addLabelIds?.length > 0 || op.op.removeLabelIds?.length > 0)
+            );
+          } catch (_) {
+            // If we can't check pending ops, assume no pending ops
+            hasPendingLabelOps = false;
+          }
+          
           const carry: import('$lib/types').GmailThread = {
             ...base,
-            // Preserve local labelIds if they were optimistically modified
-            labelIds: wasOptimisticallyModified ? prev.labelIds : base.labelIds,
+            // Preserve local labelIds if they were optimistically modified OR have pending operations
+            labelIds: (wasOptimisticallyModified || hasPendingLabelOps) ? prev.labelIds : base.labelIds,
             summary: prev.summary,
             summaryStatus: prev.summaryStatus,
             // drop legacy summaryVersion preservation
@@ -2054,7 +2090,7 @@
     for (const m of msgs) await txMsgs.store.put(m);
     await txMsgs.done;
     
-    // Persist threads, but don't overwrite optimistically modified ones
+    // Persist threads, but don't overwrite optimistically modified ones or those with pending ops
     const txThreads = db.transaction('threads', 'readwrite');
     for (const t of threadList) {
       const existing = await txThreads.store.get(t.threadId);
@@ -2063,8 +2099,20 @@
         const serverHasInbox = Array.isArray(t.labelIds) && t.labelIds.includes('INBOX');
         const wasOptimisticallyModified = !localHasInbox && serverHasInbox;
         
-        // Only update if not optimistically modified, or preserve the optimistic changes
-        if (!wasOptimisticallyModified) {
+        // Check for pending operations
+        let hasPendingLabelOps = false;
+        try {
+          const pendingOps = await db.getAllFromIndex('ops', 'by_scopeKey', t.threadId);
+          hasPendingLabelOps = pendingOps.some((op: any) => 
+            op.op?.type === 'batchModify' && 
+            (op.op.addLabelIds?.length > 0 || op.op.removeLabelIds?.length > 0)
+          );
+        } catch (_) {
+          hasPendingLabelOps = false;
+        }
+        
+        // Only update if not optimistically modified and no pending ops, or preserve the optimistic changes
+        if (!wasOptimisticallyModified && !hasPendingLabelOps) {
           await txThreads.store.put(t);
         } else {
           // Update everything except labelIds to preserve optimistic changes
