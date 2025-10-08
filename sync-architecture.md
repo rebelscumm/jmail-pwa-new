@@ -49,21 +49,30 @@ When a user deletes/archives/snoozes an email:
 ### How Counters Work
 
 ```
-Display Inbox Total = Server Inbox Total + Inbox Delta
-Display Unread Total = Server Unread Total + Unread Delta
+Display Inbox Total = Local Thread Count + Optimistic Delta
+Display Unread Total = Local Thread Count + Optimistic Delta
 ```
 
-- **Server counters**: Baseline from Gmail (source of truth)
+- **Local thread count**: Number of threads with INBOX/UNREAD labels in IndexedDB
 - **Optimistic deltas**: Sum of pending operations' impact
 - **Display counters**: What the user sees (always accurate even during pending ops)
+- **Server counters**: Periodically fetched from Gmail, but NOT used if there's recent user activity
 
 ### Example
 
-1. Server reports 50 inbox emails
-2. User deletes 3 emails → `inboxDelta = -3`
-3. Display shows: `50 + (-3) = 47` emails
-4. Operations complete, server now reports 47
-5. Delta resets to 0, display still shows 47
+1. Local DB has 50 inbox threads
+2. User deletes 3 emails → Local DB updated (47 threads), `inboxDelta = -3`
+3. Display shows: `47 + (-3) = 47` emails (optimistic, before operation completes)
+4. Operations complete → Operations removed from queue, `inboxDelta` resets to 0
+5. Display shows: `47 + 0 = 47` emails (now based purely on local DB)
+
+### Server Counter Refresh
+
+Gmail's reported counts are fetched periodically but are **NOT** used to overwrite local counts when:
+- There are pending operations in the queue
+- There are journal entries from the last 2 minutes (indicating recent user actions)
+
+This prevents showing stale server counts due to eventual consistency delays. Once there's been no activity for 2+ minutes, server counts are used as the authoritative source.
 
 ---
 

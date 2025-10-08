@@ -853,9 +853,41 @@ import { precomputeStatus } from '$lib/stores/precompute';
       const tu = typeof inboxLabel?.threadsUnread === 'number' ? inboxLabel.threadsUnread : undefined;
       inboxMessagesTotal = tt;
       inboxMessagesUnread = tu;
-      // Immediately update the rendered counters with authoritative values when available
-      if (typeof tt === 'number') renderedInboxCount = tt;
-      if (typeof tu === 'number') renderedUnreadCount = tu;
+      
+      // Check if there are recent user actions or pending operations
+      // If so, prefer local counts over potentially stale server counts
+      let hasRecentActivity = false;
+      try {
+        const { getDB } = await import('$lib/db/indexeddb');
+        const db = await getDB();
+        
+        // Check for pending operations
+        const pendingOps = await db.getAll('ops');
+        if (pendingOps && pendingOps.length > 0) {
+          hasRecentActivity = true;
+        }
+        
+        // Check for recent journal entries (last 2 minutes)
+        if (!hasRecentActivity) {
+          const recentCutoff = Date.now() - (2 * 60 * 1000);
+          const journalEntries = await db.getAll('journal');
+          hasRecentActivity = journalEntries.some((e: any) => 
+            e && e.createdAt && e.createdAt > recentCutoff
+          );
+        }
+      } catch (_) {
+        // If we can't check, be conservative and assume there might be recent activity
+        hasRecentActivity = true;
+      }
+      
+      // Only overwrite rendered counts with server values if there's no recent activity
+      // This prevents showing stale server counts when user just performed actions
+      if (!hasRecentActivity) {
+        if (typeof tt === 'number') renderedInboxCount = tt;
+        if (typeof tu === 'number') renderedUnreadCount = tu;
+      } else {
+        console.log('[TopAppBar] Skipping server count update - recent user activity detected');
+      }
     } catch (e) {
       inboxMessagesTotal = undefined;
       inboxMessagesUnread = undefined;
