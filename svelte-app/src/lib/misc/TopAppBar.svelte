@@ -448,10 +448,27 @@ import { precomputeStatus } from '$lib/stores/precompute';
       } else {
         showSnackbar({ message: 'No threads needed processing', timeout: 4000 });
       }
-    } catch (e) {
-      const errorMsg = e instanceof Error ? e.message : String(e);
-      showSnackbar({ message: `College recruiting moderation failed: ${errorMsg}`, timeout: 5000 });
-    }
+           } catch (e) {
+             const errorMsg = e instanceof Error ? e.message : String(e);
+             
+             // Provide more helpful error messages for common Gemini issues
+             let displayMsg = errorMsg;
+             if (errorMsg.includes('Gemini error 404')) {
+               displayMsg = 'Gemini API key not found or invalid. Check your API key in Settings > API.';
+             } else if (errorMsg.includes('Gemini API key not set')) {
+               displayMsg = 'Gemini API key is required. Set it in Settings > API.';
+             } else if (errorMsg.includes('Gemini invalid API key')) {
+               displayMsg = 'Gemini API key is invalid. Check your API key in Settings > API.';
+             }
+             
+             showSnackbar({ 
+               message: `College recruiting moderation failed: ${displayMsg}`, 
+               timeout: 6000,
+               actions: {
+                 'Go to Settings': () => { location.href = '/settings'; }
+               }
+             });
+           }
   }
 
   async function doShowPrecomputeSummary() {

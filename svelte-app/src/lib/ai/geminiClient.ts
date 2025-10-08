@@ -97,6 +97,15 @@ async function sendDirect(item: QueueItem) {
   const s = get(settings);
   const apiKey = s.aiApiKey || '';
   const model = item.req.model || s.aiModel || 'gemini-1.5-flash';
+  
+  // Validate API key before making request
+  if (!apiKey || apiKey.trim() === '') {
+    const err = new Error('Gemini API key not set') as any;
+    err.status = 401;
+    err.headers = {};
+    throw err;
+  }
+  
   try {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
     const body = item.req.parts ? { contents: [{ role: 'user', parts: item.req.parts }] } : { contents: [{ parts: [{ text: item.req.prompt || '' }] }] };
@@ -104,7 +113,24 @@ async function sendDirect(item: QueueItem) {
     const text = await res.text().catch(() => '');
     if (!res.ok) {
       const ra = res.headers.get('retry-after');
-      const err = new Error(`Gemini error ${res.status}: ${text.slice(0, 200)}`) as any;
+      let errorMsg = `Gemini error ${res.status}`;
+      
+      // Handle specific Gemini error cases
+      if (res.status === 401) {
+        errorMsg = 'Gemini invalid API key';
+      } else if (res.status === 404) {
+        if (text.includes('API key')) {
+          errorMsg = 'Gemini API key not found or invalid';
+        } else {
+          errorMsg = 'Gemini API endpoint not found - check API key and model name';
+        }
+      } else if (res.status === 400) {
+        errorMsg = 'Gemini bad request - check prompt content';
+      } else if (res.status === 429) {
+        errorMsg = 'Gemini rate limit exceeded';
+      }
+      
+      const err = new Error(`${errorMsg}: ${text.slice(0, 200)}`) as any;
       err.status = res.status;
       err.headers = { 'retry-after': ra };
       throw err;

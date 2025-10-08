@@ -334,16 +334,30 @@ import BottomSheet from "$lib/containers/BottomSheet.svelte";
         timeout: 4000,
         closable: true 
       });
-    } catch (e) {
-      console.error('[Viewer] Recruiting diagnostic failed:', e);
-      showSnackbar({ 
-        message: `Diagnostic failed: ${e instanceof Error ? e.message : String(e)}`, 
-        timeout: 5000 
-      });
-      recruitingDiagResult = {
-        error: e instanceof Error ? e.message : String(e)
-      };
-    } finally {
+           } catch (e) {
+             console.error('[Viewer] Recruiting diagnostic failed:', e);
+             
+             // Provide more helpful error messages for common Gemini issues
+             let errorMessage = e instanceof Error ? e.message : String(e);
+             if (errorMessage.includes('Gemini error 404')) {
+               errorMessage = 'Gemini API key not found or invalid. Check your API key in Settings > API.';
+             } else if (errorMessage.includes('Gemini API key not set')) {
+               errorMessage = 'Gemini API key is required. Set it in Settings > API.';
+             } else if (errorMessage.includes('Gemini invalid API key')) {
+               errorMessage = 'Gemini API key is invalid. Check your API key in Settings > API.';
+             }
+             
+             showSnackbar({ 
+               message: `Diagnostic failed: ${errorMessage}`, 
+               timeout: 6000,
+               actions: {
+                 'Go to Settings': () => { location.href = '/settings'; }
+               }
+             });
+             recruitingDiagResult = {
+               error: errorMessage
+             };
+           } finally {
       runningRecruitingDiag = false;
     }
   }

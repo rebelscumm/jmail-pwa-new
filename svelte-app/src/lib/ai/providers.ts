@@ -629,6 +629,19 @@ async function callGemini(prompt: string, modelOverride?: string): Promise<AIRes
     const s = get(settings);
     const key = s.aiApiKey || '';
     const model = modelOverride || s.aiModel || 'gemini-1.5-flash';
+    
+    // Validate API key before making request
+    if (!key || key.trim() === '') {
+      throw new AIProviderError({ 
+        provider: 'gemini', 
+        message: 'Gemini API key not set', 
+        status: 401, 
+        headers: {}, 
+        body: 'API key is required', 
+        durationMs: 0 
+      });
+    }
+    
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
     const startedAt = performance.now?.() ?? Date.now();
     const res = await fetch(url, {
@@ -639,7 +652,31 @@ async function callGemini(prompt: string, modelOverride?: string): Promise<AIRes
     const durationMs = (performance.now?.() ?? Date.now()) - startedAt;
     const { json, text } = await readBodySafely(res);
     if (!res.ok) {
-      const message = res.status === 429 ? 'Gemini rate limit exceeded' : `Gemini error ${res.status}`;
+      let message = `Gemini error ${res.status}`;
+      
+      // Handle specific Gemini error cases
+      if (res.status === 401) {
+        message = 'Gemini invalid API key';
+      } else if (res.status === 404) {
+        const errorBody = json || text;
+        if (typeof errorBody === 'string' && errorBody.includes('API key')) {
+          message = 'Gemini API key not found or invalid';
+        } else if (typeof errorBody === 'object' && errorBody?.error?.message) {
+          message = `Gemini model not found: ${errorBody.error.message}`;
+        } else {
+          message = 'Gemini API endpoint not found - check API key and model name';
+        }
+      } else if (res.status === 429) {
+        message = 'Gemini rate limit exceeded';
+      } else if (res.status === 400) {
+        const errorBody = json || text;
+        if (typeof errorBody === 'object' && errorBody?.error?.message) {
+          message = `Gemini request error: ${errorBody.error.message}`;
+        } else {
+          message = 'Gemini bad request - check prompt content';
+        }
+      }
+      
       throw new AIProviderError({ provider: 'gemini', message, status: res.status, headers: {}, body: json ?? text, durationMs });
     }
     const data = json ?? {};
@@ -663,6 +700,19 @@ async function callGeminiWithParts(parts: any[], modelOverride?: string): Promis
     const s = get(settings);
     const key = s.aiApiKey || '';
     const model = modelOverride || s.aiModel || 'gemini-1.5-flash';
+    
+    // Validate API key before making request
+    if (!key || key.trim() === '') {
+      throw new AIProviderError({ 
+        provider: 'gemini', 
+        message: 'Gemini API key not set', 
+        status: 401, 
+        headers: {}, 
+        body: 'API key is required', 
+        durationMs: 0 
+      });
+    }
+    
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
     const startedAt = performance.now?.() ?? Date.now();
     const res = await fetch(url, {
@@ -673,7 +723,31 @@ async function callGeminiWithParts(parts: any[], modelOverride?: string): Promis
     const durationMs = (performance.now?.() ?? Date.now()) - startedAt;
     const { json, text } = await readBodySafely(res);
     if (!res.ok) {
-      const message = res.status === 429 ? 'Gemini rate limit exceeded' : `Gemini error ${res.status}`;
+      let message = `Gemini error ${res.status}`;
+      
+      // Handle specific Gemini error cases
+      if (res.status === 401) {
+        message = 'Gemini invalid API key';
+      } else if (res.status === 404) {
+        const errorBody = json || text;
+        if (typeof errorBody === 'string' && errorBody.includes('API key')) {
+          message = 'Gemini API key not found or invalid';
+        } else if (typeof errorBody === 'object' && errorBody?.error?.message) {
+          message = `Gemini model not found: ${errorBody.error.message}`;
+        } else {
+          message = 'Gemini API endpoint not found - check API key and model name';
+        }
+      } else if (res.status === 429) {
+        message = 'Gemini rate limit exceeded';
+      } else if (res.status === 400) {
+        const errorBody = json || text;
+        if (typeof errorBody === 'object' && errorBody?.error?.message) {
+          message = `Gemini request error: ${errorBody.error.message}`;
+        } else {
+          message = 'Gemini bad request - check prompt content';
+        }
+      }
+      
       throw new AIProviderError({ provider: 'gemini', message, status: res.status, headers: {}, body: json ?? text, durationMs });
     }
     const data = json ?? {};
