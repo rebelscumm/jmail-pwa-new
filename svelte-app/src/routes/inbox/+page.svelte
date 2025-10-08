@@ -2189,8 +2189,30 @@
       const dbById: Record<string, any> = {};
       for (const t of (allThreads || [])) dbById[t.threadId] = t;
       const current = $threadsStore || [];
-      // Update existing in-memory entries with DB authoritative fields
-      const merged = current.map((c) => dbById[c.threadId] ? { ...c, ...dbById[c.threadId] } : c);
+      
+      // Build a map of threads with pending operations to preserve their optimistic state
+      const hasPendingOps = new Set<string>();
+      try {
+        const allOps = await db.getAll('ops');
+        for (const op of allOps) {
+          if (op.scopeKey) hasPendingOps.add(op.scopeKey);
+        }
+      } catch (_) {}
+      
+      // Update existing in-memory entries with DB authoritative fields, but preserve optimistic changes
+      const merged = current.map((c) => {
+        const dbVersion = dbById[c.threadId];
+        if (!dbVersion) return c;
+        
+        // If this thread has pending operations, preserve its current labelIds
+        if (hasPendingOps.has(c.threadId)) {
+          return { ...dbVersion, labelIds: c.labelIds };
+        }
+        
+        // Otherwise, use DB version
+        return dbVersion;
+      });
+      
       // Append any DB-only threads after existing UI list (non-disruptive)
       for (const t of (allThreads || [])) {
         if (!merged.find((m) => m.threadId === t.threadId)) merged.push(t as any);
