@@ -64,22 +64,66 @@ export async function restoreBackup(key: string): Promise<void> {
   const snapshot = (await db.get('backups', key)) as BackupSnapshot | undefined;
   if (!snapshot) throw new Error('Backup not found');
   const { labels, threads, messages, snoozeQueue, ops, settings, auth } = snapshot.data;
-  const tx = db.transaction(['labels', 'threads', 'messages', 'snoozeQueue', 'ops', 'settings', 'auth'], 'readwrite');
-  await tx.objectStore('labels').clear();
-  await tx.objectStore('threads').clear();
-  await tx.objectStore('messages').clear();
-  await tx.objectStore('snoozeQueue').clear();
-  await tx.objectStore('ops').clear();
-  await tx.objectStore('settings').clear();
-  await tx.objectStore('auth').clear();
-  for (const l of labels as unknown[]) await tx.objectStore('labels').put(l as any);
-  for (const t of threads as unknown[]) await tx.objectStore('threads').put(t as any);
-  for (const m of messages as unknown[]) await tx.objectStore('messages').put(m as any);
-  for (const s of snoozeQueue as unknown[]) await tx.objectStore('snoozeQueue').put(s as any);
-  for (const o of ops as unknown[]) await tx.objectStore('ops').put(o as any);
-  for (const [k, v] of Object.entries(settings)) await tx.objectStore('settings').put(v as any, k);
-  for (const a of auth as unknown[]) await tx.objectStore('auth').put(a as any, (a as any).sub || 'me');
-  await tx.done;
+  
+  // Clear all stores first
+  await Promise.all([
+    db.clear('labels'),
+    db.clear('threads'),
+    db.clear('messages'),
+    db.clear('snoozeQueue'),
+    db.clear('ops'),
+    db.clear('settings'),
+    db.clear('auth')
+  ]);
+  
+  // Restore labels
+  const labelsTx = db.transaction('labels', 'readwrite');
+  for (const l of labels as unknown[]) {
+    labelsTx.store.put(l as any);
+  }
+  await labelsTx.done;
+  
+  // Restore threads
+  const threadsTx = db.transaction('threads', 'readwrite');
+  for (const t of threads as unknown[]) {
+    threadsTx.store.put(t as any);
+  }
+  await threadsTx.done;
+  
+  // Restore messages
+  const messagesTx = db.transaction('messages', 'readwrite');
+  for (const m of messages as unknown[]) {
+    messagesTx.store.put(m as any);
+  }
+  await messagesTx.done;
+  
+  // Restore snoozeQueue
+  const snoozeQueueTx = db.transaction('snoozeQueue', 'readwrite');
+  for (const s of snoozeQueue as unknown[]) {
+    snoozeQueueTx.store.put(s as any);
+  }
+  await snoozeQueueTx.done;
+  
+  // Restore ops
+  const opsTx = db.transaction('ops', 'readwrite');
+  for (const o of ops as unknown[]) {
+    opsTx.store.put(o as any);
+  }
+  await opsTx.done;
+  
+  // Restore settings
+  const settingsTx = db.transaction('settings', 'readwrite');
+  for (const [k, v] of Object.entries(settings)) {
+    settingsTx.store.put(v as any, k);
+  }
+  await settingsTx.done;
+  
+  // Restore auth
+  const authTx = db.transaction('auth', 'readwrite');
+  for (const a of auth as unknown[]) {
+    authTx.store.put(a as any, (a as any).sub || 'me');
+  }
+  await authTx.done;
 }
 
 export async function maybeCreateWeeklySnapshot(): Promise<void> {
