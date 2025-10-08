@@ -69,7 +69,7 @@
     }
   }
 
-  let snackbar: Required<SnackbarIn> | undefined = $state();
+  let snackbar: SnackbarIn | undefined = $state();
   let timeoutId: number;
   let settingsPopupVisible = $state(false);
   
@@ -105,7 +105,7 @@
         <div class="message-container">
           <p class="m3-font-body-medium message">{snackbar.message}</p>
         </div>
-        {#each Object.entries(snackbar.actions) as [key, action]}
+        {#each Object.entries(snackbar.actions ?? {}) as [key, action]}
           <button
             type="button"
             class="action m3-font-label-large"
@@ -167,9 +167,9 @@
     title={snackbar.settingsConfig.title}
     settingKeys={snackbar.settingsConfig.settingKeys}
     settings={snackbar.settingsConfig.currentSettings}
-    onupdate={handleSettingUpdate}
-    onclose={() => settingsPopupVisible = false}
-    onopenFullSettings={handleOpenFullSettings}
+    on:update={handleSettingUpdate}
+    on:close={() => settingsPopupVisible = false}
+    on:openFullSettings={handleOpenFullSettings}
   />
 {/if}
 
@@ -212,12 +212,12 @@
   }
 
   .action {
-    color: var(--m3-scheme-inverse-primary);
+    color: rgb(var(--m3-scheme-primary));
     padding: 0 0.5rem;
   }
   .actions { display:flex; align-items:center; gap:0.25rem; }
   .close {
-    color: var(--m3-scheme-inverse-on-surface);
+    color: rgb(var(--m3-scheme-on-surface));
     padding: 0 0.5rem;
     margin-right: 0;
     display: inline-flex;
