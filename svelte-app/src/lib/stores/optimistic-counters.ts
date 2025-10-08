@@ -18,6 +18,71 @@ export const optimisticCounters = writable<OptimisticCounters>({
 });
 
 /**
+ * Recalculate optimistic counters based on ALL pending operations
+ * This ensures counters always reflect the true pending state
+ */
+export async function recalculateOptimisticCounters() {
+  try {
+    const { getDB } = await import('$lib/db/indexeddb');
+    const db = await getDB();
+    
+    // Get all pending operations
+    const allOps = await db.getAll('ops');
+    
+    // Track which threads have pending label changes
+    const pendingChanges = new Map<string, { addLabels: Set<string>; removeLabels: Set<string> }>();
+    
+    for (const op of allOps) {
+      if (op.op?.type === 'batchModify') {
+        const threadId = op.scopeKey;
+        if (!pendingChanges.has(threadId)) {
+          pendingChanges.set(threadId, { addLabels: new Set(), removeLabels: new Set() });
+        }
+        const change = pendingChanges.get(threadId)!;
+        for (const label of op.op.addLabelIds || []) {
+          change.addLabels.add(label);
+        }
+        for (const label of op.op.removeLabelIds || []) {
+          change.removeLabels.add(label);
+        }
+      }
+    }
+    
+    // Calculate the net impact on counters
+    let inboxDelta = 0;
+    let unreadDelta = 0;
+    
+    for (const [threadId, change] of pendingChanges.entries()) {
+      const thread = await db.get('threads', threadId);
+      if (!thread) continue;
+      
+      const currentLabels = new Set(thread.labelIds || []);
+      const wasInInbox = currentLabels.has('INBOX');
+      const wasUnread = currentLabels.has('UNREAD');
+      
+      // Apply pending changes
+      const newLabels = new Set(currentLabels);
+      for (const label of change.removeLabels) {
+        newLabels.delete(label);
+      }
+      for (const label of change.addLabels) {
+        newLabels.add(label);
+      }
+      
+      const willBeInInbox = newLabels.has('INBOX');
+      const willBeUnread = newLabels.has('UNREAD');
+      
+      inboxDelta += (willBeInInbox ? 1 : 0) - (wasInInbox ? 1 : 0);
+      unreadDelta += (willBeUnread ? 1 : 0) - (wasUnread ? 1 : 0);
+    }
+    
+    optimisticCounters.set({ inboxDelta, unreadDelta, timestamp: Date.now() });
+  } catch (e) {
+    console.error('[OptimisticCounters] Failed to recalculate:', e);
+  }
+}
+
+/**
  * Apply an immediate adjustment to counters
  */
 export function adjustOptimisticCounters(inboxDelta: number, unreadDelta: number) {
@@ -26,17 +91,6 @@ export function adjustOptimisticCounters(inboxDelta: number, unreadDelta: number
     unreadDelta: counters.unreadDelta + unreadDelta,
     timestamp: Date.now()
   }));
-  
-  // Auto-clear after a short delay to prevent stale adjustments
-  setTimeout(() => {
-    optimisticCounters.update(counters => {
-      // Only clear if this is the same timestamp (no newer adjustments)
-      if (Date.now() - counters.timestamp > 2000) {
-        return { inboxDelta: 0, unreadDelta: 0, timestamp: Date.now() };
-      }
-      return counters;
-    });
-  }, 2500);
 }
 
 /**
@@ -47,22 +101,39 @@ export function resetOptimisticCounters() {
 }
 
 /**
- * Wrapper for threadsStore.set that automatically resets optimistic counters
+ * Wrapper for threadsStore.set that preserves optimistic counters if there are pending operations
  * Use this when updating threads from server/external sources
  */
-export function setThreadsWithReset(threads: any[]) {
-  resetOptimisticCounters();
+export async function setThreadsWithReset(threads: any[]) {
+  try {
+    const { getDB } = await import('$lib/db/indexeddb');
+    const db = await getDB();
+    const pendingOps = await db.getAll('ops');
+    
+    // If there are pending operations, recalculate counters instead of resetting
+    if (pendingOps && pendingOps.length > 0) {
+      await recalculateOptimisticCounters();
+    } else {
+      resetOptimisticCounters();
+    }
+  } catch (e) {
+    // If we can't check pending ops, just reset to be safe
+    resetOptimisticCounters();
+  }
   threadsStore.set(threads);
 }
 
-// Monitor thread store updates to auto-reset optimistic counters
-// This catches any direct threadsStore.set() calls that bypass the wrapper
+// Monitor thread store updates to auto-reset optimistic counters ONLY when appropriate
 let lastThreadsLength = 0;
+let isSettingThreads = false;
 threadsStore.subscribe(threads => {
+  // Avoid resetting if we're in the middle of a setThreadsWithReset call
+  if (isSettingThreads) return;
+  
   const newLength = threads?.length || 0;
-  // If threads changed significantly (not just a single thread update), reset counters
+  // If threads changed significantly (not just a single thread update), recalculate counters
   if (Math.abs(newLength - lastThreadsLength) > 1) {
-    resetOptimisticCounters();
+    void recalculateOptimisticCounters();
   }
   lastThreadsLength = newLength;
 });
