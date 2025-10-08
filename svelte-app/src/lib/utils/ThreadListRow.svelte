@@ -31,6 +31,8 @@
   import RecipientBadges from '$lib/utils/RecipientBadges.svelte';
   import { messages as messagesStore } from '$lib/stores/threads';
   import { openGmailPopup } from '$lib/utils/gmail-links';
+  import { filters } from '$lib/stores/filters';
+  import { threadMatchesFilter } from '$lib/stores/filters';
 
   // Lazy import to avoid circular or route coupling; fallback no-op if route not mounted
   async function scheduleReload() {
@@ -48,6 +50,12 @@
   let { thread, selected = false, selectionActive = false, onToggleSelected = undefined }: { thread: import('$lib/types').GmailThread; selected?: boolean; selectionActive?: boolean; onToggleSelected?: ((next: boolean, ev: Event) => void) | undefined } = $props();
 
   const unread = $derived((thread.labelIds || []).includes('UNREAD'));
+  
+  // Check if this thread matches the active filter
+  const matchesActiveFilter = $derived(() => {
+    if (!$filters.active) return true; // No active filter means all threads are visible
+    return threadMatchesFilter(thread, $messagesStore || {}, $filters.active);
+  });
 
   function extractSender(raw?: string): string {
     try {
@@ -1018,6 +1026,7 @@
   </label>
 {/snippet}
 
+{#if matchesActiveFilter}
 <div class="row-container" bind:this={rowEl} style={`height:${collapsing ? '0px' : (rowHeightPx != null ? rowHeightPx + 'px' : 'auto')}; transition: ${collapsing ? 'height 160ms cubic-bezier(0,0,0.2,1), opacity 160ms cubic-bezier(0,0,0.2,1)' : 'none'}; opacity:${collapsing ? 0 : 1};`}>
 <div class="swipe-wrapper" class:menu-open={snoozeMenuOpen}
      onpointerdown={onPointerDown}
@@ -1056,6 +1065,7 @@
   </div>
 </div>
 </div>
+{/if}
 
 <style>
   .row-container { will-change: height, opacity; }
