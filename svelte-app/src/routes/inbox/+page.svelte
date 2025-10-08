@@ -278,11 +278,33 @@
             try {
               const existing = await txThreads.store.get(threadId) as any;
               if (!existing) continue;
-              // Apply label changes present in history entry
+              // Apply label changes present in history entry, but preserve optimistic updates
               if (h.labelsAdded || h.labelsRemoved) {
                 const labels = Array.isArray(existing.labelIds) ? existing.labelIds.slice() : [];
-                for (const la of (h.labelsAdded || [])) { if (!labels.includes(la)) labels.push(la); }
-                for (const lr of (h.labelsRemoved || [])) { const idx = labels.indexOf(lr); if (idx >= 0) labels.splice(idx, 1); }
+                
+                // Check if this thread was optimistically modified (removed from INBOX)
+                const localHasInbox = labels.includes('INBOX');
+                const wouldAddInbox = (h.labelsAdded || []).includes('INBOX');
+                const wouldRemoveInbox = (h.labelsRemoved || []).includes('INBOX');
+                
+                // If locally removed from INBOX but server wants to add it back, preserve the optimistic change
+                const wasOptimisticallyModified = !localHasInbox && wouldAddInbox;
+                
+                if (!wasOptimisticallyModified) {
+                  // Apply server changes normally
+                  for (const la of (h.labelsAdded || [])) { if (!labels.includes(la)) labels.push(la); }
+                  for (const lr of (h.labelsRemoved || [])) { const idx = labels.indexOf(lr); if (idx >= 0) labels.splice(idx, 1); }
+                } else {
+                  // Apply server changes but preserve INBOX removal
+                  for (const la of (h.labelsAdded || [])) { 
+                    if (!labels.includes(la) && la !== 'INBOX') labels.push(la); 
+                  }
+                  for (const lr of (h.labelsRemoved || [])) { 
+                    const idx = labels.indexOf(lr); 
+                    if (idx >= 0) labels.splice(idx, 1); 
+                  }
+                }
+                
                 const next = { ...existing, labelIds: labels } as any;
                 await txThreads.store.put(next);
               }
