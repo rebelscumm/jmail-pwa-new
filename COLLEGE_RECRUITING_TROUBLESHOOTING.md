@@ -25,7 +25,7 @@ If the diagnostic shows a match but the label wasn't applied automatically:
 1. **Use the "Apply Label" button**: When you run the diagnostic and it shows a match, there will be a red "Apply Label" button in the diagnostic modal
 2. **Click "Apply Label"**: This will manually trigger the labeling process
 3. **Check the result**: A snackbar will show success/failure message
-4. **Modal closes and page refreshes**: The email should now be labeled and removed from inbox
+4. **Navigate to inbox**: The modal closes and you'll be redirected to the inbox page since the email is no longer in the inbox
 
 ### Step 4: Check Gmail API Permissions
 The labeling process requires Gmail API permissions. Check:
@@ -81,6 +81,18 @@ The automatic moderation only runs on threads that meet certain criteria:
 3. **Click "Apply Label"** if available
 4. **Check diagnostics page** for moderation results
 5. **Verify in Gmail** that the email has the `college_recruiting` label and is removed from inbox
+
+### Issue: Diagnostic Works But Precompute Doesn't Process
+
+**Problem**: Individual email diagnostic shows "MATCH" but precompute doesn't find and move emails automatically.
+
+**Root Cause**: When you run the diagnostic on an email, it creates moderation data in the local database. If the email was already tested but not labeled, precompute sees it as "already processed" and skips it.
+
+**Solution**: 
+1. **Check existing moderation data**: Look at the "Previous Result" section in the diagnostic modal
+2. **Clear moderation data**: If it shows status "match" but no action taken, click "Clear Moderation Data" button
+3. **Run precompute**: Use the overflow menu "Run College Recruiting Filter" to process all eligible emails
+4. **Check logs**: Go to `/diagnostics` page and look at precompute logs for detailed processing information
 
 ### Manual Override
 

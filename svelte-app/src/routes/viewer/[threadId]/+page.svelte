@@ -1867,8 +1867,12 @@ onMount(() => {
                   closable: true 
                 });
                 recruitingDiagOpen = false;
-                // Refresh the page to show updated labels
-                setTimeout(() => location.reload(), 1000);
+                // Navigate back to inbox since thread is no longer there
+                setTimeout(() => {
+                  if (typeof window !== 'undefined') {
+                    window.location.href = '/inbox';
+                  }
+                }, 1000);
               } else {
                 showSnackbar({ 
                   message: `Failed to apply label: ${moderationResult.message}`, 
@@ -1886,6 +1890,36 @@ onMount(() => {
           }}>
             <Icon icon={iconSchool} />
             Apply Label
+          </Button>
+        {/if}
+        {#if recruitingDiagResult.existingModeration && recruitingDiagResult.existingModeration.status === 'match' && recruitingDiagResult.existingModeration.actionTaken !== 'label_enqueued'}
+          <Button variant="outlined" onclick={async () => {
+            try {
+              const { clearModerationDataForThread } = await import('$lib/ai/precompute');
+              const result = await clearModerationDataForThread(threadId);
+              if (result.success) {
+                showSnackbar({ 
+                  message: result.message, 
+                  timeout: 4000,
+                  closable: true 
+                });
+                recruitingDiagOpen = false;
+              } else {
+                showSnackbar({ 
+                  message: `Failed to clear moderation data: ${result.message}`, 
+                  timeout: 5000,
+                  closable: true 
+                });
+              }
+            } catch (e) {
+              showSnackbar({ 
+                message: `Error clearing moderation data: ${e instanceof Error ? e.message : String(e)}`, 
+                timeout: 5000,
+                closable: true 
+              });
+            }
+          }}>
+            Clear Moderation Data
           </Button>
         {/if}
         <Button variant="text" onclick={() => {

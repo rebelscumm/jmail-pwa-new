@@ -95,7 +95,7 @@ function shouldRunRecruitingModeration(thread: GmailThread, prepared: { bodyText
     }
     if (existing.status === 'match') {
       const shouldRetry = existing.actionTaken !== 'label_enqueued';
-      pushLog('debug', '[Precompute] Thread match, retry:', shouldRetry, thread.threadId, 'actionTaken:', existing.actionTaken);
+      pushLog('debug', '[Precompute] Thread match, retry:', shouldRetry, thread.threadId, 'actionTaken:', existing.actionTaken, 'existing:', JSON.stringify(existing));
       return shouldRetry;
     }
     pushLog('debug', '[Precompute] Thread not eligible for moderation:', thread.threadId);
@@ -870,6 +870,7 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
 
     // Run college recruiting moderation for eligible threads
     const moderationTargets = prepared.filter((p) => p.moderationEligible);
+    pushLog('debug', '[Precompute] Moderation eligibility check: total prepared:', prepared.length, 'eligible:', moderationTargets.length);
     if (moderationTargets.length) {
       pushLog('debug', '[Precompute] Running college recruiting moderation for', moderationTargets.length, 'threads');
       precomputeStatus.updateProgress(
@@ -1149,6 +1150,47 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
 export async function precomputeNow(limit = 25): Promise<{ processed: number; total: number }> {
   const result = await tickPrecompute(limit);
   return result;
+}
+
+/**
+ * Clear moderation data for threads that were tested but not labeled
+ * This allows precompute to reprocess them
+ */
+export async function clearModerationDataForThread(threadId: string): Promise<{ success: boolean; message: string }> {
+  try {
+    const db = await getDB();
+    const thread = await db.get('threads', threadId);
+    
+    if (!thread) {
+      return { success: false, message: 'Thread not found in local database' };
+    }
+    
+    const existing = thread.autoModeration?.[MODERATION_RULE_KEY];
+    if (!existing) {
+      return { success: false, message: 'No moderation data found for this thread' };
+    }
+    
+    // Only clear if it was a match but no action was taken
+    if (existing.status === 'match' && existing.actionTaken !== 'label_enqueued') {
+      const updatedModeration = { ...thread.autoModeration };
+      delete updatedModeration[MODERATION_RULE_KEY];
+      
+      const updatedThread = {
+        ...thread,
+        autoModeration: updatedModeration
+      };
+      
+      await db.put('threads', updatedThread);
+      return { success: true, message: 'Moderation data cleared - thread will be reprocessed by precompute' };
+    } else {
+      return { success: false, message: `Cannot clear moderation data - status: ${existing.status}, actionTaken: ${existing.actionTaken}` };
+    }
+  } catch (e) {
+    return { 
+      success: false, 
+      message: `Error clearing moderation data: ${e instanceof Error ? e.message : String(e)}` 
+    };
+  }
 }
 
 /**
