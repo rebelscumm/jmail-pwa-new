@@ -105,11 +105,14 @@ export function resetOptimisticCounters() {
  * Use this when updating threads from server/external sources
  */
 export async function setThreadsWithReset(threads: any[]) {
+  // Set flag to prevent automatic subscription from interfering
+  isSettingThreads = true;
+
   try {
     const { getDB } = await import('$lib/db/indexeddb');
     const db = await getDB();
     const pendingOps = await db.getAll('ops');
-    
+
     // If there are pending operations, recalculate counters instead of resetting
     if (pendingOps && pendingOps.length > 0) {
       await recalculateOptimisticCounters();
@@ -120,20 +123,32 @@ export async function setThreadsWithReset(threads: any[]) {
     // If we can't check pending ops, just reset to be safe
     resetOptimisticCounters();
   }
+
   threadsStore.set(threads);
+
+  // Clear flag after a short delay to allow store update to complete
+  setTimeout(() => { isSettingThreads = false; }, 0);
 }
 
 // Monitor thread store updates to auto-reset optimistic counters ONLY when appropriate
 let lastThreadsLength = 0;
+let lastThreadsUnreadCount = 0;
 let isSettingThreads = false;
+
 threadsStore.subscribe(threads => {
   // Avoid resetting if we're in the middle of a setThreadsWithReset call
   if (isSettingThreads) return;
-  
+
   const newLength = threads?.length || 0;
-  // If threads changed significantly (not just a single thread update), recalculate counters
-  if (Math.abs(newLength - lastThreadsLength) > 1) {
+  const newUnreadCount = threads?.filter((t: any) =>
+    Array.isArray(t.labelIds) && t.labelIds.includes('INBOX') && t.labelIds.includes('UNREAD')
+  ).length || 0;
+
+  // If threads changed significantly or unread count changed, recalculate counters
+  if (Math.abs(newLength - lastThreadsLength) > 1 || Math.abs(newUnreadCount - lastThreadsUnreadCount) > 0) {
     void recalculateOptimisticCounters();
   }
+
   lastThreadsLength = newLength;
+  lastThreadsUnreadCount = newUnreadCount;
 });

@@ -80,7 +80,12 @@ export async function updateLocalThreadAndMessages(
 
   // Update stores
   const currentThreads = get(threadsStore);
-  threadsStore.set(currentThreads.map((t) => (t.threadId === threadId ? newThread : t)));
+  const updatedThreads = currentThreads.map((t) => (t.threadId === threadId ? newThread : t));
+
+  // Use setThreadsWithReset to properly handle optimistic counters
+  const { setThreadsWithReset } = await import('$lib/stores/optimistic-counters');
+  setThreadsWithReset(updatedThreads);
+
   const currentMessages = get(messagesStore);
   messagesStore.set({ ...currentMessages, ...updatedMessages });
 }
@@ -381,7 +386,12 @@ export async function applyRemoteLabels(
   await db.put('threads', newThread);
   // Update stores
   const currentThreads = get(threadsStore);
-  threadsStore.set(currentThreads.map((t) => (t.threadId === threadId ? newThread : t)));
+  const updatedThreads = currentThreads.map((t) => (t.threadId === threadId ? newThread : t));
+
+  // Use setThreadsWithReset to properly handle optimistic counters
+  const { setThreadsWithReset } = await import('$lib/stores/optimistic-counters');
+  setThreadsWithReset(updatedThreads);
+
   const currentMessages = get(messagesStore);
   messagesStore.set({ ...currentMessages, ...updatedMessages });
 }
