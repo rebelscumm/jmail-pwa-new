@@ -2101,9 +2101,30 @@
       if (current.length === 0) {
         threadsStore.set(cachedThreads);
       } else {
+        // Build a map of threads with pending operations to preserve their optimistic state
+        const hasPendingOps = new Set<string>();
+        try {
+          const allOps = await db.getAll('ops');
+          for (const op of allOps) {
+            if (op.scopeKey) hasPendingOps.add(op.scopeKey);
+          }
+        } catch (_) {}
+        
         const merged = [...current, ...cachedThreads].reduce((acc, t) => {
           const idx = acc.findIndex((candidate: any) => candidate.threadId === t.threadId);
-          if (idx >= 0) acc[idx] = t; else acc.push(t);
+          if (idx >= 0) {
+            const existingThread = acc[idx];
+            // If this thread has pending operations, preserve its current state (optimistic updates)
+            if (hasPendingOps.has(t.threadId)) {
+              // Keep the existing thread with optimistic changes, but update non-label fields from DB
+              acc[idx] = { ...t, labelIds: existingThread.labelIds };
+            } else {
+              // No pending ops, safe to use DB version
+              acc[idx] = t;
+            }
+          } else {
+            acc.push(t);
+          }
           return acc;
         }, [] as typeof current);
         const { setThreadsWithReset } = await import('$lib/stores/optimistic-counters');
