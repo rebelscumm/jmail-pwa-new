@@ -621,6 +621,7 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
       }
       await txSan.done;
     } catch (e) { pushLog('warn', '[Precompute] Failed to sanitize pending markers', e); }
+    console.log('[Precompute] Total threads in DB:', allThreads.length);
     pushLog('debug', '[Precompute] Total threads in DB:', allThreads.length);
     
     const candidates = allThreads.filter((t) => {
@@ -645,17 +646,21 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
       
       return true;
     });
+    console.log('[Precompute] Inbox candidates:', candidates.length);
     pushLog('debug', '[Precompute] Inbox candidates:', candidates.length);
     
     if (!candidates.length) {
+      console.log('[Precompute] No inbox candidates found - returning early');
       pushLog('debug', '[Precompute] No inbox candidates found');
       // Check if this is because all threads are filtered out
       const inboxThreads = allThreads.filter(t => t.labelIds?.includes('INBOX'));
       const spamTrashThreads = allThreads.filter(t => t.labelIds?.includes('SPAM') || t.labelIds?.includes('TRASH'));
       
       if (inboxThreads.length === 0) {
+        console.log('[Precompute] No threads with INBOX label found');
         pushLog('debug', '[Precompute] No threads with INBOX label found');
       } else if (inboxThreads.length > 0 && candidates.length === 0) {
+        console.log('[Precompute] All inbox threads are filtered out (SPAM/TRASH)');
         pushLog('debug', '[Precompute] All inbox threads are filtered out (SPAM/TRASH)');
       }
       
@@ -697,7 +702,9 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
       });
     }
     
+    console.log('[Precompute] Pending items check: pending.length=', pending.length, 'candidates.length=', candidates.length);
     if (!pending.length) {
+      console.log('[Precompute] No pending items found - returning early');
       pushLog('debug', '[Precompute] No pending items found');
       // Check if this is because all items already have summaries
       const allHaveSummaries = candidates.every(t => {
@@ -708,8 +715,10 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
       });
       
       if (allHaveSummaries) {
+        console.log('[Precompute] All items already have up-to-date summaries and subjects');
         pushLog('debug', '[Precompute] All items already have up-to-date summaries and subjects');
       } else {
+        console.log('[Precompute] Items exist but none need processing (possible version mismatch)');
         pushLog('debug', '[Precompute] Items exist but none need processing (possible version mismatch)');
       }
       
