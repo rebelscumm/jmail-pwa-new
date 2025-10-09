@@ -703,8 +703,26 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
     }
     
     console.log('[Precompute] Pending items check: pending.length=', pending.length, 'candidates.length=', candidates.length);
-    if (!pending.length) {
-      console.log('[Precompute] No pending items found - returning early');
+    
+    // Check if we need to run moderation even if no pending summary work
+    const needsModerationCheck = candidates.some(t => {
+      const labels = t.labelIds || [];
+      if (!labels.includes('INBOX')) return false;
+      if (labels.includes('TRASH') || labels.includes('SPAM')) return false;
+      const hasCollegeLabel = labels.some(l => l.includes('college_recruiting'));
+      if (hasCollegeLabel) return false;
+      const existing = t.autoModeration?.[MODERATION_RULE_KEY];
+      if (!existing) return true;
+      if (existing.status === 'pending' || existing.status === 'error' || existing.status === 'unknown') return true;
+      if (existing.promptVersion !== MODERATION_PROMPT_VERSION) return true;
+      if (existing.status === 'match' && existing.actionTaken !== 'label_enqueued') return true;
+      return false;
+    });
+    
+    console.log('[Precompute] Needs moderation check:', needsModerationCheck);
+    
+    if (!pending.length && !needsModerationCheck) {
+      console.log('[Precompute] No pending items or moderation needed - returning early');
       pushLog('debug', '[Precompute] No pending items found');
       // Check if this is because all items already have summaries
       const allHaveSummaries = candidates.every(t => {
@@ -724,6 +742,12 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
       
       precomputeStatus.complete();
       return { processed: 0, total: candidates.length };
+    }
+    
+    // If no pending but needs moderation, process all candidates for moderation only
+    if (!pending.length && needsModerationCheck) {
+      console.log('[Precompute] No pending summaries, but running moderation check on', Math.min(limit, candidates.length), 'candidates');
+      pending.push(...candidates.slice(0, limit));
     }
 
     const batch = pending.slice(0, Math.max(1, limit));
