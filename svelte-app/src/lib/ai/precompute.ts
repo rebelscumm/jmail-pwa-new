@@ -498,8 +498,16 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T)
 
 export async function tickPrecompute(limit = 10): Promise<{ processed: number; total: number }> {
   try {
+    console.log('[Precompute] ===== STARTING PRECOMPUTE ===== limit:', limit);
     const s = get(settings);
     // No time-based auto-run gating: allow precompute to run whenever requested.
+    console.log('[Precompute] Settings:', { 
+      precomputeSummaries: s?.precomputeSummaries, 
+      aiProvider: s?.aiProvider, 
+      aiApiKey: s?.aiApiKey ? '***' : 'missing',
+      aiModel: s?.aiModel,
+      aiSummaryModel: s?.aiSummaryModel
+    });
     pushLog('debug', '[Precompute] Settings:', { 
       precomputeSummaries: s?.precomputeSummaries, 
       aiProvider: s?.aiProvider, 
@@ -710,12 +718,14 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
     }
 
     const batch = pending.slice(0, Math.max(1, limit));
+    console.log('[Precompute] Processing batch of:', batch.length, 'threads');
     pushLog('debug', '[Precompute] Processing batch of:', batch.length);
     
     // Update progress - preparing texts
     precomputeStatus.updateProgress(0, 'Preparing email content...');
 
     // Prepare texts
+    console.log('[Precompute] Preparing thread content...');
     let prepared = await mapWithConcurrency(batch, 3, async (t) => {
       const lastId = getLastMessageId(t);
       let bodyText: string | undefined;
@@ -870,8 +880,25 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
 
     // Run college recruiting moderation for eligible threads
     const moderationTargets = prepared.filter((p) => p.moderationEligible);
+    console.log('[Precompute] Moderation eligibility check: total prepared:', prepared.length, 'eligible:', moderationTargets.length);
     pushLog('debug', '[Precompute] Moderation eligibility check: total prepared:', prepared.length, 'eligible:', moderationTargets.length);
+    
+    if (moderationTargets.length === 0 && prepared.length > 0) {
+      console.log('[Precompute] No eligible threads for moderation. Sample thread check:');
+      const sample = prepared[0];
+      if (sample) {
+        console.log('  - Thread ID:', sample.thread.threadId);
+        console.log('  - Subject:', sample.subject);
+        console.log('  - Has bodyText:', !!sample.bodyText);
+        console.log('  - Has bodyHtml:', !!sample.bodyHtml);
+        console.log('  - Labels:', sample.thread.labelIds);
+        console.log('  - moderationEligible:', sample.moderationEligible);
+        console.log('  - Existing moderation:', sample.thread.autoModeration?.[MODERATION_RULE_KEY]);
+      }
+    }
+    
     if (moderationTargets.length) {
+      console.log('[Precompute] Running college recruiting moderation for', moderationTargets.length, 'threads');
       pushLog('debug', '[Precompute] Running college recruiting moderation for', moderationTargets.length, 'threads');
       precomputeStatus.updateProgress(
         summaryTargets.length + wantsSubject.length,
@@ -880,6 +907,7 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
 
       await mapWithConcurrency(moderationTargets, 2, async (p) => {
         try {
+          console.log('[Precompute] Calling aiDetectCollegeRecruiting for', p.thread.threadId);
           const result = await aiDetectCollegeRecruiting(p.subject, p.bodyText, p.bodyHtml, p.thread.lastMsgMeta?.from);
           p.moderationResult = {
             status:
@@ -887,8 +915,10 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
               result.verdict === 'not_match' ? 'not_match' : 'unknown',
             raw: result.raw
           };
+          console.log('[Precompute] Moderation verdict for', p.thread.threadId, ':', result.verdict);
           pushLog('debug', '[Precompute] Moderation verdict for', p.thread.threadId, ':', result.verdict);
         } catch (e) {
+          console.error('[Precompute] Moderation failed for', p.thread.threadId, e);
           p.moderationResult = { status: 'error', error: e instanceof Error ? e.message : String(e) };
           pushLog('warn', '[Precompute] Moderation failed for', p.thread.threadId, e);
         }

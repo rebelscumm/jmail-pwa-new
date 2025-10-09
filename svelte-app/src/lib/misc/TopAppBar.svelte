@@ -434,8 +434,10 @@ import { precomputeStatus } from '$lib/stores/precompute';
       }
       
       // Run precompute which includes moderation
+      console.log('[TopAppBar] Starting college recruiting filter - calling precomputeNow(50)');
       const { precomputeNow } = await import('$lib/ai/precompute');
       const result: any = await precomputeNow(50); // Process more threads
+      console.log('[TopAppBar] Precompute completed:', result);
       
       if (result && result.processed > 0) {
         showSnackbar({ 
