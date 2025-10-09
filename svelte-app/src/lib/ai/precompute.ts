@@ -51,7 +51,7 @@ async function ensureCollegeRecruitingLabel(): Promise<string | null> {
   }
 }
 
-function shouldRunRecruitingModeration(thread: GmailThread, prepared: { bodyText?: string; bodyHtml?: string }): boolean {
+function shouldRunRecruitingModeration(thread: GmailThread, prepared: { bodyText?: string; bodyHtml?: string; subject?: string; summary?: string }): boolean {
   try {
     const labels = thread.labelIds || [];
     if (!labels.includes('INBOX')) {
@@ -62,8 +62,13 @@ function shouldRunRecruitingModeration(thread: GmailThread, prepared: { bodyText
       pushLog('debug', '[Precompute] Thread in TRASH/SPAM:', thread.threadId);
       return false;
     }
-    if (!prepared.bodyText && !prepared.bodyHtml) {
-      pushLog('debug', '[Precompute] Thread has no body content:', thread.threadId);
+    
+    // Check if we have at least subject, summary, or body content (AI can work with any of these)
+    const hasSubject = prepared.subject && prepared.subject.trim().length > 0;
+    const hasSummary = prepared.summary && prepared.summary.trim().length > 0;
+    const hasBody = !!(prepared.bodyText || prepared.bodyHtml);
+    if (!hasSubject && !hasSummary && !hasBody) {
+      pushLog('debug', '[Precompute] Thread has no subject, summary, or body content:', thread.threadId);
       return false;
     }
     
@@ -772,8 +777,11 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
       const attText = (attachments || []).map((a) => `${a.filename || a.mimeType || 'attachment'}\n${(a.textContent || '').slice(0, 500)}`).join('\n\n');
       const text = `${subject}\n\n${bodyText || ''}${!bodyText && bodyHtml ? bodyHtml : ''}${attText ? `\n\n${attText}` : ''}`.trim();
       const bodyHash = simpleHash(text || subject || t.threadId);
-      const moderationEligible = shouldRunRecruitingModeration(t, { bodyText, bodyHtml });
-      return { thread: t, subject, bodyText, bodyHtml, attachments, text, bodyHash, moderationEligible, moderationResult: null as null | {
+      
+      // For moderation, prefer using existing AI summary if available, otherwise use body or subject
+      const summary = t.summary;
+      const moderationEligible = shouldRunRecruitingModeration(t, { bodyText, bodyHtml, subject, summary });
+      return { thread: t, subject, bodyText, bodyHtml, summary, attachments, text, bodyHash, moderationEligible, moderationResult: null as null | {
         status: 'match' | 'not_match' | 'unknown' | 'error';
         raw?: string;
         error?: unknown;
@@ -922,6 +930,7 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
       if (sample) {
         console.log('  - Thread ID:', sample.thread.threadId);
         console.log('  - Subject:', sample.subject);
+        console.log('  - Has summary:', !!sample.summary);
         console.log('  - Has bodyText:', !!sample.bodyText);
         console.log('  - Has bodyHtml:', !!sample.bodyHtml);
         console.log('  - Labels:', sample.thread.labelIds);
@@ -940,8 +949,13 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
 
       await mapWithConcurrency(moderationTargets, 2, async (p) => {
         try {
-          console.log('[Precompute] Calling aiDetectCollegeRecruiting for', p.thread.threadId);
-          const result = await aiDetectCollegeRecruiting(p.subject, p.bodyText, p.bodyHtml, p.thread.lastMsgMeta?.from);
+          console.log('[Precompute] Calling aiDetectCollegeRecruiting for', p.thread.threadId, 
+            'hasSummary:', !!p.summary, 'hasBody:', !!(p.bodyText || p.bodyHtml));
+          
+          // Prefer using existing AI summary if available, fall back to body
+          const contentForAI = p.summary || p.bodyText || p.bodyHtml;
+          const result = await aiDetectCollegeRecruiting(p.subject, contentForAI, undefined, p.thread.lastMsgMeta?.from);
+          
           p.moderationResult = {
             status:
               result.verdict === 'match' ? 'match' :
