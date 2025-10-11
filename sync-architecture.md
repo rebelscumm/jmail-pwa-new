@@ -102,14 +102,19 @@ This prevents showing stale server counts due to eventual consistency delays. On
   - Journal time window: 
     - **Phase 1 (adding INBOX)**: 2 minutes - allows new emails to appear faster
     - **Phase 2 (removing INBOX)**: 5 minutes - more conservative about removing
+    - **Phase 3 (refreshing ALL labels)**: 5 minutes - updates all labels for INBOX threads to fix stale label issues
   - If EITHER indicates a user action, that thread is skipped during reconciliation
 - **Before Sync**: Attempts to flush pending operations, but preserves them if they fail
-- **Action**: Full reconciliation, adds missing, removes stale (only for threads with no pending/recent actions)
-- **Result**: Nuclear option for complete accuracy
+- **Action**: Full reconciliation in three phases:
+  1. **Phase 1**: Adds missing INBOX label to threads that should have it
+  2. **Phase 2**: Removes INBOX from threads that shouldn't have it  
+  3. **Phase 3**: Refreshes ALL labels for existing INBOX threads from Gmail (fixes stale non-INBOX labels)
+- **Result**: Nuclear option for complete accuracy across all labels
 - **Important**: 
   - Optimistic counters are only reset if all pending ops successfully complete; otherwise they're recalculated to preserve visual state
   - **New threads from Gmail**: Always fetched and stored (no pending ops can exist for unseen threads)
   - **Existing threads**: Only modified if no pending/recent actions found
+  - **Phase 3**: Fetches fresh labels from Gmail for all INBOX threads without pending ops to fix stale label issues
   - If ops/journal lookup returns `null` or empty, proceed (means no conflicts exist)
   - After 2-5 minutes (phase dependent) with no activity on a thread, sync can reconcile it
 

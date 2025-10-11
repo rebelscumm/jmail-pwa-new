@@ -1538,7 +1538,7 @@
           }
         }
         
-        console.log(`[AuthSync] Need to fetch ${toFetch.length} threads: ${toFetch.slice(0, 5).join(', ')}${toFetch.length > 5 ? '...' : ''}`);
+        console.log(`[AuthSync] Need to fetch ${toFetch.length} threads: ${toFetch.slice(0, 5).join(', ')}${toFetch.length > 5 ? '...' : ''}`)
         
         // Fetch thread summaries with modest concurrency
         const fetched = await mapWithConcurrency(toFetch, 4, async (tid) => {
@@ -1898,6 +1898,142 @@
       } else {
         console.log(`[AuthSync] Phase 2: Reconciliation complete - removed INBOX from ${threadsUpdated} stale threads (no updates needed)`);
       }
+
+      // Phase 3: Update ALL labels for existing INBOX threads to fix stale label issues
+      // This ensures that threads with outdated labels (not just INBOX) are refreshed from Gmail
+      console.log(`[AuthSync] Phase 3: Updating all labels for existing INBOX threads to fix stale labels...`);
+      try {
+        const allThreads = await db.getAll('threads');
+        const inboxThreads = allThreads.filter((t: any) => 
+          Array.isArray(t.labelIds) && t.labelIds.includes('INBOX') && seenThreadIds.has(t.threadId)
+        );
+        
+        console.log(`[AuthSync] Phase 3: Found ${inboxThreads.length} INBOX threads to check for stale labels`);
+        
+        // Prefetch all pending ops and journal entries to avoid repeated lookups
+        let opsByScope: Record<string, any[]> = {};
+        try {
+          const allOps = await db.getAll('ops');
+          for (const op of (allOps || [])) {
+            try {
+              const anyOp = op as any;
+              const key = anyOp.scopeKey || (anyOp.op && anyOp.op.threadId) || '';
+              if (!key) continue;
+              opsByScope[key] = opsByScope[key] || [];
+              opsByScope[key].push(op);
+            } catch (_) {}
+          }
+        } catch (_) {
+          opsByScope = {};
+        }
+        
+        let journalByThread: Record<string, any[]> = {};
+        try {
+          const recentCutoff = Date.now() - (5 * 60 * 1000);
+          const allJournal = await db.getAll('journal');
+          for (const entry of (allJournal || [])) {
+            try {
+              const e = entry as any;
+              if (!e || !e.threadId) continue;
+              if (e.createdAt && e.createdAt < recentCutoff) continue;
+              journalByThread[e.threadId] = journalByThread[e.threadId] || [];
+              journalByThread[e.threadId].push(e);
+            } catch (_) {}
+          }
+        } catch (_) {
+          journalByThread = {};
+        }
+        
+        // Identify threads that need label refresh (no pending ops, no recent actions)
+        const threadsToRefresh: any[] = [];
+        for (const t of inboxThreads) {
+          try {
+            // Check for pending label operations
+            const pendingOps = opsByScope[t.threadId] || [];
+            const hasPendingLabelOps = pendingOps.some((op: any) => 
+              op.op?.type === 'batchModify' && 
+              (op.op.addLabelIds?.length > 0 || op.op.removeLabelIds?.length > 0)
+            );
+            
+            if (hasPendingLabelOps) {
+              continue; // Skip threads with pending operations
+            }
+            
+            // Check for recent user actions
+            const journalEntries = journalByThread[t.threadId] || [];
+            const hasRecentLabelChange = journalEntries.some((e: any) => {
+              const hasLabelChange = (e.intent?.addLabelIds?.length > 0) || (e.intent?.removeLabelIds?.length > 0);
+              return hasLabelChange;
+            });
+            
+            if (hasRecentLabelChange) {
+              continue; // Skip threads with recent user actions
+            }
+            
+            // This thread is safe to refresh
+            threadsToRefresh.push(t);
+          } catch (e) {
+            console.error(`[AuthSync] Phase 3: Error checking thread ${t.threadId}:`, e);
+          }
+        }
+        
+        console.log(`[AuthSync] Phase 3: ${threadsToRefresh.length} threads safe to refresh (no pending ops or recent actions)`);
+        
+        // Fetch fresh labels from Gmail for these threads in batches
+        // Use smaller batches to avoid overwhelming the API
+        const batchSize = 10;
+        let totalRefreshed = 0;
+        
+        for (let i = 0; i < threadsToRefresh.length; i += batchSize) {
+          const batch = threadsToRefresh.slice(i, i + batchSize);
+          console.log(`[AuthSync] Phase 3: Processing batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(threadsToRefresh.length / batchSize)}...`);
+          
+          const refreshed = await mapWithConcurrency(batch, 4, async (t: any) => {
+            try {
+              const freshThread = await getThreadSummary(t.threadId);
+              return { threadId: t.threadId, existing: t, fresh: freshThread.thread };
+            } catch (e) {
+              console.warn(`[AuthSync] Phase 3: Failed to fetch ${t.threadId}:`, e);
+              return null;
+            }
+          });
+          
+          // Update threads with fresh labels
+          const tx = db.transaction('threads', 'readwrite');
+          for (const item of refreshed) {
+            if (!item) continue;
+            try {
+              const updatedThread = {
+                ...item.existing,
+                labelIds: item.fresh.labelIds,
+                messageIds: item.fresh.messageIds
+              };
+              await tx.store.put(updatedThread);
+              totalRefreshed++;
+              
+              // Log if labels actually changed
+              const oldLabels = (item.existing.labelIds || []).sort().join(',');
+              const newLabels = (item.fresh.labelIds || []).sort().join(',');
+              if (oldLabels !== newLabels) {
+                console.log(`[AuthSync] Phase 3: Updated ${item.threadId}: ${oldLabels} → ${newLabels}`);
+              }
+            } catch (e) {
+              console.error(`[AuthSync] Phase 3: Failed to update ${item.threadId}:`, e);
+            }
+          }
+          
+          try {
+            await tx.done;
+          } catch (e) {
+            console.error(`[AuthSync] Phase 3: Transaction failed for batch:`, e);
+          }
+        }
+        
+        console.log(`[AuthSync] Phase 3: Label refresh complete - updated ${totalRefreshed} threads`);
+      } catch (e) {
+        console.error(`[AuthSync] Phase 3 failed:`, e);
+      }
+
       authoritativeSyncProgress = { ...authoritativeSyncProgress, running: false };
 
       // Clear trailing holds to prevent stale display after authoritative sync
