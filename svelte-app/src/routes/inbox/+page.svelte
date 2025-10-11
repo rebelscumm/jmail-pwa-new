@@ -1575,7 +1575,14 @@
                   console.error(`[AuthSync] Failed to store message ${m.id}:`, e);
                 }
               }
-              try { 
+              try {
+                // TERMINAL LABEL RULE: Don't store threads with TRASH/SPAM in INBOX sync
+                const threadLabels = new Set<string>(f.thread.labelIds || []);
+                if (threadLabels.has('TRASH') || threadLabels.has('SPAM')) {
+                  console.log(`[AuthSync] Skipping thread ${f.thread.threadId} storage - has terminal label (TRASH/SPAM)`);
+                  continue;
+                }
+                
                 // Check for pending operations before storing thread
                 // Check pending ops with retries to avoid transient IDB errors
                 const pendingOps = await getPendingOpsWithRetry(db, f.thread.threadId, 3);
@@ -1665,17 +1672,30 @@
                   console.log(`[AuthSync] Thread ${tid}: ${recentJournalCount} journal entries from last 30s - protecting from Phase 1`);
                 }
               }
-            } catch (_) {
-              // If lookup fails, be CONSERVATIVE: assume there ARE pending changes to avoid undoing user actions
-              hasPendingLabelChanges = true;
-              hasPendingInboxRemoval = true;
+            } catch (err) {
+              // If lookup fails for a NEW thread (doesn't exist), still fetch it
+              // Only be conservative for EXISTING threads
+              console.warn(`[AuthSync] Thread ${tid}: Error checking ops/journal - ${err}`);
+              if (!existing) {
+                console.log(`[AuthSync] Thread ${tid}: Error during check but thread is NEW - will fetch anyway`);
+                // Don't set flags - let it be fetched below
+              } else {
+                // For existing threads, be CONSERVATIVE: assume there ARE pending changes to avoid undoing user actions
+                hasPendingLabelChanges = true;
+                hasPendingInboxRemoval = true;
+                console.log(`[AuthSync] Thread ${tid}: Error during check for EXISTING thread - assuming pending changes`);
+              }
             }
 
             if (!existing) {
               console.log(`[AuthSync] Thread ${tid} missing from database, will fetch`);
               toFetch.push(tid);
             } else if (!Array.isArray(existing.labelIds) || !existing.labelIds.includes('INBOX')) {
-              if (hasPendingInboxRemoval) {
+              // TERMINAL LABEL RULE: Never add INBOX if thread has TRASH or SPAM
+              const hasTerminalLabel = existing.labelIds?.includes('TRASH') || existing.labelIds?.includes('SPAM');
+              if (hasTerminalLabel) {
+                console.log(`[AuthSync] Thread ${tid} has terminal label (TRASH/SPAM) - NEVER adding INBOX back`);
+              } else if (hasPendingInboxRemoval) {
                 console.log(`[AuthSync] Thread ${tid} exists but has pending INBOX removal; SKIPPING to preserve user edit`);
                 // Don't re-add INBOX if user just removed it
               } else if (hasPendingLabelChanges) {
@@ -1705,6 +1725,11 @@
           for (const {threadId, existing} of toUpdateLabelsOnly) {
             try {
               const labels = new Set<string>(existing.labelIds || []);
+              // TERMINAL LABEL RULE: Never add INBOX if TRASH or SPAM present
+              if (labels.has('TRASH') || labels.has('SPAM')) {
+                console.log(`[AuthSync] Phase 1a: Skipping INBOX add for thread ${threadId} - has terminal label (TRASH/SPAM)`);
+                continue;
+              }
               labels.add('INBOX');
               const updatedThread = { ...existing, labelIds: Array.from(labels) } as any;
               // queue puts without awaiting to keep transaction alive
@@ -1762,6 +1787,14 @@
                 }
                 // If pendingOps is null or empty, proceed - no conflicts for this new thread
 
+                // TERMINAL LABEL RULE: Never add INBOX if thread has TRASH or SPAM
+                const labels = new Set<string>(f.thread.labelIds || []);
+                const hasTerminalLabel = labels.has('TRASH') || labels.has('SPAM');
+                if (hasTerminalLabel) {
+                  console.log(`[AuthSync] Phase 1b: Skipping new thread ${f.thread.threadId} - has terminal label (TRASH/SPAM), not adding to INBOX`);
+                  continue;
+                }
+
                 // Per-thread short transaction
                 const tx = db.transaction(['messages', 'threads'], 'readwrite');
                 const msgsStore = tx.objectStore('messages');
@@ -1769,12 +1802,12 @@
                 for (const m of f.messages) {
                   try { msgsStore.put(m); } catch (e) { console.error(`[AuthSync] Phase 1b: Failed to store message ${m.id}:`, e); }
                 }
-                const labels = new Set<string>(f.thread.labelIds || []);
                 labels.add('INBOX');
                 const threadWithInbox = { ...f.thread, labelIds: Array.from(labels) } as any;
                 try { threadsStoreDb.put(threadWithInbox); newThreadsStored++; } catch (e) { console.error(`[AuthSync] Phase 1b: Failed to store thread ${f.thread.threadId}:`, e); }
                 await new Promise((res) => { tx.oncomplete = () => res(undefined); tx.onerror = () => res(undefined); tx.onabort = () => res(undefined); });
                 console.log(`[AuthSync] Phase 1b: Stored new thread ${f.thread.threadId} with INBOX label, labels: ${Array.from(labels).join(',')}`);
+
               } catch (e) {
                 console.error(`[AuthSync] Phase 1b: Failed to process thread ${f?.thread?.threadId || '<unknown>'}:`, e);
               }
@@ -1840,6 +1873,14 @@
         try {
           const labels = Array.isArray(t.labelIds) ? t.labelIds.slice() : [];
           if (labels.includes('INBOX') && !seenThreadIds.has(t.threadId)) {
+            // TERMINAL LABEL RULE: Never modify threads with TRASH or SPAM
+            // These should stay in their terminal state regardless of Gmail's INBOX state
+            const hasTerminalLabel = labels.includes('TRASH') || labels.includes('SPAM');
+            if (hasTerminalLabel) {
+              console.log(`[AuthSync] Phase 2: Skipping thread ${t.threadId} - has terminal label (TRASH/SPAM), preserving as-is`);
+              continue;
+            }
+            
             const pendingOps = opsByScope[t.threadId] || [];
             // Check if there are any pending operations that affect INBOX label
             const hasPendingInboxOps = pendingOps.some((op: any) => 

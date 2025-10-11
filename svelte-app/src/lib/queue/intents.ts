@@ -382,6 +382,14 @@ export async function applyRemoteLabels(
     union.delete('INBOX');
     for (const a of locallyAddedLabels) union.add(a);
   }
+  
+  // TERMINAL LABEL RULE: Never add INBOX if TRASH or SPAM present
+  // This is a critical invariant that prevents resurrecting deleted/spam threads
+  if (union.has('TRASH') || union.has('SPAM')) {
+    union.delete('INBOX');
+    console.log(`[applyRemoteLabels] Thread ${threadId}: Removed INBOX due to terminal label (TRASH/SPAM)`);
+  }
+  
   const newThread: GmailThread = { ...thread, labelIds: Array.from(union) };
   await db.put('threads', newThread);
   // Update stores

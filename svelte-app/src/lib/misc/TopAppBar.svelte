@@ -960,16 +960,17 @@ import { precomputeStatus } from '$lib/stores/precompute';
           activityReason = `${pendingOps.length} pending ops`;
         }
         
-        // Check for recent journal entries (last 2 minutes)
+        // Check for recent journal entries (last 30 seconds)
+        // Use same window as Phase 1 for consistency
         if (!hasRecentActivity) {
-          const recentCutoff = Date.now() - (2 * 60 * 1000);
+          const recentCutoff = Date.now() - (30 * 1000); // 30 seconds
           const journalEntries = await db.getAll('journal');
           const recentEntries = journalEntries.filter((e: any) => 
             e && e.createdAt && e.createdAt > recentCutoff
           );
           if (recentEntries.length > 0) {
             hasRecentActivity = true;
-            activityReason = `${recentEntries.length} journal entries from last 2min`;
+            activityReason = `${recentEntries.length} journal entries from last 30s`;
           }
           console.log(`[TopAppBar] Journal check: ${journalEntries.length} total, ${recentEntries.length} recent (cutoff: ${new Date(recentCutoff).toISOString()})`);
         }

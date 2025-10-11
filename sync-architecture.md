@@ -76,9 +76,9 @@ Display Unread Total = Local Thread Count + Optimistic Delta
 
 Gmail's reported counts are fetched periodically but are **NOT** used to overwrite local counts when:
 - There are pending operations in the queue
-- There are journal entries from the last 2 minutes (indicating recent user actions)
+- There are journal entries from the last 30 seconds (indicating recent user actions)
 
-This prevents showing stale server counts due to eventual consistency delays. Once there's been no activity for 2+ minutes, server counts are used as the authoritative source.
+This prevents showing stale server counts due to eventual consistency delays. Once there's been no activity for 30+ seconds, server counts are used as the authoritative source.
 
 ---
 
@@ -86,15 +86,30 @@ This prevents showing stale server counts due to eventual consistency delays. On
 
 ### 1. History API Sync (Every ~30 seconds)
 - Fetches incremental changes from Gmail using `historyId`
-- **Protection**: Checks journal for recent user actions (last 2 minutes)
+- **Protection**: Checks journal for recent user actions (last 30 seconds)
 - **Action**: Skips any threads the user recently modified
 - **Result**: Fast updates without undoing user actions
+- **Fallback**: If no historyId or error, triggers authoritative sync
 
 ### 2. Remote Check (Every 60 seconds)
 - Compares Gmail's reported inbox count with local count
 - **Protection**: Accounts for optimistic deltas in comparison
 - **Action**: If discrepancy > 2 threads, runs gentle hydrate
 - **Result**: Catches drift without aggressive syncing
+
+### Sync Decision Matrix
+
+When refresh is triggered, choose sync method based on state:
+
+| Condition | Sync Method | Reason |
+|-----------|-------------|--------|
+| **Have historyId + drift < 5 threads** | History API Sync | Fast incremental update |
+| **No historyId** | Authoritative Sync | Can't use history without baseline |
+| **Drift > 5 threads** | Authoritative Sync | Safer to enumerate all than trust incremental |
+| **History API fails** | Authoritative Sync | Fallback for reliability |
+| **Manual refresh button** | Authoritative Sync | User expects full reconciliation |
+
+**Priority**: Always prefer History API when possible (faster, less bandwidth), but use Authoritative Sync when accuracy is critical.
 
 ### 3. Authoritative Sync (On startup / manual refresh)
 - Enumerates all inbox threads from Gmail
@@ -125,18 +140,66 @@ This prevents showing stale server counts due to eventual consistency delays. On
 When background sync encounters a user action:
 
 **Priority Order:**
-1. **Recent user action** (journal entry < 30s for adding INBOX, < 2min for removing INBOX) → Always preserved
-2. **Pending operation** (in ops queue) → Always preserved
-3. **Server state** → Applied only if no conflict
+1. **Terminal label rule** → HIGHEST priority (never violated)
+2. **Recent user action** (journal entry < 30s for Phase 1, < 2min for Phase 2) → Always preserved
+3. **Pending operation** (in ops queue) → Always preserved
+4. **Server state** → Applied only if no conflict
 
 **Example Scenario:**
 - User archives an email at T+0
 - Gmail receives a reply at T+10 seconds  
-- Background sync runs at T+35 seconds
+- Background sync runs at T+35 seconds (after 30s window)
 - **Resolution**: 
-  - Archive preserved (user action within 30-second Phase 1 window)
-  - Reply thread will appear in Archive folder (not resurrected to INBOX)
-  - After 2+ minutes, Phase 2 can remove stale INBOX labels if needed
+  - Archive is NO LONGER protected by Phase 1 (> 30 seconds old)
+  - BUT Phase 2 protects it from being added back (< 2 minutes)
+  - New threads FROM Gmail are fetched normally
+  - Reply thread will appear based on its actual Gmail state
+  
+**Key Point**: Short 30-second window means refresh fetches new emails quickly while only protecting very recent deletions.
+
+---
+
+## Terminal Label Rules
+
+**Terminal labels** (`TRASH`, `SPAM`) represent final user decisions and have special handling:
+
+### Critical Invariants (NEVER Violated)
+
+1. **Never add INBOX if TRASH present**
+   - User deleted thread → stays deleted forever
+   - Even if Gmail shows INBOX, local state wins
+   - Applies to: Phase 1, Phase 1a, `applyRemoteLabels`, new thread storage
+
+2. **Never add INBOX if SPAM present**
+   - User marked as spam → stays spam forever
+   - Even if Gmail shows INBOX, local state wins
+   - Applies to: Phase 1, Phase 1a, `applyRemoteLabels`, new thread storage
+
+3. **Never remove TRASH/SPAM during Phase 2**
+   - Phase 2 only removes INBOX from non-terminal threads
+   - Terminal labels are permanent until user explicitly undoes
+   - Protects against accidental resurrection
+
+### Implementation Locations
+
+- **Phase 1 (adding INBOX)**: Check before adding INBOX to existing threads
+- **Phase 1a (quick updates)**: Check before batching INBOX additions
+- **Phase 1b (new threads)**: Skip storing if thread has terminal label
+- **Phase 2 (removing INBOX)**: Skip if thread has terminal label
+- **applyRemoteLabels**: Always remove INBOX if TRASH/SPAM present
+- **Paging loop storage**: Check before storing from enumeration
+
+### Why This Matters
+
+Without terminal label protection:
+- ❌ Deleted emails could reappear in inbox during sync
+- ❌ Spam could resurface if Gmail's eventual consistency lags
+- ❌ User's explicit "delete" or "spam" actions could be undone
+
+With terminal label protection:
+- ✅ Deleted emails stay deleted (only undo can restore)
+- ✅ Spam stays marked as spam
+- ✅ User actions are respected permanently
 
 ---
 
@@ -185,12 +248,69 @@ The system uses different time windows for different operations to balance prote
 
 | Operation | Time Window | Rationale |
 |-----------|-------------|-----------|
+| **Terminal labels** | Forever | TRASH/SPAM are permanent decisions (only undo can reverse) |
 | **Phase 1 (adding INBOX)** | 30 seconds | Short window allows new emails to appear quickly while protecting immediate user actions |
 | **Phase 2 (removing INBOX)** | 2 minutes | More conservative - better to keep a thread visible than accidentally hide it |
-| **Counter refresh** | 2 minutes | Eventual consistency grace period for display values |
+| **Counter refresh** | 30 seconds | Match Phase 1 to show fresh counts quickly after user actions settle |
 | **Journal retention** | 10 minutes | Enable undo while preventing unbounded growth |
+| **History API drift threshold** | 5 threads | Beyond this, use authoritative sync instead of incremental |
 
 **Design principle**: Err on the side of showing fresh data while protecting very recent user actions (< 30s).
+
+**Protection hierarchy**: Terminal labels (permanent) → Recent journal entries (30s-2min) → Pending ops (until complete) → Server state (default).
+
+---
+
+## System Invariants
+
+These rules are **NEVER** violated, regardless of server state or timing:
+
+### Label Invariants
+
+1. **INBOX + TRASH = Impossible**
+   - If thread has TRASH label, INBOX is NEVER added
+   - Enforced at: Phase 1, Phase 1a, Phase 1b, `applyRemoteLabels`, paging storage
+   - Violation would: Resurrect deleted emails in inbox
+
+2. **INBOX + SPAM = Impossible**
+   - If thread has SPAM label, INBOX is NEVER added
+   - Enforced at: Phase 1, Phase 1a, Phase 1b, `applyRemoteLabels`, paging storage
+   - Violation would: Show spam in inbox
+
+3. **Terminal labels are permanent**
+   - TRASH and SPAM labels are never removed by sync
+   - Only user undo can remove terminal labels
+   - Phase 2 explicitly skips threads with terminal labels
+
+### Protection Invariants
+
+4. **Pending operations always complete**
+   - Threads with pending ops in queue are never modified by sync
+   - Ensures user actions reach Gmail before reconciliation
+   - Violation would: Lose queued user actions
+
+5. **Recent actions preserved**
+   - Journal entries within time window (30s-2min) protect threads
+   - Time window depends on operation phase
+   - Violation would: Undo user actions immediately after they occur
+
+6. **New threads always fetched**
+   - If Gmail reports a thread ID we don't have, we always fetch it
+   - Even if ops/journal lookup fails, new threads are stored
+   - Only exception: Thread has terminal label (TRASH/SPAM)
+   - Violation would: Miss new emails from Gmail
+
+### Counter Invariants
+
+7. **Counters = local + optimistic**
+   - Display always shows: `local thread count + pending op delta`
+   - Never show server count if recent activity detected
+   - Violation would: Display incorrect counts during pending operations
+
+8. **Optimistic deltas never lost**
+   - If operations remain after sync, deltas are recalculated (not reset)
+   - Only reset when ops queue is truly empty
+   - Violation would: Threads "pop back" visually during slow operations
 
 ---
 
@@ -217,29 +337,31 @@ Gmail's API exhibits **eventual consistency**: changes made via the API may not 
    - Do NOT fetch server state immediately after operation
    - Gmail's eventual consistency is unpredictable (1-10+ seconds)
    - Immediate fetching causes thread resurrection due to stale server data
-   - Let authoritative sync handle reconciliation when user triggers refresh
+   - Rely on authoritative sync (triggered by user or periodic background) for reconciliation
    
-2. **Preserve local state during refresh**
+2. **Preserve local state during refresh** (applies to authoritative sync)
+   - Check terminal labels FIRST (TRASH/SPAM always win over server state)
    - Check journal for recent actions (30 seconds for Phase 1, 2 minutes for Phase 2)
    - Check ops queue for pending operations
-   - Skip server reconciliation if either exists
+   - Skip server reconciliation if any protection rule applies
+   - If error checking ops/journal: NEW threads always fetched, existing threads protected
 
-3. **Let authoritative sync reconcile everything**
+3. **Authoritative sync reconciles everything**
    - Periodic background syncs (60s intervals)
    - Manual refresh via refresh button
-   - Both respect pending/recent actions via journal checks
-   - Fetches ALL threads from Gmail, not just operated ones
-   - Uses short time windows to balance protection vs fresh data
+   - Fetches ALL threads from Gmail
+   - Applies protections: terminal labels → journal (time-windowed) → ops queue
+   - Uses short time windows (30s/2min) to balance protection vs fresh data
 
 4. **Counter display logic**
    - Server counters NOT used when there's recent activity
-   - 2-minute grace period for counter updates
+   - 30-second grace period for counter updates (matches Phase 1)
    - After grace period, server becomes authoritative again
 
 5. **Journal lifecycle**
    - Created on every user action
    - Pruned automatically after 10 minutes
    - Phase 1 checks last 30 seconds, Phase 2 checks last 2 minutes
-   - Counters check last 2 minutes
+   - Counters check last 30 seconds
    - Prevents stale entries from blocking fresh data forever
 
