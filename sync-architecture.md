@@ -39,12 +39,12 @@ When a user deletes/archives/snoozes an email:
 
 5. **Server Confirmation**
    - Gmail API processes the change
+   - Wait 1.5 seconds for eventual consistency
+   - Fetch fresh server state for operated threads only
+   - Apply server state while respecting journal (recent user actions preserved)
    - Operation removed from queue
    - Optimistic deltas reset to 0
-   - **Important**: Local state is NOT overwritten with server state after operation completes
-     - Gmail's eventual consistency means server might not reflect the change yet
-     - Our optimistic local state is already correct
-     - Authoritative sync will reconcile any real discrepancies later
+   - **Important**: Server reconciliation respects journal entries to prevent undoing user actions
 
 ---
 
@@ -99,7 +99,9 @@ This prevents showing stale server counts due to eventual consistency delays. On
 - **Protection**: Checks **BOTH** ops queue **AND** journal before modifications
   - Ops queue: Operations still pending/retrying
   - Journal: Recently completed operations (kept for undo even after sync succeeds)
-  - Journal time window: Only checks entries from **last 5 minutes**
+  - Journal time window: 
+    - **Phase 1 (adding INBOX)**: 2 minutes - allows new emails to appear faster
+    - **Phase 2 (removing INBOX)**: 5 minutes - more conservative about removing
   - If EITHER indicates a user action, that thread is skipped during reconciliation
 - **Before Sync**: Attempts to flush pending operations, but preserves them if they fail
 - **Action**: Full reconciliation, adds missing, removes stale (only for threads with no pending/recent actions)
@@ -109,7 +111,7 @@ This prevents showing stale server counts due to eventual consistency delays. On
   - **New threads from Gmail**: Always fetched and stored (no pending ops can exist for unseen threads)
   - **Existing threads**: Only modified if no pending/recent actions found
   - If ops/journal lookup returns `null` or empty, proceed (means no conflicts exist)
-  - After 5 minutes with no activity, sync can freely reconcile with server state
+  - After 2-5 minutes (phase dependent) with no activity on a thread, sync can reconcile it
 
 ---
 
@@ -187,19 +189,21 @@ Gmail's API exhibits **eventual consistency**: changes made via the API may not 
 
 ### Our Strategy
 
-1. **Trust optimistic local state** after operations complete
-   - Don't immediately fetch and reconcile with server
-   - Local state already reflects the intended change
+1. **Wait for eventual consistency** after operations complete
+   - Wait 1.5 seconds after operation succeeds
+   - Then fetch and reconcile with server state for operated threads
+   - `applyRemoteLabels` respects journal to prevent undoing user actions
    
 2. **Preserve local state during refresh**
-   - Check journal for recent actions (last 5 minutes for sync, last 2 minutes for counters)
+   - Check journal for recent actions (2-5 minutes depending on phase)
    - Check ops queue for pending operations
    - Skip server reconciliation if either exists
 
-3. **Let authoritative sync reconcile later**
+3. **Let authoritative sync reconcile everything**
    - Periodic background syncs (60s intervals)
    - Manual refresh after operations complete
-   - Both respect pending/recent actions via journal checks (5-minute window)
+   - Both respect pending/recent actions via journal checks (2-5 minute windows)
+   - Fetches ALL threads from Gmail, not just operated ones
 
 4. **Counter display logic**
    - Server counters NOT used when there's recent activity

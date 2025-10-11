@@ -49,13 +49,32 @@ export async function flushOnce(now = Date.now()): Promise<void> {
     const removeLabelIds = ops[0].op.removeLabelIds;
     try {
       await batchModify(ids, addLabelIds, removeLabelIds);
-      // After success, DO NOT immediately reconcile with server state because:
-      // 1. Gmail's eventual consistency means server might not reflect our change yet
-      // 2. Our optimistic local state is already correct
-      // 3. Authoritative sync will handle any real discrepancies later
-      // 
-      // Previously this would fetch fresh server state and overwrite local state,
-      // causing threads to "reappear" after deletion due to eventual consistency lag.
+      
+      // After success, wait briefly for Gmail's eventual consistency, then reconcile
+      // This fetches new emails while respecting recent user actions via journal check
+      try {
+        // Small delay to let Gmail process our change (eventual consistency)
+        await new Promise(res => setTimeout(res, 1500));
+        
+        // Group by scopeKey (threadId)
+        const byThread = new Map<string, string[]>();
+        for (const o of ops) {
+          const arr = byThread.get(o.scopeKey) || [];
+          for (const id of o.op.ids) arr.push(id);
+          byThread.set(o.scopeKey, Array.from(new Set(arr)));
+        }
+        for (const [threadId, messageIds] of byThread) {
+          const labelsByMessage: Record<string, string[]> = {};
+          for (const id of messageIds) {
+            const m = await (await import('$lib/gmail/api')).getMessageMetadata(id);
+            labelsByMessage[id] = m.labelIds || [];
+          }
+          const { applyRemoteLabels } = await import('./intents');
+          await applyRemoteLabels(threadId, labelsByMessage);
+        }
+      } catch (e) {
+        console.warn('[flush] Failed to reconcile with server after operation success:', e);
+      }
       
       // Success: delete ops from queue
       const tx = db.transaction('ops', 'readwrite');
