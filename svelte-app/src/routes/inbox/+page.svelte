@@ -1643,11 +1643,11 @@
                 }
               }
               
-              // Also check journal for recent user actions (even if op completed)
-              // Only check entries from last 2 minutes for Phase 1 (adding INBOX back)
-              // This is shorter than Phase 2 to allow new emails to appear faster
+              // Also check journal for VERY recent user actions (even if op completed)
+              // Use 30-second window for Phase 1 to allow new emails to appear quickly
+              // This protects immediate user actions while not blocking fresh data
               if (!hasPendingInboxRemoval || !hasPendingLabelChanges) {
-                const recentCutoff = Date.now() - (2 * 60 * 1000); // 2 minutes for adding INBOX
+                const recentCutoff = Date.now() - (30 * 1000); // 30 seconds for Phase 1
                 const journalAll = await db.getAll('journal');
                 let recentJournalCount = 0;
                 for (const e of journalAll as any[]) {
@@ -1655,18 +1655,14 @@
                   if (!e.createdAt || e.createdAt < recentCutoff) continue; // Skip old or missing timestamp
                   recentJournalCount++;
                   const rem = Array.isArray(e.intent.removeLabelIds) ? e.intent.removeLabelIds : [];
-                  const add = Array.isArray(e.intent.addLabelIds) ? e.intent.addLabelIds : [];
                   if (rem.includes('INBOX')) {
                     hasPendingInboxRemoval = true;
                     hasPendingLabelChanges = true;
                     console.log(`[AuthSync] Thread ${tid}: Found recent INBOX removal in journal (age: ${Math.round((Date.now() - e.createdAt) / 1000)}s)`);
                   }
-                  if (add.includes('INBOX') || rem.includes('INBOX')) {
-                    hasPendingLabelChanges = true;
-                  }
                 }
-                if (recentJournalCount === 0 && journalAll.length > 0) {
-                  console.log(`[AuthSync] Thread ${tid}: ${journalAll.filter((e: any) => e?.threadId === tid).length} journal entries but all older than 2min`);
+                if (recentJournalCount > 0) {
+                  console.log(`[AuthSync] Thread ${tid}: ${recentJournalCount} journal entries from last 30s - protecting from Phase 1`);
                 }
               }
             } catch (_) {
@@ -1820,11 +1816,11 @@
         opsByScope = {};
       }
 
-      // Also prefetch journal entries to check for recent user actions
-      // Only consider entries from last 5 minutes to avoid stale protection
+      // Also prefetch journal entries to check for recent user actions  
+      // Use 2-minute window for Phase 2 - more conservative than Phase 1 but not too long
       let journalByThread: Record<string, any[]> = {};
       try {
-        const recentCutoff = Date.now() - (5 * 60 * 1000);
+        const recentCutoff = Date.now() - (2 * 60 * 1000); // 2 minutes for Phase 2
         const allJournal = await db.getAll('journal');
         for (const entry of (allJournal || [])) {
           try {
