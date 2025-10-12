@@ -1622,33 +1622,27 @@
       // 2) Remove INBOX label from threads not seen
       console.log(`[AuthSync] ===== STARTING RECONCILIATION PHASE =====`);
       console.log(`[AuthSync] Reconciliation: ${seenThreadIds.size} threads seen from Gmail`);
-      // Fallback enrichment: if Gmail reports significantly more threads than we saw via
-      // message-level enumeration, perform a threads.list enumeration to backfill.
+      // Fallback enrichment: also enumerate threads.list for INBOX and union results.
+      // This ensures we don't miss brand-new threads that message-level paging might skip.
       try {
-        const inboxLabelStats = await getLabel('INBOX');
-        const gmailReportedTotal = Number((inboxLabelStats as any)?.threadsTotal || 0);
-        if (gmailReportedTotal > (seenThreadIds.size + 2)) {
-          console.log(`[AuthSync] Fallback: Gmail reports ${gmailReportedTotal}, seen ${seenThreadIds.size}. Enumerating threads.list to backfill…`);
-          try {
-            const { listThreadIdsByLabelId } = await import('$lib/gmail/api');
-            let fallbackToken: string | undefined = undefined;
-            let added = 0;
-            while (true) {
-              const page = await listThreadIdsByLabelId('INBOX', 500, fallbackToken);
-              const ids = page?.ids || [];
-              for (const tid of ids) {
-                if (!seenThreadIds.has(tid)) { seenThreadIds.add(tid); added += 1; }
-              }
-              if (!page?.nextPageToken) break;
-              fallbackToken = page.nextPageToken;
-            }
-            console.log(`[AuthSync] Fallback complete: added ${added} thread ids. Seen now ${seenThreadIds.size}`);
-          } catch (e) {
-            console.warn('[AuthSync] Fallback threads.list enumeration failed:', e);
+        const { listThreadIdsByLabelId } = await import('$lib/gmail/api');
+        let fallbackToken: string | undefined = undefined;
+        let added = 0;
+        let pages = 0;
+        const MAX_FALLBACK_PAGES = 10; // safety to avoid runaway in pathological cases
+        while (pages < MAX_FALLBACK_PAGES) {
+          const page = await listThreadIdsByLabelId('INBOX', 500, fallbackToken);
+          pages += 1;
+          const ids = page?.ids || [];
+          for (const tid of ids) {
+            if (!seenThreadIds.has(tid)) { seenThreadIds.add(tid); added += 1; }
           }
+          if (!page?.nextPageToken) break;
+          fallbackToken = page.nextPageToken;
         }
+        console.log(`[AuthSync] Fallback threads.list union: +${added} ids across ${pages} pages. Seen now ${seenThreadIds.size}`);
       } catch (e) {
-        console.warn('[AuthSync] Could not compare against Gmail reported totals for fallback:', e);
+        console.warn('[AuthSync] Fallback threads.list enumeration failed:', e);
       }
       
       // Pass 1: fetch any missing seen threads and ensure INBOX label is present
