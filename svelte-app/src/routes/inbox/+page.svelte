@@ -779,6 +779,16 @@
     const cachedThreads = await db.getAll('threads');
     if (cachedThreads?.length) {
       const current = $threadsStore || [];
+      
+      // Build a map of threads with pending operations to preserve their optimistic state
+      const hasPendingOps = new Set<string>();
+      try {
+        const allOps = await db.getAll('ops');
+        for (const op of allOps) {
+          if (op.scopeKey) hasPendingOps.add(op.scopeKey);
+        }
+      } catch (_) {}
+      
       function threadLastActivity(th: any) {
         try { return Math.max(Number(th?.lastMsgMeta?.date) || 0, Number((th as any).aiSubjectUpdatedAt) || 0, Number((th as any).summaryUpdatedAt) || 0); } catch { return 0; }
       }
@@ -788,6 +798,14 @@
         if (idx >= 0) {
           try {
             const existing = merged[idx];
+            
+            // If this thread has pending operations, preserve its current labelIds
+            if (hasPendingOps.has(t.threadId)) {
+              // Keep the existing thread with optimistic changes, but update non-label fields from DB
+              merged[idx] = { ...t, labelIds: existing.labelIds };
+              continue;
+            }
+            
             const existingLast = threadLastActivity(existing);
             const cachedLast = threadLastActivity(t);
             // Prefer in-memory/local thread when it appears newer, or when it has been removed from INBOX locally
