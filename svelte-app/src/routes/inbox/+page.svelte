@@ -655,27 +655,9 @@
     const ids = Object.keys(selectedMap);
     if (!ids.length) return;
     
-    // Calculate optimistic counter adjustments before archiving
-    const db = await getDB();
-    let inboxDelta = 0;
-    let unreadDelta = 0;
-    for (const id of ids) {
-      const thread = await db.get('threads', id);
-      if (thread) {
-        const isInInbox = (thread.labelIds || []).includes('INBOX');
-        const isUnread = (thread.labelIds || []).includes('UNREAD');
-        if (isInInbox) inboxDelta--;
-        if (isUnread) unreadDelta--;
-      }
-    }
-    
-    // Apply optimistic adjustment immediately
-    if (inboxDelta !== 0 || unreadDelta !== 0) {
-      const { adjustOptimisticCounters } = await import('$lib/stores/optimistic-counters');
-      adjustOptimisticCounters(inboxDelta, unreadDelta);
-    }
-    
-    for (const id of ids) await archiveThread(id, { optimisticLocal: false });
+    // For bulk operations, we update local state for each thread immediately
+    // The baseInboxCount will decrease naturally, so no counter adjustment needed
+    for (const id of ids) await archiveThread(id);
     selectedMap = {};
     showSnackbar({ message: 'Archived', actions: { Undo: () => undoLast(ids.length) } });
   }
@@ -683,27 +665,9 @@
     const ids = Object.keys(selectedMap);
     if (!ids.length) return;
     
-    // Calculate optimistic counter adjustments before deleting
-    const db = await getDB();
-    let inboxDelta = 0;
-    let unreadDelta = 0;
-    for (const id of ids) {
-      const thread = await db.get('threads', id);
-      if (thread) {
-        const isInInbox = (thread.labelIds || []).includes('INBOX');
-        const isUnread = (thread.labelIds || []).includes('UNREAD');
-        if (isInInbox) inboxDelta--;
-        if (isUnread) unreadDelta--;
-      }
-    }
-    
-    // Apply optimistic adjustment immediately
-    if (inboxDelta !== 0 || unreadDelta !== 0) {
-      const { adjustOptimisticCounters } = await import('$lib/stores/optimistic-counters');
-      adjustOptimisticCounters(inboxDelta, unreadDelta);
-    }
-    
-    for (const id of ids) await trashThread(id, { optimisticLocal: false });
+    // For bulk operations, we update local state for each thread immediately
+    // The baseInboxCount will decrease naturally, so no counter adjustment needed
+    for (const id of ids) await trashThread(id);
     selectedMap = {};
     showSnackbar({ message: 'Deleted', actions: { Undo: () => undoLast(ids.length) } });
   }

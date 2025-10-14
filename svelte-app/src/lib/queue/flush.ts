@@ -11,6 +11,8 @@ export async function flushOnce(now = Date.now()): Promise<void> {
   const due = await getDueOps(now);
   if (!due.length) return;
 
+  let anyOpsCompleted = false;
+
   // 1) Handle sendMessage ops individually
   const sendOps = due.filter((o) => o.op.type === 'sendMessage');
   for (const o of sendOps) {
@@ -19,6 +21,7 @@ export async function flushOnce(now = Date.now()): Promise<void> {
       const tx = db.transaction('ops', 'readwrite');
       await tx.store.delete(o.id);
       await tx.done;
+      anyOpsCompleted = true;
     } catch (e: unknown) {
       const tx = db.transaction('ops', 'readwrite');
       o.attempts += 1;
@@ -59,6 +62,7 @@ export async function flushOnce(now = Date.now()): Promise<void> {
       const tx = db.transaction('ops', 'readwrite');
       for (const o of ops) await tx.store.delete(o.id);
       await tx.done;
+      anyOpsCompleted = true;
     } catch (e: unknown) {
       // Retry with backoff
       const tx = db.transaction('ops', 'readwrite');
@@ -79,6 +83,15 @@ export async function flushOnce(now = Date.now()): Promise<void> {
       } catch (_) {}
     }
   }
+  
+  // Recalculate optimistic counters after operations complete to reflect updated pending state
+  if (anyOpsCompleted) {
+    try {
+      const { recalculateOptimisticCounters } = await import('$lib/stores/optimistic-counters');
+      await recalculateOptimisticCounters();
+    } catch (_) {}
+  }
+  
   await refreshSyncState().catch(() => {});
 }
 

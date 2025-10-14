@@ -144,8 +144,14 @@ threadsStore.subscribe(threads => {
     Array.isArray(t.labelIds) && t.labelIds.includes('INBOX') && t.labelIds.includes('UNREAD')
   ).length || 0;
 
-  // If threads changed significantly or unread count changed, recalculate counters
-  if (Math.abs(newLength - lastThreadsLength) > 1 || Math.abs(newUnreadCount - lastThreadsUnreadCount) > 0) {
+  // Only recalculate if threads changed significantly (more than 1 thread added/removed at once)
+  // Single thread changes are typically from user actions that already applied optimistic adjustments
+  // This prevents race conditions where we recalculate before the operation is enqueued
+  const lengthDelta = Math.abs(newLength - lastThreadsLength);
+  const unreadDelta = Math.abs(newUnreadCount - lastThreadsUnreadCount);
+  
+  // Recalculate only for bulk changes (likely from sync) or when many unread changed
+  if (lengthDelta > 2 || unreadDelta > 2) {
     void recalculateOptimisticCounters();
   }
 

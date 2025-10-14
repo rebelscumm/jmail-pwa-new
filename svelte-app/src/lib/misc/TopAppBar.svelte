@@ -1149,6 +1149,20 @@ import { precomputeStatus } from '$lib/stores/precompute';
         <Icon icon={iconBack} />
       </Button>
     {/if}
+    {#if !backHref && (renderedInboxCount > 0 || renderedUnreadCount > 0)}
+      <div class="counters">
+        <span class="counter-badge" title="Total inbox threads">
+          <Icon icon={iconInbox} width="1.125rem" height="1.125rem" />
+          {renderedInboxCount}
+        </span>
+        {#if renderedUnreadCount > 0}
+          <span class="counter-badge unread" title="Unread threads">
+            <Icon icon={iconMarkEmailUnread} width="1.125rem" height="1.125rem" />
+            {renderedUnreadCount}
+          </span>
+        {/if}
+      </div>
+    {/if}
   </div>
   <div class="right">
     {#if searchOpen || search.length > 0}
@@ -1576,6 +1590,28 @@ import { precomputeStatus } from '$lib/stores/precompute';
   }
   .left, .right { display: flex; align-items: center; gap: 0.5rem; }
   .right { flex: 1; flex-wrap: wrap; min-width: 0; justify-content: flex-end; }
+  .counters { 
+    display: flex; 
+    align-items: center; 
+    gap: 0.75rem; 
+    margin-left: 0.5rem;
+  }
+  .counter-badge {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.375rem 0.625rem;
+    border-radius: var(--m3-util-rounding-medium, 0.75rem);
+    background-color: rgb(var(--m3-scheme-surface-container-high));
+    color: rgb(var(--m3-scheme-on-surface));
+    font-size: 0.875rem;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+  }
+  .counter-badge.unread {
+    background-color: rgb(var(--m3-scheme-primary-container));
+    color: rgb(var(--m3-scheme-on-primary-container));
+  }
   /* Ensure all buttons in the topbar have consistent height and alignment */
   .right :global(.m3-container) { 
     height: 2.5rem; 

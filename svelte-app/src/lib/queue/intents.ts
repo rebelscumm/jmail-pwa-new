@@ -3,7 +3,6 @@ import { enqueueBatchModify, enqueueSendMessage, hashIntent } from '$lib/queue/o
 import type { GmailMessage, GmailThread, QueuedOp } from '$lib/types';
 import { get } from 'svelte/store';
 import { messages as messagesStore, threads as threadsStore } from '$lib/stores/threads';
-import { adjustOptimisticCounters } from '$lib/stores/optimistic-counters';
 
 const ACCOUNT_SUB = 'me';
 
@@ -24,34 +23,6 @@ function applyLabels(list: string[], add: string[], remove: string[]): string[] 
   for (const r of remove) set.delete(r);
   for (const a of add) set.add(a);
   return Array.from(set);
-}
-
-/**
- * Calculate counter impact and apply optimistic adjustment for immediate feedback
- */
-async function applyOptimisticCounterAdjustment(threadId: string, addLabelIds: string[], removeLabelIds: string[]) {
-  const db = await getDB();
-  const thread = await db.get('threads', threadId);
-  if (!thread) return;
-
-  const currentLabels = new Set(thread.labelIds || []);
-  const wasInInbox = currentLabels.has('INBOX');
-  const wasUnread = currentLabels.has('UNREAD');
-  
-  // Apply the label changes
-  const newLabels = new Set(currentLabels);
-  for (const r of removeLabelIds) newLabels.delete(r);
-  for (const a of addLabelIds) newLabels.add(a);
-  
-  const willBeInInbox = newLabels.has('INBOX');
-  const willBeUnread = newLabels.has('UNREAD');
-  
-  const inboxDelta = (willBeInInbox ? 1 : 0) - (wasInInbox ? 1 : 0);
-  const unreadDelta = (willBeUnread ? 1 : 0) - (wasUnread ? 1 : 0);
-  
-  if (inboxDelta !== 0 || unreadDelta !== 0) {
-    adjustOptimisticCounters(inboxDelta, unreadDelta);
-  }
 }
 
 export async function updateLocalThreadAndMessages(
@@ -82,9 +53,10 @@ export async function updateLocalThreadAndMessages(
   const currentThreads = get(threadsStore);
   const updatedThreads = currentThreads.map((t) => (t.threadId === threadId ? newThread : t));
 
-  // Use setThreadsWithReset to properly handle optimistic counters
-  const { setThreadsWithReset } = await import('$lib/stores/optimistic-counters');
-  setThreadsWithReset(updatedThreads);
+  // Just update the threads store directly - optimistic counter adjustment was already applied
+  // Don't use setThreadsWithReset here because it recalculates from pending ops, but the
+  // current operation hasn't been enqueued yet (happens after this function returns)
+  threadsStore.set(updatedThreads);
 
   const currentMessages = get(messagesStore);
   messagesStore.set({ ...currentMessages, ...updatedMessages });
@@ -110,9 +82,11 @@ export async function queueThreadModify(threadId: string, addLabelIds: string[],
   const thread = await db.get('threads', threadId);
   if (!thread) return;
   
-  // Apply optimistic counter adjustment for immediate feedback (only for individual operations)
+  // When optimisticLocal is true (default), update local store immediately
+  // The baseInboxCount will reflect the change, so NO optimistic counter adjustment needed
+  // When optimisticLocal is false (bulk operations), DON'T update local store
+  // The caller has already applied optimistic counter adjustments manually
   if (options?.optimisticLocal !== false) {
-    await applyOptimisticCounterAdjustment(threadId, addLabelIds, removeLabelIds);
     await updateLocalThreadAndMessages(threadId, addLabelIds, removeLabelIds);
   }
   const queued = await maybeEnqueue(threadId, thread.messageIds, addLabelIds, removeLabelIds);
@@ -266,10 +240,8 @@ export async function undoLast(n = 1): Promise<void> {
       // Track in redo stack
       undoneStack.push(e);
       
-      // Apply optimistic adjustment for undo (reverse of original operation)
-      await applyOptimisticCounterAdjustment(e.threadId, e.inverse.addLabelIds, e.inverse.removeLabelIds);
-      
-      await queueThreadModify(e.threadId, e.inverse.addLabelIds, e.inverse.removeLabelIds, { optimisticLocal: false });
+      // Undo updates local state immediately for instant feedback
+      await queueThreadModify(e.threadId, e.inverse.addLabelIds, e.inverse.removeLabelIds);
       idsToDelete.push(e.id);
     }
 
@@ -300,10 +272,8 @@ export async function redoLast(n = 1): Promise<void> {
     // Re-apply from the in-memory undone stack
     const toRedo = undoneStack.slice(-n);
     for (const e of toRedo) {
-      // Apply optimistic adjustment for redo (same as original operation)
-      await applyOptimisticCounterAdjustment(e.threadId, e.intent.addLabelIds, e.intent.removeLabelIds);
-      
-      await queueThreadModify(e.threadId, e.intent.addLabelIds, e.intent.removeLabelIds, { optimisticLocal: false });
+      // Redo updates local state immediately for instant feedback
+      await queueThreadModify(e.threadId, e.intent.addLabelIds, e.intent.removeLabelIds);
       await recordIntent(e.threadId, e.intent, e.inverse, { source: 'redo' });
     }
     // Remove the re-applied entries from the stack
@@ -396,7 +366,8 @@ export async function applyRemoteLabels(
   const currentThreads = get(threadsStore);
   const updatedThreads = currentThreads.map((t) => (t.threadId === threadId ? newThread : t));
 
-  // Use setThreadsWithReset to properly handle optimistic counters
+  // applyRemoteLabels is called during sync, so use setThreadsWithReset to recalculate
+  // optimistic counters from pending operations to ensure accuracy after server reconciliation
   const { setThreadsWithReset } = await import('$lib/stores/optimistic-counters');
   setThreadsWithReset(updatedThreads);
 
