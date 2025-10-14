@@ -1202,72 +1202,38 @@
     })();
     // Listen for global refresh requests
     async function handleGlobalRefresh() {
-      console.log('[Inbox] ===== REFRESH BUTTON CLICKED =====');
+      console.log('[Inbox] ===== REFRESH EVENT RECEIVED =====');
       let queuedRefresh = false;
       try {
-        syncing = true;
-        
-        console.log('[Inbox] Force refresh triggered - clearing cache and performing full sync');
+        // Note: The actual authoritative sync is performed by TopAppBar calling
+        // __performAuthoritativeSync directly, and the TopAppBar also handles
+        // refreshing label stats. This handler just logs for debugging.
         
         // Check if we're in a valid state to refresh
         if (!ready) {
           pendingRefresh = true;
           queuedRefresh = true;
-          syncing = false;
           return;
         }
         
-        showSnackbar({ message: 'Force refreshing inbox from Gmail…' });
+        console.log('[Inbox] Refresh complete - UI should now reflect updated data');
         
-        // Clear any cached data that might be stale
-        const db = await getDB();
-        
-        // Get current thread count for comparison
-        const localThreads = await db.getAll('threads');
-        const localInboxThreads = localThreads.filter((t: any) => 
-          Array.isArray(t.labelIds) && t.labelIds.includes('INBOX')
-        );
-        
-        console.log(`[Inbox] Before refresh: ${localInboxThreads.length} local inbox threads`);
-        
-        // Perform a full authoritative INBOX sync with extended timeouts for reliability
-        await performAuthoritativeInboxSync({ 
-          perPageTimeoutMs: 30000, // 30 seconds per page for refresh
-          maxRetries: 3 // More retries for manual refresh
-        });
-        
-        // Verify sync worked by checking thread count again
-        const refreshedThreads = await db.getAll('threads');
-        const refreshedInboxThreads = refreshedThreads.filter((t: any) => 
-          Array.isArray(t.labelIds) && t.labelIds.includes('INBOX')
-        );
-        
-        console.log(`[Inbox] After refresh: ${refreshedInboxThreads.length} local inbox threads`);
-        
-        // Try to get Gmail's reported count for comparison
-        let gmailThreadCount = 'unknown';
+        // Log current state for debugging
         try {
-          const inboxLabel = await getLabel('INBOX');
-          gmailThreadCount = String(inboxLabel.threadsTotal || 0);
-        } catch (_) {}
-        
-        showSnackbar({ 
-          message: `Inbox refreshed: ${refreshedInboxThreads.length} threads (Gmail: ${gmailThreadCount})`, 
-          timeout: 4000 
-        });
+          const db = await getDB();
+          const localThreads = await db.getAll('threads');
+          const localInboxThreads = localThreads.filter((t: any) => 
+            Array.isArray(t.labelIds) && t.labelIds.includes('INBOX')
+          );
+          
+          console.log(`[Inbox] Local state after refresh: ${localInboxThreads.length} inbox threads`);
+        } catch (e) {
+          console.warn('[Inbox] Could not check local state:', e);
+        }
         
       } catch (e) {
-        console.error('[Inbox] Force refresh failed:', e);
-        setApiError(e);
-        showSnackbar({ 
-          message: `Force refresh failed: ${e instanceof Error ? e.message : e}. Try the diagnostics page for troubleshooting.`, 
-          closable: true,
-          actions: {
-            'Diagnostics': () => { window.location.href = '/diagnostics'; }
-          }
-        });
+        console.error('[Inbox] Refresh event handler failed:', e);
       } finally {
-        if (!queuedRefresh) syncing = false;
         if (!queuedRefresh) pendingRefresh = false;
       }
     }
@@ -3611,12 +3577,6 @@
   <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.5rem; gap:0.5rem;">
     <div style="display:flex; align-items:center; gap:1rem;">
       <h3 class="m3-font-title-medium" style="margin:0">Inbox</h3>
-      {#if inboxLabelStats}
-        <div style="display:flex; gap:0.75rem; align-items:center; color:rgb(var(--m3-scheme-on-surface-variant)); font-size:0.875rem;">
-          <span>Total: <strong style="color:rgb(var(--m3-scheme-on-surface))">{adjustedInboxTotal}</strong></span>
-          <span>Unread: <strong style="color:rgb(var(--m3-scheme-on-surface))">{adjustedInboxUnread}</strong></span>
-        </div>
-      {/if}
     </div>
     <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
       

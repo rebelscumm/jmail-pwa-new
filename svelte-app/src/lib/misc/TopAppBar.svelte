@@ -206,7 +206,16 @@ import { precomputeStatus } from '$lib/stores/precompute';
         showSnackbar({ message: 'Not on inbox page, skipping sync', timeout: 2000 });
       }
       
-      // Step 7: Get post-sync counts and show detailed results
+      // Step 7: Refresh label stats to update counters with authoritative Gmail counts
+      console.log('[TopAppBar] Step 5: Refreshing label stats from Gmail...');
+      try {
+        await refreshLabelStats(true); // Force update after authoritative sync
+        console.log('[TopAppBar] Step 5: Label stats refreshed successfully');
+      } catch (e) {
+        console.warn('[TopAppBar] Step 5: Could not refresh label stats:', e);
+      }
+      
+      // Step 8: Get post-sync counts and show detailed results
       try {
         const { getDB } = await import('$lib/db/indexeddb');
         const db = await getDB();
@@ -245,10 +254,10 @@ import { precomputeStatus } from '$lib/stores/precompute';
         showSnackbar({ message: 'Inbox synced successfully', timeout: 2500 });
       }
       
-      // Step 8: Dispatch global refresh event for other components
-      console.log('[TopAppBar] Step 5: Dispatching global refresh event...');
+      // Step 9: Dispatch global refresh event for other components
+      console.log('[TopAppBar] Step 6: Dispatching global refresh event...');
       window.dispatchEvent(new CustomEvent('jmail:refresh'));
-      console.log('[TopAppBar] Step 5: Global refresh event dispatched');
+      console.log('[TopAppBar] Step 6: Global refresh event dispatched');
       
     } catch (e) {
       console.error('[TopAppBar] Comprehensive refresh failed:', e);
@@ -909,10 +918,23 @@ import { precomputeStatus } from '$lib/stores/precompute';
     try {
       // Ensure label stats are refreshed on mount
       try { await refreshLabelStats(); } catch (_) {}
-      try { window.addEventListener('jmail:refresh', refreshLabelStats as EventListener); } catch (_) {}
     } catch (e) {
       console.error(e);
     }
+  });
+  
+  onMount(() => {
+    const handleRefresh = () => { void refreshLabelStats(); };
+    const handleRefreshLabelStats = () => { void refreshLabelStats(); };
+    
+    try {
+      window.addEventListener('jmail:refresh', handleRefresh);
+      window.addEventListener('jmail:refreshLabelStats', handleRefreshLabelStats);
+    } catch (_) {}
+    return () => {
+      try { window.removeEventListener('jmail:refresh', handleRefresh); } catch (_) {}
+      try { window.removeEventListener('jmail:refreshLabelStats', handleRefreshLabelStats); } catch (_) {}
+    };
   });
 
   // Listen for global request to show precompute logs (dispatched by snackbar action)
@@ -936,7 +958,7 @@ import { precomputeStatus } from '$lib/stores/precompute';
   let inboxMessagesTotal = $state<number | undefined>(undefined);
   let inboxMessagesUnread = $state<number | undefined>(undefined);
 
-  async function refreshLabelStats() {
+  async function refreshLabelStats(force = false) {
     try {
       const { getLabel } = await import('$lib/gmail/api');
       const inboxLabel = await getLabel('INBOX');
@@ -947,43 +969,49 @@ import { precomputeStatus } from '$lib/stores/precompute';
       
       // Check if there are recent user actions or pending operations
       // If so, prefer local counts over potentially stale server counts
+      // UNLESS force=true (e.g., after manual refresh button)
       let hasRecentActivity = false;
       let activityReason = '';
-      try {
-        const { getDB } = await import('$lib/db/indexeddb');
-        const db = await getDB();
-        
-        // Check for pending operations
-        const pendingOps = await db.getAll('ops');
-        if (pendingOps && pendingOps.length > 0) {
-          hasRecentActivity = true;
-          activityReason = `${pendingOps.length} pending ops`;
-        }
-        
-        // Check for recent journal entries (last 30 seconds)
-        // Use same window as Phase 1 for consistency
-        if (!hasRecentActivity) {
-          const recentCutoff = Date.now() - (30 * 1000); // 30 seconds
-          const journalEntries = await db.getAll('journal');
-          const recentEntries = journalEntries.filter((e: any) => 
-            e && e.createdAt && e.createdAt > recentCutoff
-          );
-          if (recentEntries.length > 0) {
+      
+      if (!force) {
+        try {
+          const { getDB } = await import('$lib/db/indexeddb');
+          const db = await getDB();
+          
+          // Check for pending operations
+          const pendingOps = await db.getAll('ops');
+          if (pendingOps && pendingOps.length > 0) {
             hasRecentActivity = true;
-            activityReason = `${recentEntries.length} journal entries from last 30s`;
+            activityReason = `${pendingOps.length} pending ops`;
           }
-          console.log(`[TopAppBar] Journal check: ${journalEntries.length} total, ${recentEntries.length} recent (cutoff: ${new Date(recentCutoff).toISOString()})`);
+          
+          // Check for recent journal entries (last 30 seconds)
+          // Use same window as Phase 1 for consistency
+          if (!hasRecentActivity) {
+            const recentCutoff = Date.now() - (30 * 1000); // 30 seconds
+            const journalEntries = await db.getAll('journal');
+            const recentEntries = journalEntries.filter((e: any) => 
+              e && e.createdAt && e.createdAt > recentCutoff
+            );
+            if (recentEntries.length > 0) {
+              hasRecentActivity = true;
+              activityReason = `${recentEntries.length} journal entries from last 30s`;
+            }
+            console.log(`[TopAppBar] Journal check: ${journalEntries.length} total, ${recentEntries.length} recent (cutoff: ${new Date(recentCutoff).toISOString()})`);
+          }
+        } catch (e) {
+          // If we can't check, be conservative and assume there might be recent activity
+          hasRecentActivity = true;
+          activityReason = `check failed: ${e}`;
         }
-      } catch (e) {
-        // If we can't check, be conservative and assume there might be recent activity
-        hasRecentActivity = true;
-        activityReason = `check failed: ${e}`;
+      } else {
+        console.log(`[TopAppBar] Force refresh - using server counts regardless of recent activity`);
       }
       
-      // Only overwrite rendered counts with server values if there's no recent activity
+      // Only overwrite rendered counts with server values if there's no recent activity OR force=true
       // This prevents showing stale server counts when user just performed actions
-      if (!hasRecentActivity) {
-        console.log(`[TopAppBar] Using server counts - no recent activity (server: ${tt} inbox, ${tu} unread)`);
+      if (!hasRecentActivity || force) {
+        console.log(`[TopAppBar] Using server counts${force ? ' (forced)' : ' - no recent activity'} (server: ${tt} inbox, ${tu} unread)`);
         if (typeof tt === 'number') renderedInboxCount = tt;
         if (typeof tu === 'number') renderedUnreadCount = tu;
       } else {
