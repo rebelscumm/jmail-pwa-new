@@ -601,6 +601,38 @@ function updateDiagnosticsSummary() {
 }
 
 // Authentication management functions
+async function clearStaleOAuthCookies() {
+	try {
+		addLog('info', ['Clearing stale OAuth flow cookies...']);
+		
+		// Clear the temporary OAuth flow cookies (g_pkce, g_state)
+		// These should only exist during an active OAuth flow
+		document.cookie = 'g_pkce=; Path=/; Expires=Thu, 01 Jan 1970 00:00:01 GMT; Secure; SameSite=Lax';
+		document.cookie = 'g_state=; Path=/; Expires=Thu, 01 Jan 1970 00:00:01 GMT; Secure; SameSite=Lax';
+		
+		addLog('info', ['Stale OAuth cookies cleared']);
+		
+		// Try to refresh the session if we have a valid refresh token
+		addLog('info', ['Attempting to refresh session...']);
+		const { sessionManager } = await import('$lib/auth/session-manager');
+		const success = await sessionManager.refreshSession();
+		
+		if (success) {
+			addLog('info', ['Session refreshed successfully!']);
+			alert('Stale cookies cleared and session refreshed successfully! You should be able to use the app without logging in again.');
+			
+			// Re-run diagnostics to verify
+			setTimeout(() => runFullDiagnostics(), 1000);
+		} else {
+			addLog('warn', ['Session refresh failed - you may need to log in again']);
+			alert('Stale cookies cleared, but session refresh failed. You may need to log in again.');
+		}
+	} catch (e) {
+		addLog('error', ['clearStaleOAuthCookies failed', e]);
+		alert('Failed to clear stale cookies: ' + String(e));
+	}
+}
+
 function clearAuthCache() {
 	try {
 		// Clear localStorage auth-related items
@@ -3294,8 +3326,13 @@ pre.diag {
 			If Gmail API works but Google OAuth endpoints fail, your session cookie expired but refresh token is still valid. 
 			Use "Refresh server session" to extend for another hour without re-logging in.
 		</p>
+		<p style="color: rgb(var(--m3-scheme-on-surface-variant)); margin-bottom: 1rem;">
+			<strong>Stale OAuth Cookies:</strong> If you see old OAuth flow cookies (g_pkce, g_state) from a failed login attempt, 
+			they can block new login attempts. Use "Clear stale cookies & refresh" to clean them up and try refreshing your session.
+		</p>
 		<div class="controls">
-			<Button variant="filled" onclick={checkSessionExpiry}>Check session status</Button>
+			<Button variant="filled" onclick={clearStaleOAuthCookies}>Clear stale cookies & refresh</Button>
+			<Button variant="tonal" onclick={checkSessionExpiry}>Check session status</Button>
 			<Button variant="tonal" onclick={refreshServerSession}>Refresh server session</Button>
 			<Button variant="outlined" onclick={clearAuthCache}>Clear authentication cache</Button>
 			<Button variant="outlined" onclick={openAuthSettings}>Open authentication settings</Button>
