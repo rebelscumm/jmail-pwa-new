@@ -206,6 +206,7 @@ async function runFullDiagnostics() {
 	fullDiagnostics.running = true;
 	fullDiagnostics.results = [
 		{ name: 'Environment Check', status: 'pending' },
+		{ name: 'Azure Configuration Check', status: 'pending' },
 		{ name: 'Server Session Verification', status: 'pending' },
 		{ name: 'Authentication Status', status: 'pending' },
 		{ name: 'Localhost Auth Configuration', status: 'pending' },
@@ -235,7 +236,73 @@ async function runFullDiagnostics() {
 			};
 		});
 		
-		// 2. Server Session Verification
+		// 2. Azure Configuration Check
+		await runDiagnosticStep('Azure Configuration Check', async () => {
+			// Check if google-login endpoint is returning status 0 or 500 (config issues)
+			const loginEndpoint = fullDiagnostics.results.find(r => r.name === 'Environment Check')?.data?.['/api/google-login'];
+			
+			if (!loginEndpoint) {
+				return {
+					status: 'warning',
+					message: 'Could not determine login endpoint status',
+					data: { note: 'Run Environment Check first' }
+				};
+			}
+			
+			// Status 0 = endpoint not responding (likely missing env vars or not deployed)
+			if (loginEndpoint.status === 0) {
+				return {
+					status: 'error',
+					message: 'Login endpoint not responding - environment variables likely missing',
+					data: {
+						issue: 'API endpoint returns status 0',
+						likelyCause: 'Missing environment variables in Azure Static Web App configuration',
+						requiredVariables: ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'APP_BASE_URL', 'ENCRYPTION_KEY'],
+						action: 'Go to Azure Portal → Static Web App → Configuration and add environment variables',
+						azurePortalLink: 'https://portal.azure.com/#view/HubsExtension/BrowseResource/resourceType/Microsoft.Web%2FStaticSites'
+					}
+				};
+			}
+			
+			// Status 500 with specific error message
+			if (loginEndpoint.status === 500 && loginEndpoint.body?.error?.includes('Missing GOOGLE')) {
+				return {
+					status: 'error',
+					message: 'Missing Google OAuth credentials',
+					data: {
+						issue: loginEndpoint.body.error,
+						requiredVariables: ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'],
+						action: 'Configure these in Azure Portal → Static Web App → Configuration'
+					}
+				};
+			}
+			
+			// Status 302 (redirect to Google) = properly configured
+			if (loginEndpoint.status === 302 || loginEndpoint.status === 0) {
+				// Note: fetch with redirect:manual returns status 0 for redirects in some browsers
+				if (loginEndpoint.headers?.location?.includes('accounts.google.com')) {
+					return {
+						status: 'success',
+						message: 'Azure environment variables properly configured',
+						data: {
+							redirectLocation: loginEndpoint.headers.location,
+							note: 'Login endpoint correctly redirects to Google OAuth'
+						}
+					};
+				}
+			}
+			
+			return {
+				status: 'success',
+				message: 'Configuration appears valid (endpoint responding)',
+				data: {
+					status: loginEndpoint.status,
+					note: 'Login endpoint is responding, configuration may be valid'
+				}
+			};
+		});
+		
+		// 3. Server Session Verification
 		await runDiagnosticStep('Server Session Verification', async () => {
 			try {
 				const r = await fetch('/api/gmail/profile', { method: 'GET', credentials: 'include' });
@@ -262,7 +329,7 @@ async function runFullDiagnostics() {
 			}
 		});
 		
-		// 3. Authentication Status
+		// 4. Authentication Status
 		await runDiagnosticStep('Authentication Status', async () => {
 			const authCache = {
 				jmail_last_interactive_auth: localStorage.getItem('jmail_last_interactive_auth'),
@@ -283,7 +350,7 @@ async function runFullDiagnostics() {
 			};
 		});
 		
-		// 4. Localhost Auth Configuration
+		// 5. Localhost Auth Configuration
 		await runDiagnosticStep('Localhost Auth Configuration', async () => {
 			const hostname = window.location.hostname;
 			const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1' || hostname.startsWith('192.168.');
@@ -311,7 +378,7 @@ async function runFullDiagnostics() {
 			};
 		});
 		
-		// 5. Action Queue Health
+		// 6. Action Queue Health
 		await runDiagnosticStep('Action Queue Health', async () => {
 			try {
 				const { getDB } = await import('$lib/db/indexeddb');
@@ -347,7 +414,7 @@ async function runFullDiagnostics() {
 			}
 		});
 		
-		// 6. Inbox Sync Status
+		// 7. Inbox Sync Status
 		await runDiagnosticStep('Inbox Sync Status', async () => {
 			try {
 				const { getDB } = await import('$lib/db/indexeddb');
@@ -391,7 +458,7 @@ async function runFullDiagnostics() {
 			}
 		});
 		
-		// 7. Gmail API Connectivity
+		// 8. Gmail API Connectivity
 		await runDiagnosticStep('Gmail API Connectivity', async () => {
 			try {
 				const { listInboxMessageIds } = await import('$lib/gmail/api');
@@ -411,7 +478,7 @@ async function runFullDiagnostics() {
 			}
 		});
 		
-		// 8. Client Storage Health
+		// 9. Client Storage Health
 		await runDiagnosticStep('Client Storage Health', async () => {
 			try {
 				const { getDB } = await import('$lib/db/indexeddb');
@@ -445,7 +512,7 @@ async function runFullDiagnostics() {
 			}
 		});
 		
-		// 9. Cookie Configuration
+		// 10. Cookie Configuration
 		await runDiagnosticStep('Cookie Configuration', async () => {
 			try {
 				const raw = document.cookie || '';
@@ -1040,9 +1107,21 @@ async function probeServer() {
 			const headers: Record<string,string> = {};
 			try { for (const k of Array.from(res.headers.keys())) headers[k] = res.headers.get(k) as string; } catch (_) {}
 			results[ep] = { status: res.status, ok: res.ok, headers, body };
+			
+			// Special handling for status 0 (network failure / not deployed)
+			if (res.status === 0) {
+				results[ep].diagnosis = 'Function not responding - likely not deployed, runtime error, or CORS issue';
+				results[ep].actionable = [
+					'Check Azure Portal: Ensure the function app is running',
+					'Check environment variables: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, APP_BASE_URL',
+					'Check deployment logs for errors',
+					'Try redeploying the Azure Functions'
+				];
+			}
+			
 			addLog('info', [`probe ${ep}`, results[ep]]);
 		} catch (e) {
-			results[ep] = { error: String(e) };
+			results[ep] = { error: String(e), diagnosis: 'Network error or function crash' };
 			addLog('error', [`probe ${ep} failed`, e]);
 		}
 	}
@@ -3137,6 +3216,34 @@ pre.diag {
 					</div>
 				{/if}
 				
+				<!-- Show actionable warning when google-login is not responding -->
+				{#if fullDiagnostics.results.find(r => r.name === 'Environment Check')?.data?.['/api/google-login']?.status === 0}
+					<div style="margin-top: 1rem; padding: 1rem; background: rgb(var(--m3-scheme-error-container)); color: rgb(var(--m3-scheme-on-error-container)); border-radius: 12px;">
+						<h4 style="margin: 0 0 0.5rem; display: flex; align-items: center; gap: 0.5rem;">
+							<Icon icon={iconError} />
+							Critical: Login Endpoint Not Responding
+						</h4>
+						<p style="margin: 0 0 0.5rem;"><strong>Issue:</strong> /api/google-login returns status 0 (not deployed or runtime error)</p>
+						<p style="margin: 0 0 0.5rem;"><strong>This prevents all Google OAuth logins from working.</strong></p>
+						<details style="margin-top: 0.5rem;">
+							<summary style="cursor: pointer; font-weight: 500; margin-bottom: 0.5rem;">Show troubleshooting steps</summary>
+							<ol style="margin: 0.5rem 0; padding-left: 1.5rem;">
+								<li>Check Azure Portal: Go to your Function App and verify it's running</li>
+								<li>Check environment variables in Azure:
+									<ul style="margin: 0.25rem 0;">
+										<li><code>GOOGLE_CLIENT_ID</code></li>
+										<li><code>GOOGLE_CLIENT_SECRET</code></li>
+										<li><code>APP_BASE_URL</code> (should be https://polite-coast-0d53a9710.1.azurestaticapps.net)</li>
+									</ul>
+								</li>
+								<li>Check deployment logs in Azure Portal for errors</li>
+								<li>Try redeploying the Azure Functions from your repository</li>
+								<li>Verify Google OAuth app is still active in Google Cloud Console</li>
+							</ol>
+						</details>
+					</div>
+				{/if}
+				
 				<div class="diagnostics-results">
 					{#each fullDiagnostics.results as result}
 						<div class="diagnostic-item {result.status}">
@@ -3302,6 +3409,107 @@ pre.diag {
 			<Button variant="tonal" onclick={startServerLogin}>Start server login</Button>
 			<Button variant="outlined" onclick={copyDiagnostics}>Copy diagnostics to clipboard</Button>
 			<Button variant="text" color="error" onclick={clearLogs}>Clear client logs</Button>
+		</div>
+	</Card>
+
+	<Card variant="outlined">
+		<div class="section-header">
+			<div class="section-title">
+				<h3>Azure Environment Configuration</h3>
+			</div>
+			<Button variant="text" iconType="left" class="copy-button" onclick={() => copySection('Azure Configuration', {
+				requiredVariables: ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'APP_BASE_URL', 'ENCRYPTION_KEY'],
+				currentAppBase: window.location.origin
+			})}>
+				<Icon icon={iconCopy} />
+				Copy Section
+			</Button>
+		</div>
+		<p style="color: rgb(var(--m3-scheme-on-surface-variant)); margin-bottom: 1rem;">
+			<strong>⚠️ Critical Configuration Required:</strong> Your Azure Static Web App needs environment variables configured for OAuth to work.
+			If <code>/api/google-login</code> returns status 0, environment variables are likely missing or incorrect.
+		</p>
+		
+		<details style="margin-bottom: 1rem; padding: 1rem; background: rgb(var(--m3-scheme-surface-variant) / 0.1); border-radius: 8px;">
+			<summary style="cursor: pointer; font-weight: 500; margin-bottom: 0.5rem;">📋 Required Environment Variables</summary>
+			<table style="width: 100%; margin-top: 0.5rem; border-collapse: collapse;">
+				<thead>
+					<tr style="text-align: left; border-bottom: 1px solid rgb(var(--m3-scheme-outline));">
+						<th style="padding: 0.5rem;">Variable Name</th>
+						<th style="padding: 0.5rem;">Required Value</th>
+					</tr>
+				</thead>
+				<tbody>
+					<tr style="border-bottom: 1px solid rgb(var(--m3-scheme-outline) / 0.3);">
+						<td style="padding: 0.5rem;"><code>GOOGLE_CLIENT_ID</code></td>
+						<td style="padding: 0.5rem;">Your Google OAuth Client ID (from Google Cloud Console)</td>
+					</tr>
+					<tr style="border-bottom: 1px solid rgb(var(--m3-scheme-outline) / 0.3);">
+						<td style="padding: 0.5rem;"><code>GOOGLE_CLIENT_SECRET</code></td>
+						<td style="padding: 0.5rem;">Your Google OAuth Client Secret (from Google Cloud Console)</td>
+					</tr>
+					<tr style="border-bottom: 1px solid rgb(var(--m3-scheme-outline) / 0.3);">
+						<td style="padding: 0.5rem;"><code>APP_BASE_URL</code></td>
+						<td style="padding: 0.5rem;"><code>{window.location.origin}</code></td>
+					</tr>
+					<tr>
+						<td style="padding: 0.5rem;"><code>ENCRYPTION_KEY</code></td>
+						<td style="padding: 0.5rem;">32+ character random string for cookie encryption</td>
+					</tr>
+				</tbody>
+			</table>
+		</details>
+
+		<details style="margin-bottom: 1rem; padding: 1rem; background: rgb(var(--m3-scheme-primary-container) / 0.3); border-radius: 8px;">
+			<summary style="cursor: pointer; font-weight: 500; margin-bottom: 0.5rem;">🔧 How to Configure in Azure Portal</summary>
+			<ol style="margin: 0.5rem 0; padding-left: 1.5rem; line-height: 1.8;">
+				<li>Go to <a href="https://portal.azure.com" target="_blank" rel="noopener">Azure Portal</a></li>
+				<li>Search for and open: <strong>polite-coast-0d53a9710</strong> (your Static Web App)</li>
+				<li>In the left menu, click <strong>Settings → Configuration</strong></li>
+				<li>Under "Application settings", click <strong>+ Add</strong> for each variable</li>
+				<li>Enter the Name and Value, then click <strong>OK</strong></li>
+				<li>Click <strong>Save</strong> at the top</li>
+				<li>Wait 2-3 minutes for changes to take effect</li>
+				<li>Come back here and click "Run Full Diagnostics" to verify</li>
+			</ol>
+		</details>
+
+		<details style="margin-bottom: 1rem; padding: 1rem; background: rgb(var(--m3-scheme-tertiary-container) / 0.3); border-radius: 8px;">
+			<summary style="cursor: pointer; font-weight: 500; margin-bottom: 0.5rem;">🔐 How to Get Google OAuth Credentials</summary>
+			<ol style="margin: 0.5rem 0; padding-left: 1.5rem; line-height: 1.8;">
+				<li>Go to <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener">Google Cloud Console - Credentials</a></li>
+				<li>Select your project (or create one)</li>
+				<li>Click <strong>CREATE CREDENTIALS → OAuth client ID</strong></li>
+				<li>Application type: <strong>Web application</strong></li>
+				<li>Add Authorized redirect URI: <code>{window.location.origin}/api/google-callback</code></li>
+				<li>Click <strong>Create</strong></li>
+				<li>Copy the <strong>Client ID</strong> and <strong>Client Secret</strong></li>
+				<li>Use these values in your Azure configuration</li>
+			</ol>
+		</details>
+
+		<div class="controls">
+			<Button variant="filled" onclick={() => window.open('https://portal.azure.com/#view/HubsExtension/BrowseResource/resourceType/Microsoft.Web%2FStaticSites', '_blank')}>
+				Open Azure Static Web Apps
+			</Button>
+			<Button variant="tonal" onclick={() => window.open('https://console.cloud.google.com/apis/credentials', '_blank')}>
+				Open Google Cloud Console
+			</Button>
+			<Button variant="outlined" onclick={() => {
+				const config = `Required Azure Static Web App Environment Variables:
+
+GOOGLE_CLIENT_ID=<your-google-client-id>
+GOOGLE_CLIENT_SECRET=<your-google-client-secret>
+APP_BASE_URL=${window.location.origin}
+ENCRYPTION_KEY=<32-character-random-string>
+
+Current redirect URI for Google OAuth:
+${window.location.origin}/api/google-callback`;
+				navigator.clipboard.writeText(config);
+				showSnackbar({ message: 'Configuration template copied to clipboard', closable: true });
+			}}>
+				Copy Configuration Template
+			</Button>
 		</div>
 	</Card>
 
