@@ -74,25 +74,30 @@
           console.warn('[Page] Server session check failed:', e);
         }
 
-        // Check if localhost - use special localhost auth
-        const isLocalhost = window.location.hostname === 'localhost' || 
-                           window.location.hostname === '127.0.0.1' || 
-                           window.location.hostname.startsWith('192.168.');
+        // Check if localhost - check for existing auth only, don't auto-init
+        const isLocalhost = typeof window !== 'undefined' && (
+          window.location.hostname === 'localhost' || 
+          window.location.hostname === '127.0.0.1' || 
+          window.location.hostname.startsWith('192.168.')
+        );
         
         if (isLocalhost) {
           try {
-            const { initLocalhostAuth } = await import('$lib/gmail/localhost-auth');
-            await initLocalhostAuth();
-            // Quick recheck of database
-            const db = await getDB();
-            const account = await db.get('auth', 'me');
-            if (account) {
-              console.log('[Page] Localhost auth successful, redirecting to inbox');
-              window.location.href = `${base}/inbox`;
-              return;
+            // Only check for existing tokens, don't trigger new auth
+            const { getLocalhostToken } = await import('$lib/gmail/localhost-auth');
+            const existingToken = getLocalhostToken();
+            if (existingToken) {
+              // Quick recheck of database
+              const db = await getDB();
+              const account = await db.get('auth', 'me');
+              if (account) {
+                console.log('[Page] Found existing localhost auth, redirecting to inbox');
+                window.location.href = `${base}/inbox`;
+                return;
+              }
             }
           } catch (e) {
-            console.warn('[Page] Localhost auth failed:', e);
+            console.warn('[Page] Localhost token check failed:', e);
           }
         }
 
@@ -131,9 +136,145 @@
   async function connect() {
     try {
       const returnTo = `${base}/inbox`;
-      window.location.assign(`/api/google/login?return_to=${encodeURIComponent(returnTo)}`);
+      
+      // Try server login via relative URL (Vite dev server proxies /api to Functions runtime)
+      const loginUrl = '/api/google-login';
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 2000);
+        const response = await fetch(loginUrl, { 
+          method: 'HEAD', 
+          credentials: 'include', 
+          signal: controller.signal 
+        });
+        clearTimeout(timeoutId);
+        if (response.ok || response.status === 405) {
+          // Server endpoint exists, use it
+          console.log('[Auth] Using server-side authentication', loginUrl);
+          if (typeof window !== 'undefined') {
+            window.location.assign(`${loginUrl}?return_to=${encodeURIComponent(returnTo)}`);
+          }
+          return;
+        }
+      } catch (e) {
+        // Server not available, continue to client-side
+        console.log('[Auth] Server login unavailable, using client-side auth', e instanceof Error ? e.message : String(e));
+      }
+      
+      // Fall back to client-side authentication
+      // This requires the client ID to be configured with localhost as an authorized JavaScript origin
+      console.log('[Auth] Starting client-side authentication');
+      
+      CLIENT_ID = CLIENT_ID || resolveGoogleClientId() as string;
+      if (!CLIENT_ID) {
+        showSnackbar({ 
+          message: 'No Google Client ID configured. Please enter a client ID using the "Enter client ID" button.', 
+          timeout: 8000, 
+          closable: true 
+        });
+        return;
+      }
+      
+      // Initialize auth
+      await initAuth(CLIENT_ID);
+      
+      // Use acquireTokenInteractive which will show a popup
+      try {
+        const { acquireTokenInteractive } = await import('$lib/gmail/auth');
+        await acquireTokenInteractive('consent', 'connect_button');
+        
+        // Store the token in localhost auth format for compatibility
+        try {
+          const { getDB } = await import('$lib/db/indexeddb');
+          const db = await getDB();
+          const { getAuthState } = await import('$lib/gmail/auth');
+          const state = getAuthState();
+          
+          if (state.accessToken) {
+            // Store in localhost format
+            localStorage.setItem('LOCALHOST_ACCESS_TOKEN', state.accessToken);
+            localStorage.setItem('LOCALHOST_TOKEN_EXPIRY', String(state.expiryMs || Date.now() + 3600000));
+            
+            // Also store in DB
+            const account = {
+              sub: 'me',
+              accessToken: state.accessToken,
+              tokenExpiry: state.expiryMs || Date.now() + 3600000,
+              lastConnectedAt: Date.now(),
+              lastConnectedOrigin: window.location.origin,
+              lastConnectedUrl: window.location.href,
+              firstConnectedAt: Date.now(),
+              firstConnectedOrigin: window.location.origin,
+              firstConnectedUrl: window.location.href,
+              email: 'client-auth-user@gmail.com',
+              serverManaged: false,
+              localhostMode: 'client'
+            };
+            await db.put('auth', account, 'me');
+          }
+        } catch (dbErr) {
+          console.warn('[Auth] Failed to store auth in DB:', dbErr);
+        }
+        
+        // After successful auth, redirect to inbox
+        if (typeof window !== 'undefined') {
+          window.location.href = `${base}/inbox`;
+        }
+      } catch (authErr) {
+        // Re-throw to be caught by outer catch
+        throw authErr;
+      }
+      
     } catch (e) {
-      console.error('[Auth] Redirect failed', e);
+      console.error('[Auth] Client-side auth failed', e);
+      const errorMessage = e instanceof Error ? e.message : String(e);
+      let userMessage = 'Authentication failed. ';
+      
+      // Provide specific guidance for redirect_uri_mismatch
+      if (errorMessage.includes('redirect_uri_mismatch') || 
+          errorMessage.includes('redirect_uri') || 
+          errorMessage.includes('Client ID Configuration Error') || 
+          errorMessage.includes('Client ID configuration') ||
+          errorMessage.includes('not be secure') ||
+          errorMessage.includes('invalid_request')) {
+        userMessage = '⚠️ Client ID Configuration Issue\n\n';
+        userMessage += 'Your client ID is configured for server-side OAuth, not client-side authentication.\n\n';
+        userMessage += 'To fix this, you have TWO options:\n\n';
+        userMessage += 'OPTION 1: Start the backend server (Recommended)\n';
+        userMessage += '  Run this command in your terminal:\n';
+        userMessage += '  swa start ./svelte-app --api-location ./api --run "npm run dev --prefix svelte-app"\n';
+        userMessage += '  Then click "Sign in with Google" again - it will use server-side auth.\n\n';
+        userMessage += 'OPTION 2: Configure a client-side client ID\n';
+        userMessage += '  1. Go to https://console.cloud.google.com/apis/credentials\n';
+        userMessage += '  2. Create a NEW OAuth 2.0 Client ID (or edit existing)\n';
+        userMessage += '  3. Add "' + window.location.origin + '" to "Authorized JavaScript origins"\n';
+        userMessage += '  4. Save the Client ID\n';
+        userMessage += '  5. Use "Enter client ID" button to set it\n\n';
+        userMessage += 'Note: "Authorized JavaScript origins" is different from "Authorized redirect URIs"';
+      } else if (errorMessage.includes('No client ID available')) {
+        userMessage = 'No Google Client ID configured. Please enter a client ID using the "Enter client ID" button.';
+      }
+      
+      showSnackbar({ 
+        message: userMessage, 
+        timeout: 20000, 
+        closable: true,
+        actions: {
+          'Copy Error Details': async () => {
+            try {
+              await copyGmailDiagnosticsToClipboard({ 
+                error: errorMessage,
+                origin: window.location.origin,
+                clientId: CLIENT_ID ? CLIENT_ID.slice(0, 20) + '...' : 'not set',
+                note: 'For client-side auth, add this origin to "Authorized JavaScript origins" in Google Cloud Console'
+              });
+              showSnackbar({ message: 'Error details copied to clipboard', timeout: 3000 });
+            } catch (copyErr) {
+              console.error('Failed to copy error details:', copyErr);
+            }
+          }
+        }
+      });
     }
   }
 

@@ -1,5 +1,6 @@
 import { fetchTokenInfo } from '$lib/gmail/auth';
 import { pushGmailDiag, getAndClearGmailDiagnostics } from '$lib/gmail/diag';
+import { getLocalhostToken } from '$lib/gmail/localhost-auth';
 import type { GmailLabel, GmailMessage, GmailAttachment } from '$lib/types';
 
 const GMAIL_PROXY_BASE = '/api/gmail';
@@ -180,8 +181,9 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     }
   }
   
-  // Default: use server proxy
-  let res = await fetch(`${GMAIL_PROXY_BASE}${path}`, {
+  // Default: use server proxy via relative URL (Vite dev server proxies /api to Functions runtime)
+  const apiUrl = `${GMAIL_PROXY_BASE}${path}`;
+  let res = await fetch(apiUrl, {
     ...init,
     headers: {
       'Content-Type': 'application/json',
@@ -190,6 +192,44 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     credentials: 'include'
   });
   if (!res.ok) {
+    // If server returns 404, check if we have an existing localhost token to use
+    // But don't auto-initialize auth - that should only happen on user action
+    if (res.status === 404 && isLocalhost) {
+      pushGmailDiag({ type: 'server_proxy_404', path });
+      // Only use existing token if available - don't trigger new auth
+      const clientToken = getLocalhostToken();
+      
+      if (clientToken) {
+        pushGmailDiag({ type: 'using_existing_localhost_token', path });
+        const directUrl = `https://gmail.googleapis.com/gmail/v1/users/me${path}`;
+        const clientRes = await fetch(directUrl, {
+          ...init,
+          headers: {
+            'Authorization': `Bearer ${clientToken}`,
+            'Content-Type': 'application/json',
+            ...(init?.headers || {})
+          }
+        });
+        
+        if (clientRes.ok) {
+          const text = await clientRes.text();
+          pushGmailDiag({ type: 'localhost_token_success', path, status: clientRes.status });
+          try {
+            return JSON.parse(text) as T;
+          } catch (_) {
+            return undefined as unknown as T;
+          }
+        } else {
+          pushGmailDiag({ type: 'localhost_token_api_error', path, status: clientRes.status });
+          // Fall through to error handling
+        }
+      } else {
+        pushGmailDiag({ type: 'server_proxy_404_no_token', path });
+        // Don't auto-initialize auth here - let it fail gracefully
+        // User should click "Sign in" button to authenticate
+      }
+    }
+    
     let message = `Gmail API error ${res.status}`;
     let details: unknown;
     try {
@@ -200,10 +240,34 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
           details = body;
           // Common Google error shape: { error: { code, message, status, errors } }
           const googleMessage = (body as any)?.error?.message || (body as any)?.message;
-          if (googleMessage) message = googleMessage as string;
+          if (googleMessage) {
+            message = googleMessage as string;
+          } else if (res.status === 500) {
+            // For 500 errors, try to extract more details
+            const errorCode = (body as any)?.error?.code;
+            const errorStatus = (body as any)?.error?.status;
+            const errorReasons = Array.isArray((body as any)?.error?.errors) 
+              ? (body as any).error.errors.map((e: any) => e?.reason || e?.message).filter(Boolean).join(', ')
+              : undefined;
+            if (errorReasons) {
+              message = `Gmail API error ${res.status}: ${errorReasons}`;
+            } else if (errorCode || errorStatus) {
+              message = `Gmail API error ${res.status} (${errorCode || errorStatus})`;
+            } else {
+              // Include a snippet of the response body for debugging
+              const bodyStr = JSON.stringify(body).slice(0, 200);
+              message = `Gmail API error ${res.status}. Response: ${bodyStr}`;
+            }
+          }
         } catch (_) {
           details = { nonJsonBody: text.slice(0, 256) };
+          if (res.status === 500 && text) {
+            // For 500 errors with non-JSON response, include a snippet
+            message = `Gmail API error ${res.status}. Response: ${text.slice(0, 200)}`;
+          }
         }
+      } else if (res.status === 500) {
+        message = `Gmail API error ${res.status} (empty response)`;
       }
     } catch (_) {
       // ignore parse errors

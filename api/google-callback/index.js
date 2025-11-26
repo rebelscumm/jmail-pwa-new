@@ -1,10 +1,21 @@
 const fetch = global.fetch;
-const { popPkceVerifier, popStateCookie, setRefreshCookie, setSessionCookie, parseCookies } = require("../_lib/session");
+const { popOAuthCookie, setAuthCookie, parseCookies } = require("../_lib/session");
+const { setCorsHeaders } = require("../_lib/cors");
 
 module.exports = async function (context, req) {
   try {
+    // Handle OPTIONS preflight requests
+    if (req.method === "OPTIONS") {
+      const headers = {};
+      setCorsHeaders(headers, req);
+      context.res = { status: 200, headers, body: "" };
+      return;
+    }
+    
     if (req.method !== "GET") {
-      context.res = { status: 405, headers: { "Allow": "GET" }, body: "" };
+      const headers = { "Allow": "GET" };
+      setCorsHeaders(headers, req);
+      context.res = { status: 405, headers, body: "" };
       return;
     }
 
@@ -20,30 +31,29 @@ module.exports = async function (context, req) {
   });
   
   if (!clientId || !clientSecret || !redirectUri) {
-    context.res = { status: 500, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ error: "Missing GOOGLE_* envs or APP_BASE_URL" }) };
+    const headers = { "Content-Type": "application/json" };
+    setCorsHeaders(headers, req);
+    context.res = { status: 500, headers, body: JSON.stringify({ error: "Missing GOOGLE_* envs or APP_BASE_URL" }) };
     return;
   }
 
   const cookies = [];
-  const expectedStateCookie = popStateCookie(req, cookies) || "";
+  // Use combined OAuth cookie that has both PKCE verifier and state
+  const { verifier: pkceVerifier, state: expectedStateCookie } = popOAuthCookie(req, cookies);
+  
   // Some hosts/clients URL-encode cookie values (e.g. ':' -> '%3A').
   // Decode for reliable comparison with the `state` query param.
-  let expectedStateCookieDecoded = expectedStateCookie;
+  let expectedStateCookieDecoded = expectedStateCookie || "";
   try {
-    expectedStateCookieDecoded = decodeURIComponent(expectedStateCookie);
+    expectedStateCookieDecoded = decodeURIComponent(expectedStateCookie || "");
   } catch (_) {
     // fall back to raw value if decoding fails
-    expectedStateCookieDecoded = expectedStateCookie;
+    expectedStateCookieDecoded = expectedStateCookie || "";
   }
   
-  console.log('google-callback: cookie parsing', {
+  console.log('google-callback: oauth cookie', {
     expectedStateCookie: expectedStateCookie ? 'present' : 'missing',
-    expectedStateCookieDecoded: expectedStateCookieDecoded ? 'present' : 'missing'
-  });
-  
-  const pkceVerifier = popPkceVerifier(req, cookies);
-  
-  console.log('google-callback: pkce verifier', {
+    expectedStateCookieDecoded: expectedStateCookieDecoded ? 'present' : 'missing',
     pkceVerifierPresent: !!pkceVerifier
   });
 
@@ -72,7 +82,9 @@ module.exports = async function (context, req) {
       appBase: process.env.APP_BASE_URL || null,
       requestHeaders: req.headers || {}
     };
-    context.res = { status: 400, headers: { "Content-Type": "application/json", "Set-Cookie": cookies }, body: JSON.stringify(diag) };
+    const headers = { "Content-Type": "application/json", "Set-Cookie": cookies };
+    setCorsHeaders(headers, req);
+    context.res = { status: 400, headers, body: JSON.stringify(diag) };
     return;
   }
 
@@ -91,7 +103,9 @@ module.exports = async function (context, req) {
       appBase: process.env.APP_BASE_URL || null,
       requestHeaders: req.headers || {}
     };
-    context.res = { status: 400, headers: { "Content-Type": "application/json", "Set-Cookie": cookies }, body: JSON.stringify(diag) };
+    const headers = { "Content-Type": "application/json", "Set-Cookie": cookies };
+    setCorsHeaders(headers, req);
+    context.res = { status: 400, headers, body: JSON.stringify(diag) };
     return;
   }
   // The cookie format is "<state>:<returnTo>" after decoding.
@@ -127,7 +141,9 @@ module.exports = async function (context, req) {
   });
   
   if (!r.ok) {
-    context.res = { status: 400, headers: { "Set-Cookie": cookies, "Content-Type": "application/json" }, body: JSON.stringify({ error: "token_exchange_failed", details: text.slice(0, 512) }) };
+    const headers = { "Set-Cookie": cookies, "Content-Type": "application/json" };
+    setCorsHeaders(headers, req);
+    context.res = { status: 400, headers, body: JSON.stringify({ error: "token_exchange_failed", details: text.slice(0, 512) }) };
     return;
   }
 
@@ -149,12 +165,14 @@ module.exports = async function (context, req) {
   } catch (_) {}
 
   if (!refresh_token) {
-    context.res = { status: 400, headers: { "Set-Cookie": cookies, "Content-Type": "application/json" }, body: JSON.stringify({ error: "no_refresh_token_returned", note: "Use prompt=consent once and ensure access_type=offline" }) };
+    const headers = { "Set-Cookie": cookies, "Content-Type": "application/json" };
+    setCorsHeaders(headers, req);
+    context.res = { status: 400, headers, body: JSON.stringify({ error: "no_refresh_token_returned", note: "Use prompt=consent once and ensure access_type=offline" }) };
     return;
   }
 
-  // Issue cookies
-  console.log('google-callback: setting cookies', {
+  // Issue combined auth cookie (avoids multiple Set-Cookie header issues with SWA CLI)
+  console.log('google-callback: setting auth cookie', {
     refreshTokenPresent: !!refresh_token,
     sub,
     email,
@@ -162,10 +180,11 @@ module.exports = async function (context, req) {
   });
   
   try {
-    setRefreshCookie(cookies, { refresh_token, sub, email, scope });
     const now = Math.floor(Date.now() / 1000);
-    setSessionCookie(cookies, { sub, email, scope, iat: now, exp: now + 3600 });
-    console.log('google-callback: cookies set successfully', {
+    const refreshPayload = { refresh_token, sub, email, scope };
+    const sessionPayload = { sub, email, scope, iat: now, exp: now + 3600 };
+    setAuthCookie(cookies, refreshPayload, sessionPayload);
+    console.log('google-callback: auth cookie set successfully', {
       cookieCount: cookies.length
     });
   } catch (cookieError) {
@@ -176,9 +195,11 @@ module.exports = async function (context, req) {
     throw cookieError;
   }
 
+  const headers = { Location: returnTo || "/", "Set-Cookie": cookies };
+  setCorsHeaders(headers, req);
   context.res = {
     status: 302,
-    headers: { Location: returnTo || "/", "Set-Cookie": cookies },
+    headers,
     body: ""
   };
   } catch (error) {
@@ -188,9 +209,11 @@ module.exports = async function (context, req) {
       query: req.query,
       headers: req.headers
     });
+    const headers = { "Content-Type": "application/json" };
+    setCorsHeaders(headers, req);
     context.res = {
       status: 500,
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify({ 
         error: "internal_server_error", 
         message: error.message,

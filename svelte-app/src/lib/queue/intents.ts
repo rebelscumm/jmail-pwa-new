@@ -83,16 +83,26 @@ export async function queueThreadModify(threadId: string, addLabelIds: string[],
   if (!thread) return;
   
   // When optimisticLocal is true (default), update local store immediately
-  // The baseInboxCount will reflect the change, so NO optimistic counter adjustment needed
+  // This updates the base count immediately, providing instant UI feedback
   // When optimisticLocal is false (bulk operations), DON'T update local store
-  // The caller has already applied optimistic counter adjustments manually
+  // The caller should apply optimistic counter adjustments manually if needed
   if (options?.optimisticLocal !== false) {
     await updateLocalThreadAndMessages(threadId, addLabelIds, removeLabelIds);
   }
+  
   const queued = await maybeEnqueue(threadId, thread.messageIds, addLabelIds, removeLabelIds);
   
-  // Refresh sync state to update pending operations count
+  // After enqueuing, recalculate optimistic counters to ensure they reflect pending ops
+  // This ensures counts update immediately even if local state update hasn't propagated yet
   if (queued) {
+    try {
+      const { recalculateOptimisticCounters } = await import('$lib/stores/optimistic-counters');
+      // Recalculate immediately to update counts optimistically
+      void recalculateOptimisticCounters();
+    } catch (e) {
+      console.warn('[queueThreadModify] Failed to recalculate optimistic counters:', e);
+    }
+    
     try {
       const { refreshSyncState } = await import('$lib/stores/queue');
       await refreshSyncState();

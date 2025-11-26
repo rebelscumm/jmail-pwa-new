@@ -156,11 +156,16 @@
       console.warn('[Init] refreshSyncState failed:', err);
     }
     
-    // Load user profile for recipient filtering
+    // Load user profile for recipient filtering (skip on public pages to avoid auth redirects)
     try {
-      loadUserProfile().catch(() => {
-        // Silently handle errors during profile loading
-      });
+      const publicPaths = ['/auth-debug', '/auth-test', '/diagnostics', '/settings'];
+      const currentPath = typeof window !== 'undefined' ? window.location.pathname : '';
+      const isPublicPage = publicPaths.some(p => currentPath.startsWith(p)) || currentPath === '/' || currentPath === '';
+      if (!isPublicPage) {
+        loadUserProfile().catch(() => {
+          // Silently handle errors during profile loading
+        });
+      }
     } catch (err) {
       console.warn('[Init] loadUserProfile failed:', err);
     }
@@ -269,78 +274,8 @@
     window.addEventListener('keydown', onKeyDown);
     onKeyDownRef = onKeyDown;
 
-    // Comprehensive authentication check with server session support
-    // Skip redirect for debug and test pages
-    (async () => {
-      try {
-        // Allow access to debug and test pages without authentication
-        const debugPaths = ['/auth-debug', '/auth-test'];
-        const currentPath = location.pathname;
-        const isDebugPath = debugPaths.some(path => currentPath.startsWith(path));
-        
-        console.log('[Layout] Auth check - Current path:', currentPath, 'Is debug path:', isDebugPath);
-        
-        if (isDebugPath) {
-          return; // Skip authentication check for debug pages
-        }
-
-        // First check for server session (most reliable for authenticated users)
-        let hasValidAuth = false;
-        try {
-          const { checkServerSession } = await import('$lib/gmail/server-session-check');
-          const serverSession = await checkServerSession();
-          if (serverSession.authenticated) {
-            console.log('[Layout] Found valid server session, user is authenticated');
-            hasValidAuth = true;
-            
-            // Store server session for consistency
-            try {
-              const { storeServerSessionInDB } = await import('$lib/gmail/server-session-check');
-              await storeServerSessionInDB(serverSession);
-            } catch (e) {
-              console.warn('[Layout] Failed to store server session:', e);
-            }
-          }
-        } catch (e) {
-          console.warn('[Layout] Server session check failed:', e);
-        }
-
-        // If no server session, check local database
-        if (!hasValidAuth) {
-          try {
-            const { getDB } = await import('$lib/db/indexeddb');
-            const db = await getDB();
-            const account = await db.get('auth', 'me');
-            if (account) {
-              hasValidAuth = true;
-              // Apply server session to session manager if applicable
-              try {
-                if ((account as any).serverManaged) {
-                  sessionManager.applyServerSession((account as any).email, (account as any).tokenExpiry);
-                  console.log('[Layout] Applied server-managed session to sessionManager for', (account as any).email);
-                }
-              } catch (e) {
-                console.warn('[Layout] Failed to apply server session to sessionManager:', e);
-              }
-            }
-          } catch (dbErr) {
-            console.warn('[Layout] Database check failed:', dbErr);
-          }
-        }
-
-        // Only redirect to connect screen if we're not already there and no auth found
-        if (!hasValidAuth) {
-          const target = (base || '') + '/';
-          if (location.pathname !== target) {
-            console.log('[Layout] No authentication found, redirecting to connect screen');
-            location.href = target;
-          }
-        }
-        
-      } catch (err) {
-        console.warn('[Layout] Auth check failed:', err);
-      }
-    })();
+    // Authentication check is now handled reactively below via $effect
+    // This ensures it works with client-side navigation
 
     // Global error reporting to snackbar with Copy action
     try {
@@ -485,6 +420,83 @@
   const isViewer = $derived(/\/viewer\//.test(page.url.pathname));
   const backHref = $derived(isViewer ? (base || '') + '/inbox' : undefined);
   const isSettings = $derived(normalizePath(page.url.pathname).startsWith(normalizePath((base || '') + '/settings')));
+
+  // Reactive authentication check - runs on each route change
+  let authCheckDone = $state(false);
+  $effect(() => {
+    const currentPath = page.url.pathname;
+    
+    // Allow access to debug, test, diagnostics, and settings pages without authentication
+    const publicPaths = ['/auth-debug', '/auth-test', '/diagnostics', '/settings'];
+    const isPublicPath = publicPaths.some(path => currentPath.startsWith(path)) || currentPath === '/' || currentPath === '';
+    
+    console.log('[Layout] Auth check - Current path:', currentPath, 'Is public path:', isPublicPath);
+    
+    if (isPublicPath || authCheckDone) {
+      return; // Skip authentication check for public pages or if already done
+    }
+
+    // Run auth check asynchronously
+    (async () => {
+      try {
+        let hasValidAuth = false;
+        
+        // First check for server session
+        try {
+          const { checkServerSession } = await import('$lib/gmail/server-session-check');
+          const serverSession = await checkServerSession();
+          if (serverSession.authenticated) {
+            console.log('[Layout] Found valid server session, user is authenticated');
+            hasValidAuth = true;
+            
+            try {
+              const { storeServerSessionInDB } = await import('$lib/gmail/server-session-check');
+              await storeServerSessionInDB(serverSession);
+            } catch (e) {
+              console.warn('[Layout] Failed to store server session:', e);
+            }
+          }
+        } catch (e) {
+          console.warn('[Layout] Server session check failed:', e);
+        }
+
+        // If no server session, check local database
+        if (!hasValidAuth) {
+          try {
+            const { getDB } = await import('$lib/db/indexeddb');
+            const db = await getDB();
+            const account = await db.get('auth', 'me');
+            if (account) {
+              hasValidAuth = true;
+              try {
+                if ((account as any).serverManaged) {
+                  sessionManager.applyServerSession((account as any).email, (account as any).tokenExpiry);
+                  console.log('[Layout] Applied server-managed session to sessionManager for', (account as any).email);
+                }
+              } catch (e) {
+                console.warn('[Layout] Failed to apply server session to sessionManager:', e);
+              }
+            }
+          } catch (dbErr) {
+            console.warn('[Layout] Database check failed:', dbErr);
+          }
+        }
+
+        authCheckDone = true;
+
+        // Only redirect to connect screen if no auth found
+        if (!hasValidAuth) {
+          const target = (base || '') + '/';
+          if (page.url.pathname !== target && page.url.pathname !== '/') {
+            console.log('[Layout] No authentication found, redirecting to connect screen');
+            location.href = target;
+          }
+        }
+      } catch (err) {
+        console.warn('[Layout] Auth check failed:', err);
+      }
+    })();
+  });
 </script>
 
 <svelte:head>

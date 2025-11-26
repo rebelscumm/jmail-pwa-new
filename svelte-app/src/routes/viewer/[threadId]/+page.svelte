@@ -541,17 +541,24 @@ import BottomSheet from "$lib/containers/BottomSheet.svelte";
   async function downloadMessage(mid: string) {
     if (loadingMap[mid]) return;
     loadingMap[mid] = true;
+    errorMap[mid] = ''; // Clear any previous error
     try {
       const full = await getMessageFull(mid);
       messages.set({ ...$messages, [mid]: full });
       errorMap[mid] = '';
+      if (!full?.bodyText && !full?.bodyHtml) {
+        // eslint-disable-next-line no-console
+        console.error('[Viewer] Message did not load body; see diagnostics.', { mid });
+        await copyDiagnostics('download_no_body', mid);
+      }
+    } catch (e) {
+      const errorMsg = e instanceof Error ? e.message : String(e);
+      errorMap[mid] = errorMsg;
+      // eslint-disable-next-line no-console
+      console.error('[Viewer] Failed to load message', mid, e);
+      void copyDiagnostics('download_failed', mid, e);
     } finally {
       loadingMap[mid] = false;
-    }
-    if (!$messages[mid]?.bodyText && !$messages[mid]?.bodyHtml) {
-      // eslint-disable-next-line no-console
-      console.error('[Viewer] Message did not load body; see diagnostics.', { mid });
-      await copyDiagnostics('download_no_body', mid);
     }
   }
 

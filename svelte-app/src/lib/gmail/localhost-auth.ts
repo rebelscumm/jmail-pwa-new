@@ -32,63 +32,82 @@ function isLocalhost(): boolean {
   return hostname === 'localhost' || hostname === '127.0.0.1' || hostname.startsWith('192.168.');
 }
 
+// Track if auth initialization is in progress to prevent multiple simultaneous attempts
+let authInitInProgress = false;
+let authInitPromise: Promise<void> | null = null;
+
 // Initialize localhost authentication with server-first approach
 export async function initLocalhostAuth(): Promise<void> {
   if (!isLocalhost()) {
     throw new Error('This function is only for localhost development');
   }
 
-  pushGmailDiag({ type: 'localhost_auth_init_start' });
-
-  try {
-    // Step 1: Try server session (SWA CLI or production)
-    const serverResult = await tryServerAuth();
-    if (serverResult.success) {
-      localAuthState.set({
-        ready: true,
-        hasToken: true,
-        email: serverResult.email,
-        mode: 'server',
-        tokenExpiry: serverResult.tokenExpiry
-      });
-      pushGmailDiag({ type: 'localhost_auth_success', mode: 'server' });
-      return;
-    }
-
-    // Step 2: Fall back to GIS client auth
-    const clientResult = await tryClientAuth();
-    if (clientResult.success) {
-      localAuthState.set({
-        ready: true,
-        hasToken: true,
-        email: clientResult.email,
-        mode: 'client',
-        tokenExpiry: clientResult.tokenExpiry
-      });
-      pushGmailDiag({ type: 'localhost_auth_success', mode: 'client' });
-      return;
-    }
-
-    // Step 3: No auth available
-    localAuthState.set({
-      ready: true,
-      hasToken: false,
-      mode: 'none'
-    });
-    pushGmailDiag({ type: 'localhost_auth_no_auth' });
-
-  } catch (error) {
-    pushGmailDiag({ 
-      type: 'localhost_auth_error', 
-      error: error instanceof Error ? error.message : String(error) 
-    });
-    localAuthState.set({
-      ready: true,
-      hasToken: false,
-      mode: 'none'
-    });
-    throw error;
+  // Prevent multiple simultaneous initialization attempts
+  if (authInitInProgress && authInitPromise) {
+    pushGmailDiag({ type: 'localhost_auth_init_already_in_progress' });
+    return authInitPromise;
   }
+
+  authInitInProgress = true;
+  authInitPromise = (async () => {
+    try {
+      pushGmailDiag({ type: 'localhost_auth_init_start' });
+
+      // Step 1: Try server session (SWA CLI or production)
+      const serverResult = await tryServerAuth();
+      if (serverResult.success) {
+        localAuthState.set({
+          ready: true,
+          hasToken: true,
+          email: serverResult.email,
+          mode: 'server',
+          tokenExpiry: serverResult.tokenExpiry
+        });
+        pushGmailDiag({ type: 'localhost_auth_success', mode: 'server' });
+        return;
+      }
+
+      // Step 2: Check for existing client token first (don't trigger new popup)
+      const existingToken = getLocalhostToken();
+      if (existingToken) {
+        localAuthState.set({
+          ready: true,
+          hasToken: true,
+          email: 'localhost-client-user',
+          mode: 'client',
+          tokenExpiry: parseInt(localStorage.getItem('LOCALHOST_TOKEN_EXPIRY') || '0')
+        });
+        pushGmailDiag({ type: 'localhost_auth_success', mode: 'client', source: 'existing_token' });
+        return;
+      }
+
+      // Step 3: Only try interactive client auth if explicitly requested (not auto-triggered)
+      // This prevents popup spam when multiple API calls fail
+      localAuthState.set({
+        ready: true,
+        hasToken: false,
+        mode: 'none'
+      });
+      pushGmailDiag({ type: 'localhost_auth_no_auth', note: 'No existing token, user must click sign in' });
+
+    } catch (error) {
+      pushGmailDiag({ 
+        type: 'localhost_auth_error', 
+        error: error instanceof Error ? error.message : String(error) 
+      });
+      localAuthState.set({
+        ready: true,
+        hasToken: false,
+        mode: 'none'
+      });
+      throw error;
+    } finally {
+      authInitInProgress = false;
+      authInitPromise = null;
+    }
+  })();
+
+  return authInitPromise;
 }
 
 // Try server authentication (SWA CLI or production)
@@ -231,7 +250,34 @@ async function tryClientAuth(): Promise<{ success: boolean; email?: string; toke
         tokenClient.callback = (response: any) => {
           clearTimeout(timeout);
           if (response.error) {
-            reject(new Error(response.error));
+            const error = response.error as string;
+            // Handle redirect_uri_mismatch specifically
+            if (error.includes('redirect_uri_mismatch') || error.includes('redirect_uri')) {
+              const origin = window.location.origin;
+              const helpfulError = new Error(
+                `Client ID Configuration Error: This client ID is configured for server-side OAuth, not client-side authentication.\n\n` +
+                `To fix this, you have two options:\n\n` +
+                `Option 1: Start the backend server (Recommended)\n` +
+                `  Run: swa start ./svelte-app --api-location ./api --run "npm run dev --prefix svelte-app"\n` +
+                `  Then use the "Sign in with Google" button - it will use server-side auth.\n\n` +
+                `Option 2: Configure client-side client ID\n` +
+                `  1. Go to https://console.cloud.google.com/apis/credentials\n` +
+                `  2. Create a NEW OAuth 2.0 Client ID (or edit existing)\n` +
+                `  3. Add "${origin}" to "Authorized JavaScript origins"\n` +
+                `  4. Save the Client ID\n` +
+                `  5. Use "Enter client ID" button to set it\n\n` +
+                `Original error: ${error}`
+              );
+              pushGmailDiag({ 
+                type: 'localhost_client_auth_redirect_uri_mismatch', 
+                error, 
+                origin,
+                clientId: clientId ? clientId.slice(0, 20) + '...' : 'unknown'
+              });
+              reject(helpfulError);
+            } else {
+              reject(new Error(error));
+            }
           } else {
             resolve(response);
           }

@@ -2215,6 +2215,21 @@
       }
       try {
         await acquireTokenInteractive('consent', 'inbox_signin_click');
+        
+        // Store the token in localhost auth format for compatibility
+        try {
+          const { getAuthState } = await import('$lib/gmail/auth');
+          const state = getAuthState();
+          
+          if (state.accessToken) {
+            // Store in localhost format for direct API calls
+            localStorage.setItem('LOCALHOST_ACCESS_TOKEN', state.accessToken);
+            localStorage.setItem('LOCALHOST_TOKEN_EXPIRY', String(state.expiryMs || Date.now() + 3600000));
+          }
+        } catch (storageErr) {
+          console.warn('[Auth] Failed to store token in localStorage:', storageErr);
+        }
+        
         await hydrate();
       } catch (e: unknown) {
         // If auth is intentionally server-managed, fall back to server-side login flow

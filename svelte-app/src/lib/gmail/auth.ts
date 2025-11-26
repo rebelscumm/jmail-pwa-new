@@ -271,8 +271,34 @@ export async function acquireTokenInteractive(prompt: 'none' | 'consent' | 'sele
     const token = await withTimeout(
       new Promise<TokenResponse>((resolve, reject) => {
         tokenClient!.callback = (res) => {
-          if ('error' in res) reject(new Error(res.error as string));
-          else resolve(res as unknown as TokenResponse);
+          if ('error' in res) {
+            const error = res.error as string;
+            // Handle redirect_uri_mismatch specifically for client-side auth
+            if (error.includes('redirect_uri_mismatch') || error.includes('redirect_uri')) {
+              const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5175';
+              const helpfulError = new Error(
+                `Client ID configuration error: This client ID is configured for server-side OAuth, but we're using client-side authentication.\n\n` +
+                `To fix this:\n` +
+                `1. Go to https://console.cloud.google.com/apis/credentials\n` +
+                `2. Find your OAuth 2.0 Client ID\n` +
+                `3. Add "${origin}" to "Authorized JavaScript origins"\n` +
+                `4. Make sure it's NOT in "Authorized redirect URIs" (that's for server-side OAuth)\n` +
+                `5. Save and try again\n\n` +
+                `Original error: ${error}`
+              );
+              pushGmailDiag({ 
+                type: 'auth_error_redirect_uri_mismatch', 
+                error, 
+                origin,
+                clientId: (tokenClient as any)?._client_id || 'unknown'
+              });
+              reject(helpfulError);
+            } else {
+              reject(new Error(error));
+            }
+          } else {
+            resolve(res as unknown as TokenResponse);
+          }
         };
         // Default to 'consent' to ensure full scopes are granted on first login
         tokenClient!.requestAccessToken({ prompt });

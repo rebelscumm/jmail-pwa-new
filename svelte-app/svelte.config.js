@@ -13,8 +13,7 @@ const config = {
       relative: false,
     },
     prerender: { 
-      handleHttpError: "warn",
-      handleUnseenRoutes: 'ignore'
+      handleHttpError: "warn"
     },
   },
 };

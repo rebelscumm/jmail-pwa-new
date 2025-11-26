@@ -1,5 +1,6 @@
 const fetch = global.fetch;
 const { getSession, getRefreshPayload, setSessionCookie, setRefreshCookie } = require("../_lib/session");
+const { setCorsHeaders } = require("../_lib/cors");
 
 async function getGoogleAccessToken(payload) {
   const clientId = process.env.GOOGLE_CLIENT_ID;
@@ -24,6 +25,14 @@ async function getGoogleAccessToken(payload) {
 }
 
 module.exports = async function (context, req) {
+  // Handle OPTIONS preflight requests
+  if (req.method === "OPTIONS") {
+    const headers = {};
+    setCorsHeaders(headers, req);
+    context.res = { status: 200, headers, body: "" };
+    return;
+  }
+  
   const method = (req.method || "GET").toUpperCase();
   // Extract path from Azure Functions route parameters
   const rawPath = req.params && req.params.segments ? String(req.params.segments) : "";
@@ -41,7 +50,9 @@ module.exports = async function (context, req) {
   const session = getSession(req);
   const payload = getRefreshPayload(req);
   if (!session || !payload || !payload.refresh_token) {
-    context.res = { status: 401, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ error: "unauthenticated" }) };
+    const headers = { "Content-Type": "application/json" };
+    setCorsHeaders(headers, req);
+    context.res = { status: 401, headers, body: JSON.stringify({ error: "unauthenticated" }) };
     return;
   }
 
@@ -57,7 +68,9 @@ module.exports = async function (context, req) {
       setRefreshCookie(resHeaders, { refresh_token: tok.refresh_token, sub: session.sub, email: session.email, scope: tok.scope || session.scope });
     }
   } catch (e) {
-    context.res = { status: 401, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ error: "token_refresh_failed" }) };
+    const headers = { "Content-Type": "application/json" };
+    setCorsHeaders(headers, req);
+    context.res = { status: 401, headers, body: JSON.stringify({ error: "token_refresh_failed" }) };
     return;
   }
 
@@ -97,6 +110,7 @@ module.exports = async function (context, req) {
     const v = r.headers.get(h);
     if (v) hdr[h] = v;
   }
+  setCorsHeaders(hdr, req);
   context.res = { status: r.status, headers: hdr, body: text };
 };
 

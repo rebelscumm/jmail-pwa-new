@@ -1,9 +1,20 @@
 const { sha256Base64url, randomId } = require("../_lib/crypto");
-const { setPkceCookie, setStateCookie } = require("../_lib/session");
+const { setOAuthCookie } = require("../_lib/session");
+const { setCorsHeaders } = require("../_lib/cors");
 
 module.exports = async function (context, req) {
+  // Handle OPTIONS preflight requests
+  if (req.method === "OPTIONS") {
+    const headers = {};
+    setCorsHeaders(headers, req);
+    context.res = { status: 200, headers, body: "" };
+    return;
+  }
+  
   if (req.method !== "GET") {
-    context.res = { status: 405, headers: { "Allow": "GET" }, body: "" };
+    const headers = { "Allow": "GET" };
+    setCorsHeaders(headers, req);
+    context.res = { status: 405, headers, body: "" };
     return;
   }
 
@@ -15,7 +26,9 @@ module.exports = async function (context, req) {
     "https://www.googleapis.com/auth/gmail.readonly"
   ].join(" ");
   if (!clientId || !redirectUri) {
-    context.res = { status: 500, body: JSON.stringify({ error: "Missing GOOGLE_CLIENT_ID or APP_BASE_URL" }), headers: { "Content-Type": "application/json" } };
+    const headers = { "Content-Type": "application/json" };
+    setCorsHeaders(headers, req);
+    context.res = { status: 500, body: JSON.stringify({ error: "Missing GOOGLE_CLIENT_ID or APP_BASE_URL" }), headers };
     return;
   }
 
@@ -24,9 +37,10 @@ module.exports = async function (context, req) {
   const state = randomId(16);
   const returnTo = (req.query && req.query.return_to) ? String(req.query.return_to) : (process.env.APP_BASE_URL || "/");
 
+  // Use a single combined cookie to avoid issues with multiple Set-Cookie headers
   const cookies = [];
-  setPkceCookie(cookies, codeVerifier);
-  setStateCookie(cookies, state + ":" + encodeURIComponent(returnTo));
+  const stateWithReturn = state + ":" + encodeURIComponent(returnTo);
+  setOAuthCookie(cookies, codeVerifier, stateWithReturn);
 
   const params = new URLSearchParams({
     client_id: clientId,
@@ -41,13 +55,14 @@ module.exports = async function (context, req) {
     state
   });
 
+  const headers = {
+    Location: `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`,
+    "Set-Cookie": cookies
+  };
+  setCorsHeaders(headers, req);
   context.res = {
     status: 302,
-    headers: {
-      Location: `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`,
-      "Set-Cookie": cookies
-    },
+    headers,
     body: ""
   };
 };
-
