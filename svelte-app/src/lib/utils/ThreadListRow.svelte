@@ -1034,6 +1034,11 @@
         {/if}
       </span>
       {threadDisplaySubject}
+      {#if hasUnsubscribeCapability}
+        <button class="inline-unsubscribe" aria-label="Unsubscribe" onclick={handleUnsubscribe} disabled={extractingUnsub} title={extractingUnsub ? 'Finding unsubscribe link…' : 'Unsubscribe'}>
+          <Icon icon={iconUnsubscribe} width="0.875rem" height="0.875rem" />
+        </button>
+      {/if}
       <!-- Tooltip is rendered as a fixed element attached to document.body -->
     </span>
   </span>
@@ -1068,11 +1073,6 @@
     <Button variant="text" iconType="full" aria-label="Open in Gmail" onclick={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); openGmailPopup(thread.threadId); }}>
       <Icon icon={iconGmail} width="1rem" height="1rem" />
     </Button>
-    {#if hasUnsubscribeCapability}
-      <Button variant="text" iconType="full" aria-label="Unsubscribe" onclick={handleUnsubscribe} disabled={extractingUnsub} title={extractingUnsub ? 'Finding unsubscribe link…' : 'Unsubscribe'}>
-        <Icon icon={iconUnsubscribe} width="1rem" height="1rem" />
-      </Button>
-    {/if}
     <Button variant="text" iconType="full" aria-label="Create Task" onclick={handleCreateTask} title="Create Task">
       <Icon icon={iconTask} width="1rem" height="1rem" />
     </Button>
@@ -1424,6 +1424,35 @@
     background: rgb(var(--m3-scheme-secondary-container));
     color: rgb(var(--m3-scheme-on-secondary-container));
     white-space: nowrap;
+  }
+  .inline-unsubscribe {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.25rem;
+    height: 1.25rem;
+    margin-left: 0.375rem;
+    padding: 0;
+    border: none;
+    border-radius: var(--m3-util-rounding-small);
+    background: transparent;
+    color: rgb(var(--m3-scheme-on-surface-variant));
+    cursor: pointer;
+    vertical-align: middle;
+    flex-shrink: 0;
+    transition: background 120ms ease, color 120ms ease;
+  }
+  .inline-unsubscribe:hover {
+    background: rgb(var(--m3-scheme-surface-variant));
+    color: rgb(var(--m3-scheme-on-surface));
+  }
+  .inline-unsubscribe:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .inline-unsubscribe :global(svg) {
+    width: 0.875rem;
+    height: 0.875rem;
   }
 </style>
 

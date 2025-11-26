@@ -770,11 +770,32 @@
               continue;
             }
             
+            // CRITICAL FIX: Always prefer database labelIds (authoritative source from sync)
+            // This ensures threads moved out of inbox by other clients are properly removed.
+            // We still preserve other metadata (AI summaries, etc.) from in-memory if newer.
             const existingLast = threadLastActivity(existing);
             const cachedLast = threadLastActivity(t);
-            // Prefer in-memory/local thread when it appears newer, or when it has been removed from INBOX locally
+            
+            // Check if INBOX label differs between in-memory and cached
+            const existingHasInbox = Array.isArray(existing.labelIds) && existing.labelIds.includes('INBOX');
+            const cachedHasInbox = Array.isArray(t.labelIds) && t.labelIds.includes('INBOX');
+            const inboxLabelDiffers = existingHasInbox !== cachedHasInbox;
+            
+            if (inboxLabelDiffers) {
+              // Label state differs - always prefer database labelIds (authoritative)
+              // but preserve non-label metadata from whichever is newer
+              if (existingLast > cachedLast) {
+                // In-memory has newer metadata but stale labels
+                merged[idx] = { ...existing, labelIds: t.labelIds };
+              } else {
+                // Database is same age or newer - use database completely
+                merged[idx] = { ...existing, ...t };
+              }
+              continue;
+            }
+            
+            // Labels match - use standard activity-based preference for other metadata
             if (existingLast >= cachedLast) continue;
-            if (Array.isArray(existing.labelIds) && !existing.labelIds.includes('INBOX')) continue;
             // Otherwise merge cached data into the existing slot
             merged[idx] = { ...existing, ...t };
           } catch {
@@ -2098,55 +2119,84 @@
       }
       
       console.log(`[AuthSync] ===== AUTHORITATIVE SYNC COMPLETE =====`);
-      // EXTRA STEP: authoritative prune using message-level INBOX membership
+      // EXTRA STEP: authoritative prune using threads.list API (more reliable than messages.list)
       try {
-        console.log('[AuthSync] Running authoritative prune using message-level INBOX membership...');
+        console.log('[AuthSync] Running authoritative prune using threads.list API...');
         const authoritativeInboxThreadIds = new Set<string>();
-        let msgPageToken: string | undefined = undefined;
-        const msgPageSize = 200;
-        // enumerate all INBOX messages and extract threadIds
-        while (true) {
-          const msgPage = await listInboxMessageIds(msgPageSize, msgPageToken);
-          const msgIds = msgPage.ids || [];
-          if (msgIds.length) {
-            const msgs = await mapWithConcurrency(msgIds, 6, async (id: string) => {
-              try { const m = await getMessageMetadata(id); return m; } catch (_) { return null; }
-            });
-            for (const m of msgs) if (m && m.threadId) authoritativeInboxThreadIds.add(m.threadId);
-          }
-          if (!msgPage.nextPageToken) break;
-          msgPageToken = msgPage.nextPageToken;
+        let threadPageToken: string | undefined = undefined;
+        const threadPageSize = 500; // Max supported by Gmail API
+        let pagesProcessed = 0;
+        const maxPages = 50; // Safety limit
+        
+        // Enumerate all INBOX threads directly using threads.list
+        while (pagesProcessed < maxPages) {
+          const page = await listThreadIdsByLabelId('INBOX', threadPageSize, threadPageToken);
+          if (!page || !Array.isArray(page.ids) || !page.ids.length) break;
+          for (const id of page.ids) authoritativeInboxThreadIds.add(id);
+          pagesProcessed++;
+          if (!page.nextPageToken) break;
+          threadPageToken = page.nextPageToken;
         }
+        
+        console.log(`[AuthSync] Prune: Gmail reports ${authoritativeInboxThreadIds.size} threads in INBOX (${pagesProcessed} pages)`);
 
         // Now remove INBOX label from any local thread not in authoritative set
         const allLocal = await db.getAll('threads');
+        const localInbox = (allLocal || []).filter((t: any) => 
+          Array.isArray(t.labelIds) && t.labelIds.includes('INBOX')
+        );
+        console.log(`[AuthSync] Prune: Local has ${localInbox.length} threads with INBOX label`);
+        
         const removals: any[] = [];
-        for (const t of (allLocal || [])) {
+        for (const t of localInbox) {
           try {
-            const labels = Array.isArray(t.labelIds) ? t.labelIds.slice() : [];
-            if (labels.includes('INBOX') && !authoritativeInboxThreadIds.has(t.threadId)) {
+            if (!authoritativeInboxThreadIds.has(t.threadId)) {
               // skip if pending ops exist
               const pendingOps = await db.getAllFromIndex('ops', 'by_scopeKey', t.threadId).catch(() => []);
               if ((pendingOps || []).length > 0) {
                 console.log(`[AuthSync] Prune: skipping ${t.threadId} due to pending ops`);
                 continue;
               }
-              const next = { ...t, labelIds: labels.filter((l) => l !== 'INBOX') } as any;
+              const labels = Array.isArray(t.labelIds) ? t.labelIds.slice() : [];
+              const next = { ...t, labelIds: labels.filter((l: string) => l !== 'INBOX') } as any;
               removals.push(next);
             }
           } catch (e) {
             console.error('[AuthSync] Prune: error checking thread', t.threadId, e);
           }
         }
+        
+        console.log(`[AuthSync] Prune: Found ${removals.length} stale threads to clean`);
+        
         if (removals.length) {
+          console.log(`[AuthSync] Prune: Removing INBOX from ${removals.length} threads:`);
+          removals.slice(0, 5).forEach((u: any) => console.log(`[AuthSync] Prune:   - ${u.threadId}`));
+          if (removals.length > 5) console.log(`[AuthSync] Prune:   - ... and ${removals.length - 5} more`);
+          
           const tx = db.transaction('threads', 'readwrite');
           for (const u of removals) {
             try { tx.store.put(u); } catch (e) { console.error('[AuthSync] Prune: put failed', u.threadId, e); }
           }
           await tx.done;
-          console.log(`[AuthSync] Prune: removed INBOX from ${removals.length} local threads`);
+          console.log(`[AuthSync] Prune: Successfully removed INBOX from ${removals.length} threads`);
+          
+          // CRITICAL: Refresh in-memory store AGAIN after prune to reflect removals
+          try {
+            const postPruneThreads = await db.getAll('threads');
+            const { setThreadsWithReset } = await import('$lib/stores/optimistic-counters');
+            setThreadsWithReset(postPruneThreads as any);
+            console.log(`[AuthSync] Prune: Refreshed in-memory store with ${postPruneThreads.length} threads`);
+            
+            // Log final inbox count
+            const finalInbox = postPruneThreads.filter((t: any) => 
+              Array.isArray(t.labelIds) && t.labelIds.includes('INBOX')
+            );
+            console.log(`[AuthSync] Prune: Final local inbox count: ${finalInbox.length}`);
+          } catch (e) {
+            console.error('[AuthSync] Prune: failed to refresh store after prune:', e);
+          }
         } else {
-          console.log('[AuthSync] Prune: no local INBOX removals necessary');
+          console.log('[AuthSync] Prune: No stale threads found - local and Gmail are in sync');
         }
       } catch (e) {
         console.error('[AuthSync] Authoritative prune failed:', e);
@@ -2745,7 +2795,11 @@
     try {
       const db = await getDB();
       const local = await db.getAll('threads');
-      const localIds = new Set((local || []).map((t: any) => t.threadId));
+      // Filter to only threads with INBOX label for proper comparison
+      const localInbox = (local || []).filter((t: any) => 
+        Array.isArray(t.labelIds) && t.labelIds.includes('INBOX')
+      );
+      const localInboxIds = new Set(localInbox.map((t: any) => t.threadId));
       const gmailIds: string[] = [];
       let pageToken: string | undefined = undefined;
       // Page through thread ids (small safety cap)
@@ -2757,11 +2811,14 @@
         pageToken = page.nextPageToken;
       }
       const gmailSet = new Set(gmailIds);
-      const inLocalNotGmail = Array.from(localIds).filter(id => !gmailSet.has(id));
-      const inGmailNotLocal = gmailIds.filter(id => !localIds.has(id));
-      console.log('[Compare] localCount=', localIds.size, 'gmailCountSample=', gmailIds.length, 'inLocalNotGmail=', inLocalNotGmail.slice(0,20), 'inGmailNotLocal=', inGmailNotLocal.slice(0,20));
-      try { showSnackbar({ message: `Compare complete — local:${localIds.size} gmailSample:${gmailIds.length}`, timeout: 4000 }); } catch (_) {}
-      return { localCount: localIds.size, gmailSampleCount: gmailIds.length, inLocalNotGmail: inLocalNotGmail.slice(0,200), inGmailNotLocal: inGmailNotLocal.slice(0,200) };
+      const inLocalNotGmail = Array.from(localInboxIds).filter(id => !gmailSet.has(id));
+      const inGmailNotLocal = gmailIds.filter(id => !localInboxIds.has(id));
+      console.log('[Compare] localInboxCount=', localInboxIds.size, 'gmailCount=', gmailIds.length, 
+        'inLocalNotGmail=', inLocalNotGmail.length, inLocalNotGmail.slice(0,10), 
+        'inGmailNotLocal=', inGmailNotLocal.length, inGmailNotLocal.slice(0,10));
+      console.log('[Compare] Total local threads (all labels):', local.length);
+      try { showSnackbar({ message: `Compare: localInbox=${localInboxIds.size} gmail=${gmailIds.length} stale=${inLocalNotGmail.length}`, timeout: 6000 }); } catch (_) {}
+      return { localInboxCount: localInboxIds.size, gmailCount: gmailIds.length, inLocalNotGmail, inGmailNotLocal };
     } catch (e) {
       console.error('[Compare] failed', e);
       try { showSnackbar({ message: `Compare failed: ${e instanceof Error ? e.message : String(e)}`, timeout: 4000 }); } catch (_) {}
@@ -2769,8 +2826,77 @@
     }
   }
 
+  // Force cleanup: aggressively remove INBOX label from threads not in Gmail's INBOX
+  async function forceCleanupStaleInbox() {
+    try {
+      showSnackbar({ message: 'Starting forced cleanup...', timeout: 2000 });
+      const db = await getDB();
+      
+      // Get all Gmail INBOX thread IDs (authoritative source)
+      const gmailInboxIds = new Set<string>();
+      let pageToken: string | undefined = undefined;
+      for (let i = 0; i < 50; i++) { // Higher limit for thorough enumeration
+        const page = await listThreadIdsByLabelId('INBOX', 500, pageToken);
+        if (!page || !Array.isArray(page.ids) || !page.ids.length) break;
+        for (const id of page.ids) gmailInboxIds.add(id);
+        if (!page.nextPageToken) break;
+        pageToken = page.nextPageToken;
+      }
+      console.log(`[ForceCleanup] Gmail reports ${gmailInboxIds.size} threads in INBOX`);
+      
+      // Get local threads with INBOX label
+      const local = await db.getAll('threads');
+      const localInbox = (local || []).filter((t: any) => 
+        Array.isArray(t.labelIds) && t.labelIds.includes('INBOX')
+      );
+      console.log(`[ForceCleanup] Local has ${localInbox.length} threads with INBOX label`);
+      
+      // Find threads to clean (in local INBOX but not in Gmail INBOX)
+      const toClean: any[] = [];
+      for (const t of localInbox) {
+        if (!gmailInboxIds.has(t.threadId)) {
+          toClean.push(t);
+        }
+      }
+      console.log(`[ForceCleanup] Found ${toClean.length} stale threads to clean`);
+      
+      if (toClean.length === 0) {
+        showSnackbar({ message: 'No stale threads found!', timeout: 3000 });
+        return { cleaned: 0 };
+      }
+      
+      // Remove INBOX label from stale threads
+      const tx = db.transaction('threads', 'readwrite');
+      for (const t of toClean) {
+        const newLabels = (t.labelIds || []).filter((l: string) => l !== 'INBOX');
+        const updated = { ...t, labelIds: newLabels };
+        try {
+          await tx.store.put(updated);
+        } catch (e) {
+          console.error(`[ForceCleanup] Failed to update ${t.threadId}:`, e);
+        }
+      }
+      await tx.done;
+      console.log(`[ForceCleanup] Cleaned ${toClean.length} threads`);
+      
+      // Refresh the in-memory store
+      const refreshed = await db.getAll('threads');
+      const { setThreadsWithReset } = await import('$lib/stores/optimistic-counters');
+      setThreadsWithReset(refreshed as any);
+      
+      showSnackbar({ message: `Cleaned ${toClean.length} stale threads from inbox`, timeout: 4000 });
+      return { cleaned: toClean.length };
+    } catch (e) {
+      console.error('[ForceCleanup] failed', e);
+      showSnackbar({ message: `Cleanup failed: ${e instanceof Error ? e.message : String(e)}`, timeout: 4000 });
+      throw e;
+    }
+  }
+
   if (typeof window !== 'undefined') {
     (window as any).__copyPageDiagnostics = async () => { await copyDiagnostics(); };
+    (window as any).__compareLocalToGmail = compareLocalToGmail;
+    (window as any).__forceCleanupStaleInbox = forceCleanupStaleInbox;
   }
 
   async function runInboxSyncDiagnostics(): Promise<boolean> {
@@ -3682,6 +3808,7 @@
       {/if}
       {#if import.meta.env.DEV}
         <Button variant="outlined" onclick={compareLocalToGmail}>Compare DB ↔ Gmail</Button>
+        <Button variant="outlined" onclick={forceCleanupStaleInbox}>Force Cleanup Stale</Button>
       {/if}
       {#if authoritativeSyncProgress.running}
         <Card variant="outlined" style="display:flex; align-items:center; gap:0.5rem; padding:0.25rem 0.5rem;">
