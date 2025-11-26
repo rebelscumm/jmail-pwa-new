@@ -24,6 +24,7 @@ export const optimisticCounters = writable<OptimisticCounters>({
 export async function recalculateOptimisticCounters() {
   try {
     const { getDB } = await import('$lib/db/indexeddb');
+    const { get } = await import('svelte/store');
     const db = await getDB();
     
     // Get all pending operations
@@ -49,18 +50,26 @@ export async function recalculateOptimisticCounters() {
     }
     
     // Calculate the net impact on counters
+    // Use thread store (which reflects optimistic updates) instead of DB to get current state
+    const currentThreads = get(threadsStore) || [];
+    const threadsMap = new Map(currentThreads.map((t: any) => [t.threadId, t]));
+    
     let inboxDelta = 0;
     let unreadDelta = 0;
     
     for (const [threadId, change] of pendingChanges.entries()) {
-      const thread = await db.get('threads', threadId);
-      if (!thread) continue;
+      // Get thread from store (reflects optimistic updates) or fall back to DB
+      let thread = threadsMap.get(threadId);
+      if (!thread) {
+        thread = await db.get('threads', threadId);
+        if (!thread) continue;
+      }
       
       const currentLabels = new Set(thread.labelIds || []);
       const wasInInbox = currentLabels.has('INBOX');
       const wasUnread = currentLabels.has('UNREAD');
       
-      // Apply pending changes
+      // Apply pending changes to see what the final state will be
       const newLabels = new Set(currentLabels);
       for (const label of change.removeLabels) {
         newLabels.delete(label);
@@ -72,6 +81,9 @@ export async function recalculateOptimisticCounters() {
       const willBeInInbox = newLabels.has('INBOX');
       const willBeUnread = newLabels.has('UNREAD');
       
+      // Delta represents the change from current state to final state after ops complete
+      // Since we update local state optimistically, current state may already reflect the change
+      // In that case, delta will be 0, which is correct
       inboxDelta += (willBeInInbox ? 1 : 0) - (wasInInbox ? 1 : 0);
       unreadDelta += (willBeUnread ? 1 : 0) - (wasUnread ? 1 : 0);
     }

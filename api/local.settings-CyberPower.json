@@ -1,0 +1,17 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "FUNCTIONS_WORKER_RUNTIME": "node",
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "OPENAI_API_KEY": "sk-xxxx",
+    "APP_BASE_URL": "http://localhost:4280",
+    "GOOGLE_CLIENT_ID": "49551890193-e6n262ccj95229ftp2dh6k9s2boo1kip.apps.googleusercontent.com",
+    "GOOGLE_CLIENT_SECRET": "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",
+    "GOOGLE_SCOPES": "https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.labels https://www.googleapis.com/auth/gmail.readonly",
+    "COOKIE_SECRET": "change-this-long-random-secret",
+    "COOKIE_SIGNING_SECRET": "change-this-other-secret",
+    "COOKIE_SECURE": "false"
+  }
+}
+
+

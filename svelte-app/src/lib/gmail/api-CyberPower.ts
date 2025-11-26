@@ -181,27 +181,8 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     }
   }
   
-  // Default: use server proxy
-  // Check if we should use SWA CLI port for localhost
-  let apiBase = '';
-  if (isLocalhost && window.location.port.startsWith('517')) {
-    // Running on Vite dev server, check if SWA CLI is available on port 4280
-    try {
-      const swaResponse = await fetch('http://localhost:4280/api/google-me', {
-        method: 'HEAD',
-        credentials: 'include',
-        signal: AbortSignal.timeout(1000) // 1 second timeout
-      });
-      if (swaResponse.status !== 0 && swaResponse.status !== 404) {
-        apiBase = 'http://localhost:4280';
-        pushGmailDiag({ type: 'api_using_swa_cli', port: '4280', path });
-      }
-    } catch (e) {
-      // SWA CLI not available, use default
-    }
-  }
-  
-  const apiUrl = apiBase ? `${apiBase}${GMAIL_PROXY_BASE}${path}` : `${GMAIL_PROXY_BASE}${path}`;
+  // Default: use server proxy via relative URL (Vite dev server proxies /api to Functions runtime)
+  const apiUrl = `${GMAIL_PROXY_BASE}${path}`;
   let res = await fetch(apiUrl, {
     ...init,
     headers: {
@@ -259,10 +240,34 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
           details = body;
           // Common Google error shape: { error: { code, message, status, errors } }
           const googleMessage = (body as any)?.error?.message || (body as any)?.message;
-          if (googleMessage) message = googleMessage as string;
+          if (googleMessage) {
+            message = googleMessage as string;
+          } else if (res.status === 500) {
+            // For 500 errors, try to extract more details
+            const errorCode = (body as any)?.error?.code;
+            const errorStatus = (body as any)?.error?.status;
+            const errorReasons = Array.isArray((body as any)?.error?.errors) 
+              ? (body as any).error.errors.map((e: any) => e?.reason || e?.message).filter(Boolean).join(', ')
+              : undefined;
+            if (errorReasons) {
+              message = `Gmail API error ${res.status}: ${errorReasons}`;
+            } else if (errorCode || errorStatus) {
+              message = `Gmail API error ${res.status} (${errorCode || errorStatus})`;
+            } else {
+              // Include a snippet of the response body for debugging
+              const bodyStr = JSON.stringify(body).slice(0, 200);
+              message = `Gmail API error ${res.status}. Response: ${bodyStr}`;
+            }
+          }
         } catch (_) {
           details = { nonJsonBody: text.slice(0, 256) };
+          if (res.status === 500 && text) {
+            // For 500 errors with non-JSON response, include a snippet
+            message = `Gmail API error ${res.status}. Response: ${text.slice(0, 200)}`;
+          }
         }
+      } else if (res.status === 500) {
+        message = `Gmail API error ${res.status} (empty response)`;
       }
     } catch (_) {
       // ignore parse errors
@@ -452,7 +457,7 @@ export async function getMessageMetadata(id: string): Promise<GmailMessage> {
     payload?: { headers?: { name: string; value: string }[] };
   };
   const data = await api<GmailMessageApiResponse>(
-    `/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date&metadataHeaders=To&metadataHeaders=Cc&metadataHeaders=Bcc`
+    `/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date&metadataHeaders=To&metadataHeaders=Cc&metadataHeaders=Bcc&metadataHeaders=List-Unsubscribe&metadataHeaders=List-Unsubscribe-Post`
   );
   const headers: Record<string, string> = {};
   for (const h of data.payload?.headers || []) headers[h.name] = h.value;
@@ -769,6 +774,12 @@ export async function getThreadSummary(threadId: string): Promise<{ thread: impo
       labelIds: m.labelIds || [],
       internalDate: m.internalDate ? Number(m.internalDate) : undefined
     } satisfies import('$lib/types').GmailMessage;
+  });
+  // Sort messages chronologically by internalDate (oldest first) for proper thread display
+  outMsgs.sort((a, b) => {
+    const dateA = a.internalDate || Date.parse(a.headers?.Date || '') || 0;
+    const dateB = b.internalDate || Date.parse(b.headers?.Date || '') || 0;
+    return dateA - dateB; // Ascending order (oldest first)
   });
   // Build thread summary like inbox
   const labelMap: Record<string, true> = {};

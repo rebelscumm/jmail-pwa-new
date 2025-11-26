@@ -14,39 +14,9 @@ export type ServerSessionInfo = {
 // Check if we have a valid server session
 export async function checkServerSession(): Promise<ServerSessionInfo> {
   try {
-    // For localhost, try to detect if we're running with Azure Static Web Apps CLI
-    const isLocalhost = typeof window !== 'undefined' && 
-      (window.location.hostname === 'localhost' || 
-       window.location.hostname === '127.0.0.1' ||
-       window.location.hostname.startsWith('192.168.'));
-    
-    let apiBase = '';
-    if (isLocalhost) {
-      // Try SWA CLI port first (4280), then fallback to production
-      const swaPort = '4280';
-      const currentPort = window.location.port;
-      
-      // Check if running on Vite dev server (any port starting with 517)
-      if (currentPort.startsWith('517')) {
-        // Running on Vite dev server, check if SWA CLI is available
-        try {
-          const swaResponse = await fetch(`http://localhost:${swaPort}/api/google-me`, {
-            method: 'GET',
-            credentials: 'include',
-            signal: AbortSignal.timeout(2000) // 2 second timeout
-          });
-          if (swaResponse.status !== 0 && swaResponse.status !== 404) { // 0 means connection refused, 404 means endpoint doesn't exist
-            apiBase = `http://localhost:${swaPort}`;
-            pushGmailDiag({ type: 'using_swa_cli_api', port: swaPort, currentPort });
-          }
-        } catch (e) {
-          // SWA CLI not running, will use production API
-          pushGmailDiag({ type: 'swa_cli_not_available', fallback: 'production', error: e instanceof Error ? e.message : String(e) });
-        }
-      }
-    }
-    
-    const apiUrl = apiBase ? `${apiBase}/api/google-me` : '/api/google-me';
+    // Always use relative URL - Vite dev server proxies /api to the Functions runtime
+    // This avoids CORS issues when running frontend on 5173 and API on different ports
+    const apiUrl = '/api/google-me';
     pushGmailDiag({ type: 'checking_server_session', url: apiUrl });
 
     const response = await fetch(apiUrl, {
