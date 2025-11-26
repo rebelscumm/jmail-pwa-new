@@ -31,6 +31,9 @@
   import RecipientBadges from '$lib/utils/RecipientBadges.svelte';
   import { messages as messagesStore } from '$lib/stores/threads';
   import { openGmailPopup } from '$lib/utils/gmail-links';
+  import iconUnsubscribe from '@ktibow/iconset-material-symbols/unsubscribe';
+  import { findUnsubscribeTarget, aiExtractUnsubscribeUrl, getFriendlyAIErrorMessage } from '$lib/ai/providers';
+  import { getMessageFull } from '$lib/gmail/api';
 
   // Lazy import to avoid circular or route coupling; fallback no-op if route not mounted
   async function scheduleReload() {
@@ -436,13 +439,102 @@
     return firstId ? $messagesStore[firstId] : null;
   })());
 
+  // Get the last message for unsubscribe detection
+  const lastMessage = $derived((() => {
+    const messageIds = thread.messageIds || [];
+    const lastId = messageIds.length > 0 ? messageIds[messageIds.length - 1] : null;
+    return lastId ? $messagesStore[lastId] : null;
+  })());
+
+  // Check if thread has unsubscribe capability (quick check via headers)
+  const hasUnsubscribeCapability = $derived((() => {
+    const msg = lastMessage;
+    if (!msg?.headers) return false;
+    // Check for List-Unsubscribe header
+    const listUnsub = msg.headers['List-Unsubscribe'] || msg.headers['list-unsubscribe'] || msg.headers['List-Unsubscribe-Post'] || msg.headers['list-unsubscribe-post'];
+    if (listUnsub) return true;
+    // If we have bodyHtml, check for unsubscribe links
+    if (msg.bodyHtml) {
+      const quickCheck = findUnsubscribeTarget(msg.headers, msg.bodyHtml);
+      if (quickCheck) return true;
+    }
+    return false;
+  })());
+
+  let extractingUnsub = $state(false);
+
   async function removeLabelInline(labelId: string, labelName?: string): Promise<void> {
     try {
       await queueThreadModify(thread.threadId, [], [labelId], { optimisticLocal: true });
       await recordIntent(thread.threadId, { type: 'removeLabel', addLabelIds: [], removeLabelIds: [labelId] }, { addLabelIds: [labelId], removeLabelIds: [] });
-      showSnackbar({ message: `Removed label${labelName ? ` “${labelName}”` : ''}`, actions: { Undo: () => undoLast(1) }, timeout: 4000 });
+      showSnackbar({ message: `Removed label${labelName ? ` "${labelName}"` : ''}`, actions: { Undo: () => undoLast(1) }, timeout: 4000 });
     } catch {
       showSnackbar({ message: 'Failed to remove label' });
+    }
+  }
+
+  async function handleUnsubscribe(e: MouseEvent): Promise<void> {
+    e.preventDefault();
+    e.stopPropagation();
+    if (extractingUnsub) return;
+    const messageIds = thread.messageIds || [];
+    const lastId = messageIds.length > 0 ? messageIds[messageIds.length - 1] : null;
+    if (!lastId) {
+      showSnackbar({ message: 'No message found', closable: true });
+      return;
+    }
+    extractingUnsub = true;
+    try {
+      showSnackbar({ message: 'Looking for unsubscribe link…' });
+      // Get full message if not already available
+      let msg = $messagesStore[lastId];
+      if (!msg?.bodyHtml && !msg?.bodyText) {
+        try {
+          msg = await getMessageFull(lastId);
+        } catch (err) {
+          showSnackbar({ message: 'Could not load message', closable: true });
+          return;
+        }
+      }
+      if (!msg) {
+        showSnackbar({ message: 'Message not found', closable: true });
+        return;
+      }
+      // Try to find unsubscribe target
+      let target = findUnsubscribeTarget(msg.headers, msg.bodyHtml);
+      if (!target && msg.bodyHtml) {
+        // Try AI extraction as fallback
+        try {
+          target = await aiExtractUnsubscribeUrl(msg.headers?.Subject || '', msg.bodyText, msg.bodyHtml);
+        } catch (aiErr) {
+          // AI extraction failed, but we'll show the error below if no target found
+        }
+      }
+      if (target) {
+        // Show snackbar with action buttons instead of browser confirm
+        showSnackbar({
+          message: `Unsubscribe link found: ${target.length > 60 ? target.substring(0, 60) + '…' : target}`,
+          actions: {
+            Open: () => {
+              window.open(target, '_blank');
+              showSnackbar({ message: 'Opened unsubscribe link', closable: true });
+            }
+          },
+          closable: true,
+          timeout: 10000
+        });
+      } else {
+        showSnackbar({ message: 'No unsubscribe link found', closable: true, timeout: 5000 });
+      }
+    } catch (e) {
+      const { message } = getFriendlyAIErrorMessage(e, 'Unsubscribe');
+      showSnackbar({
+        message,
+        closable: true,
+        timeout: 6000
+      });
+    } finally {
+      extractingUnsub = false;
     }
   }
 
@@ -909,6 +1001,11 @@
     <Button variant="text" iconType="full" aria-label="Open in Gmail" onclick={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); openGmailPopup(thread.threadId); }}>
       <Icon icon={iconGmail} width="1rem" height="1rem" />
     </Button>
+    {#if hasUnsubscribeCapability}
+      <Button variant="text" iconType="full" aria-label="Unsubscribe" onclick={handleUnsubscribe} disabled={extractingUnsub} title={extractingUnsub ? 'Finding unsubscribe link…' : 'Unsubscribe'}>
+        <Icon icon={iconUnsubscribe} width="1rem" height="1rem" />
+      </Button>
+    {/if}
     {#if isSnoozedThread(thread)}
       <Button variant="text" onclick={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); animateAndUnsnooze(); }}>Unsnooze</Button>
     {/if}

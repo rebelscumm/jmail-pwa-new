@@ -858,8 +858,18 @@ import BottomSheet from "$lib/containers/BottomSheet.svelte";
       let target = findUnsubscribeTarget(m.headers, m.bodyHtml);
       if (!target) target = await aiExtractUnsubscribeUrl(m.headers?.Subject || '', m.bodyText, m.bodyHtml);
       if (target) {
-        const ok = confirm(`Open unsubscribe target?\n${target}`);
-        if (ok) window.open(target, '_blank');
+        // Show snackbar with action buttons instead of browser confirm
+        showSnackbar({
+          message: `Unsubscribe link found: ${target.length > 60 ? target.substring(0, 60) + '…' : target}`,
+          actions: {
+            Open: () => {
+              window.open(target, '_blank');
+              showSnackbar({ message: 'Opened unsubscribe link', closable: true });
+            }
+          },
+          closable: true,
+          timeout: 10000
+        });
       } else {
         showSnackbar({ message: 'No unsubscribe target found', closable: true });
       }
