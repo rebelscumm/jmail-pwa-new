@@ -775,6 +775,12 @@ export async function getThreadSummary(threadId: string): Promise<{ thread: impo
       internalDate: m.internalDate ? Number(m.internalDate) : undefined
     } satisfies import('$lib/types').GmailMessage;
   });
+  // Sort messages chronologically by internalDate (oldest first) for proper thread display
+  outMsgs.sort((a, b) => {
+    const dateA = a.internalDate || Date.parse(a.headers?.Date || '') || 0;
+    const dateB = b.internalDate || Date.parse(b.headers?.Date || '') || 0;
+    return dateA - dateB; // Ascending order (oldest first)
+  });
   // Build thread summary like inbox
   const labelMap: Record<string, true> = {};
   const last: { from?: string; subject?: string; date?: number } = {};

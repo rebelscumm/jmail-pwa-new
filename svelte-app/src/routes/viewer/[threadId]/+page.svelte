@@ -638,32 +638,51 @@ import BottomSheet from "$lib/containers/BottomSheet.svelte";
     })();
   });
 
-  // Auto-load the first message's full content (only if body scopes already granted)
+  // Create sorted message list with all messages from the thread, ensuring chronological order
+  const sortedMessageIds = $derived((() => {
+    if (!currentThread?.messageIds?.length) return [];
+    const ids = currentThread.messageIds;
+    // Get messages and sort by date to ensure chronological order (oldest first)
+    const messagesWithDates = ids.map((id) => {
+      const m = $messages[id];
+      const date = m?.internalDate || (m?.headers?.Date ? Date.parse(m.headers.Date) : 0) || 0;
+      return { id, date };
+    });
+    // Sort by date (ascending - oldest first)
+    messagesWithDates.sort((a, b) => a.date - b.date);
+    return messagesWithDates.map((m) => m.id);
+  })());
+
+  // Auto-load messages' full content progressively (only if body scopes already granted)
   $effect(() => {
-    if (!currentThread) return;
-    const firstId = currentThread.messageIds?.[0];
-    if (!firstId) return;
-    const m = $messages[firstId];
-    if (!m?.bodyText && !m?.bodyHtml && !loadingMap[firstId] && !autoTried[firstId]) {
-      autoTried[firstId] = true;
-      (async () => {
-        // Attempt auto-fetch regardless of tokeninfo availability.
-        // The API layer will surface a clear 403 if scopes are insufficient.
-        loadingMap[firstId] = true;
-        getMessageFull(firstId)
-          .then((full) => { messages.set({ ...$messages, [firstId]: full }); errorMap[firstId] = ''; })
-          .catch((e) => {
-            errorMap[firstId] = e instanceof Error ? e.message : String(e);
-            // eslint-disable-next-line no-console
-            console.error('[Viewer] Failed to auto-load message', firstId, e);
-            void copyDiagnostics('auto_load_failed', firstId, e);
-            const msg = e instanceof Error ? e.message : String(e);
-            if (typeof msg === 'string' && msg.toLowerCase().includes('permissions') || msg.toLowerCase().includes('scope')) {
-              void copyDiagnostics('scope_after_upgrade_failed', firstId, e);
-            }
-          })
-          .finally(() => { loadingMap[firstId] = false; });
-      })();
+    if (!currentThread || !sortedMessageIds.length) return;
+    // Load messages progressively, starting with the first few
+    const maxAutoLoad = 3; // Auto-load first 3 messages
+    for (let i = 0; i < Math.min(maxAutoLoad, sortedMessageIds.length); i++) {
+      const mid = sortedMessageIds[i];
+      if (!mid) continue;
+      const m = $messages[mid];
+      if (!m?.bodyText && !m?.bodyHtml && !loadingMap[mid] && !autoTried[mid]) {
+        autoTried[mid] = true;
+        (async () => {
+          // Attempt auto-fetch regardless of tokeninfo availability.
+          // The API layer will surface a clear 403 if scopes are insufficient.
+          loadingMap[mid] = true;
+          getMessageFull(mid)
+            .then((full) => { messages.set({ ...$messages, [mid]: full }); errorMap[mid] = ''; })
+            .catch((e) => {
+              errorMap[mid] = e instanceof Error ? e.message : String(e);
+              // eslint-disable-next-line no-console
+              console.error('[Viewer] Failed to auto-load message', mid, e);
+              void copyDiagnostics('auto_load_failed', mid, e);
+              const msg = e instanceof Error ? e.message : String(e);
+              if (typeof msg === 'string' && msg.toLowerCase().includes('permissions') || msg.toLowerCase().includes('scope')) {
+                void copyDiagnostics('scope_after_upgrade_failed', mid, e);
+              }
+            })
+            .finally(() => { loadingMap[mid] = false; });
+        })();
+      }
     }
   });
   async function summarize(mid: string, force = false) {
@@ -1019,18 +1038,47 @@ function isEventFromTextInput(e: KeyboardEvent): boolean {
 }
 
 function onKeyDown(e: KeyboardEvent) {
-  // Ignore when typing or if attachment dialog is open
+  // Ignore when typing
   if (isEventFromTextInput(e)) return;
+  
+  // Esc: close dialogs/popups first, then navigate back to inbox
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    // Close any open dialogs/popups first
+    if (attDialogOpen) {
+      attDialogOpen = false;
+      attDialogTitle = null;
+      attDialogText = null;
+      return;
+    }
+    if (filterPopupOpen) {
+      filterPopupOpen = false;
+      return;
+    }
+    if (snoozeMenuOpen) {
+      snoozeMenuOpen = false;
+      try {
+        const d = snoozeDetails;
+        if (d) d.open = false;
+      } catch (_) {}
+      return;
+    }
+    if (recruitingDiagOpen) {
+      recruitingDiagOpen = false;
+      return;
+    }
+    // If no dialogs are open, navigate back to inbox
+    const ct = currentThread;
+    if (ct) {
+      navigateToInbox(false);
+    }
+    return;
+  }
+  
+  // Skip other handlers if attachment dialog is open
   if (attDialogOpen) return;
   const ct = currentThread;
   if (!ct) return;
-
-  // Esc: back to inbox (preserve inbox state; no refresh)
-  if (e.key === 'Escape') {
-    e.preventDefault();
-    navigateToInbox(false);
-    return;
-  }
   // b: open snooze menu
   if (e.key === 'b' || e.key === 'B') {
     e.preventDefault();
@@ -1343,15 +1391,21 @@ onMount(() => {
     <Divider />
 
     <div class="messages">
-      {#each currentThread.messageIds as mid, idx}
+      {#each sortedMessageIds as mid, idx}
         {@const m = $messages[mid]}
-        <Card variant="outlined">
-          {#if idx === 0}
-            {#if loadingMap[mid]}
+        {#if idx > 0}
+          <Divider />
+        {/if}
+        <Card variant="outlined" data-mid={mid} class="message-card">
+          {#if loadingMap[mid]}
+            <div style="display:flex; align-items:center; gap:0.75rem; padding:1rem;">
               <LoadingIndicator size={24} />
-            {:else if errorMap[mid]}
-              <p class="m3-font-body-medium" style="margin:0; color:rgb(var(--m3-scheme-error))">Failed to load message: {errorMap[mid]}</p>
-              <div style="display:flex; justify-content:flex-end; align-items:center; gap:0.5rem; margin-top:0.5rem;">
+              <p class="m3-font-body-medium" style="margin:0; color:rgb(var(--m3-scheme-on-surface-variant))">Loading message{idx > 0 ? ` ${idx + 1}` : ''}…</p>
+            </div>
+          {:else if errorMap[mid]}
+            <div style="padding:1rem;">
+              <p class="m3-font-body-medium" style="margin:0 0 0.75rem 0; color:rgb(var(--m3-scheme-error))">Failed to load message{idx > 0 ? ` ${idx + 1}` : ''}: {errorMap[mid]}</p>
+              <div style="display:flex; flex-wrap:wrap; gap:0.5rem; align-items:center;">
                 <Button variant="text" onclick={() => copyDiagnostics('viewer_manual_copy', mid)}>
                   <Icon icon={iconBugReport} />
                   Copy diagnostics
@@ -1369,7 +1423,8 @@ onMount(() => {
                   Retry
                 </Button>
               </div>
-            {:else if m?.bodyHtml}
+            </div>
+          {:else if m?.bodyHtml}
               {#if m?.internalDate}
                 <div style="display:flex; align-items:center; justify-content:space-between; margin:0.25rem 0;">
                   <p class="m3-font-body-small" style="margin:0; color:rgb(var(--m3-scheme-on-surface-variant))">{formatDateTime(m.internalDate)}</p>
@@ -1443,79 +1498,31 @@ onMount(() => {
                   {/each}
                 </div>
               {/if}
-            {:else}
-              {#if m?.snippet}
-                <p class="m3-font-body-medium" style="margin:0; color:rgb(var(--m3-scheme-on-surface-variant))">{decodeEntities(m.snippet)}</p>
-              {/if}
-              <div style="display:flex; justify-content:flex-end; align-items:center; gap:0.5rem; margin-top:0.5rem;">
-                <Button variant="text" onclick={() => copyDiagnostics('viewer_manual_copy', mid)}>
-                  <Icon icon={iconBugReport} />
-                  Copy diagnostics
-                </Button>
-                <Button variant="text" onclick={() => grantAccess(mid)}>
-                  <Icon icon={iconKey} />
-                  Grant access
-                </Button>
-                <Button variant="text" onclick={() => relogin(mid)}>
-                  <Icon icon={iconLogin} />
-                  Re-login
-                </Button>
-                <Button variant="text" onclick={() => downloadMessage(mid)}>
-                  <Icon icon={iconDownload} />
-                  Download message
-                </Button>
-              </div>
-            {/if}
-          {:else}
-            {#if m?.bodyHtml || m?.bodyText}
-              {#if m?.internalDate}
-                <div style="display:flex; align-items:center; justify-content:space-between; margin:0.25rem 0;">
-                  <p class="m3-font-body-small" style="margin:0; color:rgb(var(--m3-scheme-on-surface-variant))">{formatDateTime(m.internalDate)}</p>
-                  <Button variant="text" iconType="full" aria-label="Open message in Gmail" onclick={() => openGmailMessagePopup(threadId, mid)}>
-                    <Icon icon={iconGmail} width="1rem" height="1rem" />
+            {:else if m?.snippet}
+              <div style="padding:1rem;">
+                {#if m?.internalDate}
+                  <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.5rem;">
+                    <p class="m3-font-body-small" style="margin:0; color:rgb(var(--m3-scheme-on-surface-variant))">{formatDateTime(m.internalDate)}</p>
+                    <Button variant="text" iconType="full" aria-label="Open message in Gmail" onclick={() => openGmailMessagePopup(threadId, mid)}>
+                      <Icon icon={iconGmail} width="1rem" height="1rem" />
+                    </Button>
+                  </div>
+                {/if}
+                {#if m?.headers}
+                  <RecipientBadges 
+                    to={m.headers.To || m.headers.to || ''} 
+                    cc={m.headers.Cc || m.headers.cc || ''} 
+                    bcc={m.headers.Bcc || m.headers.bcc || ''} 
+                    maxDisplayCount={4}
+                    compact={true} 
+                  />
+                {/if}
+                <p class="m3-font-body-medium" style="margin:0.5rem 0 0 0; color:rgb(var(--m3-scheme-on-surface-variant))">{decodeEntities(m.snippet)}</p>
+                <div style="display:flex; flex-wrap:wrap; gap:0.5rem; align-items:center; margin-top:0.75rem;">
+                  <Button variant="text" onclick={() => downloadMessage(mid)}>
+                    <Icon icon={iconDownload} />
+                    Load full message
                   </Button>
-                </div>
-              {/if}
-              {#if m?.headers}
-                <RecipientBadges 
-                  to={m.headers.To || m.headers.to || ''} 
-                  cc={m.headers.Cc || m.headers.cc || ''} 
-                  bcc={m.headers.Bcc || m.headers.bcc || ''} 
-                  maxDisplayCount={4}
-                  compact={true} 
-                />
-              {/if}
-              {#if m?.bodyHtml}
-                <div class="html-body" style="white-space:normal; overflow-wrap:anywhere;" use:processHtmlLinks>{@html m.bodyHtml}</div>
-              {:else}
-                <div style="white-space:pre-wrap; font-family: monospace;">{@html linkifyText(decodeEntities(m.bodyText))}</div>
-              {/if}
-              {#if Array.isArray(m?.attachments) && m.attachments.length}
-                <div class="attachments">
-                  {#each m.attachments as a, i}
-                    <div class="attachment-item">
-                      <span class="attachment-name">{a.filename || a.mimeType || 'attachment'}</span>
-                      <Button variant="text" iconType="full" aria-label="AI summary" onclick={() => summarizeAttachment(mid, i)}>
-                        {#snippet children()}
-                          {#if attBusy[`${mid}:${i}`]}
-                            <LoadingIndicator size={18} />
-                          {:else}
-                            <Icon icon={iconSparkles} />
-                          {/if}
-                        {/snippet}
-                      </Button>
-                    </div>
-                  {/each}
-                </div>
-              {/if}
-            {:else}
-              {#if m?.snippet}
-                <p class="m3-font-body-medium" style="margin:0; color:rgb(var(--m3-scheme-on-surface-variant))">{decodeEntities(m.snippet)}</p>
-              {/if}
-              <div style="display:flex; justify-content:flex-end; align-items:center; gap:0.5rem; margin-top:0.5rem;">
-                {#if loadingMap[mid]}
-                  <LoadingIndicator size={24} />
-                {:else}
                   <Button variant="text" onclick={() => copyDiagnostics('viewer_manual_copy', mid)}>
                     <Icon icon={iconBugReport} />
                     Copy diagnostics
@@ -1528,14 +1535,31 @@ onMount(() => {
                     <Icon icon={iconLogin} />
                     Re-login
                   </Button>
+                </div>
+              </div>
+            {:else}
+              <div style="padding:1rem;">
+                <p class="m3-font-body-medium" style="margin:0 0 0.75rem 0; color:rgb(var(--m3-scheme-on-surface-variant))">Message {idx + 1} metadata not available</p>
+                <div style="display:flex; flex-wrap:wrap; gap:0.5rem; align-items:center;">
                   <Button variant="text" onclick={() => downloadMessage(mid)}>
                     <Icon icon={iconDownload} />
-                    Download message
+                    Load message
                   </Button>
-                {/if}
+                  <Button variant="text" onclick={() => copyDiagnostics('viewer_manual_copy', mid)}>
+                    <Icon icon={iconBugReport} />
+                    Copy diagnostics
+                  </Button>
+                  <Button variant="text" onclick={() => grantAccess(mid)}>
+                    <Icon icon={iconKey} />
+                    Grant access
+                  </Button>
+                  <Button variant="text" onclick={() => relogin(mid)}>
+                    <Icon icon={iconLogin} />
+                    Re-login
+                  </Button>
+                </div>
               </div>
             {/if}
-          {/if}
         </Card>
       {/each}
     </div>
@@ -2127,6 +2151,15 @@ onMount(() => {
 <style>
   .messages {
     min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .message-card {
+    transition: box-shadow 200ms cubic-bezier(0, 0, 0.2, 1);
+  }
+  .message-card:hover {
+    box-shadow: var(--m3-util-elevation-1);
   }
   .from {
     color: rgb(var(--m3-scheme-on-surface-variant));

@@ -216,7 +216,46 @@
       showSnackbar({ message: 'No snooze labels configured. Map them in Settings.' });
       return;
     }
-    await animateAndSnooze(k, 'Snoozed');
+    // Set flag to prevent navigation during snooze
+    isSnoozing = true;
+    
+    // Close snooze menu immediately to prevent any navigation from details closing
+    if (snoozeDetails) snoozeDetails.open = false;
+    
+    // Check current route - if we're viewing this thread, navigate to inbox first
+    // This prevents "thread not loaded" message after snoozing
+    const shouldNavigateToInbox = (() => {
+      if (typeof window === 'undefined' || typeof location === 'undefined') return false;
+      try {
+        const currentPath = location.pathname;
+        const viewerPath = `/viewer/${thread.threadId}`;
+        return currentPath.includes(viewerPath);
+      } catch {
+        return false;
+      }
+    })();
+    
+    // Navigate to inbox immediately if we're viewing the thread (before optimistic updates)
+    if (shouldNavigateToInbox) {
+      (async () => {
+        try {
+          const { goto } = await import('$app/navigation');
+          goto('/inbox').catch(() => {
+            try { location.href = '/inbox'; } catch {}
+          });
+        } catch {
+          try { location.href = '/inbox'; } catch {}
+        }
+      })();
+    }
+    
+    // Perform snooze operation (may complete after navigation)
+    try {
+      await animateAndSnooze(k, 'Snoozed');
+    } finally {
+      // Clear flag after a short delay to allow any pending navigation attempts to be blocked
+      setTimeout(() => { isSnoozing = false; }, 100);
+    }
   }
   function daysFromToday(dateStr: string): number {
     try {
@@ -892,6 +931,7 @@
   };
 
   let snoozeDetails: HTMLDetailsElement | null = null;
+  let isSnoozing = $state(false); // Flag to prevent navigation during snooze
 
   function openSnoozeMenuAndShowPicker(): void {
     try {
@@ -1121,7 +1161,19 @@
           <div class="snooze-menu" onpointerdown={(e: PointerEvent) => { e.preventDefault(); e.stopPropagation(); }} ontouchstart={(e: TouchEvent) => { e.preventDefault(); e.stopPropagation(); }}>
             <Menu>
               {#if mappedKeys.length > 0}
-                <CalendarPopover onSelect={(rk) => { lastSelectedSnoozeRuleKey.set(normalizeRuleKey(rk)); trySnooze(rk); const d = snoozeDetails; if (d) d.open = false; }} />
+                <CalendarPopover onSelect={(rk) => { 
+                  lastSelectedSnoozeRuleKey.set(normalizeRuleKey(rk)); 
+                  // Set flag immediately to prevent any navigation
+                  isSnoozing = true;
+                  // Close menu
+                  const d = snoozeDetails; 
+                  if (d) d.open = false; 
+                  // Perform snooze - flag will prevent navigation
+                  trySnooze(rk).finally(() => {
+                    // Clear flag after a delay to allow UI to settle
+                    setTimeout(() => { isSnoozing = false; }, 200);
+                  });
+                }} />
               {:else}
                 <div style="padding:0.5rem 0.75rem; max-width: 21rem;" class="m3-font-body-small">No snooze labels configured. Map them in Settings.</div>
               {/if}
@@ -1178,6 +1230,14 @@
       lines={3}
       unread={(thread.labelIds || []).includes('UNREAD')}
       href={`${base || ''}/viewer/${thread.threadId}`}
+      onclick={(e: MouseEvent) => {
+        // Prevent navigation if we're currently snoozing
+        if (isSnoozing) {
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
+      }}
       trailing={SN_trailingWithDate}
     />
   </div>

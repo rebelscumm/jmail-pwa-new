@@ -92,9 +92,12 @@
     const t = e.target as Element | null;
     // Only prevent navigation if the click came from interactive elements in trailing actions
     // or elements explicitly marked with data-no-row-nav
+    // Also prevent navigation if the row is currently snoozing (to prevent navigation after date picker closes)
     if (t?.closest('[data-no-row-nav]') || 
         // Prevent navigation when a details popover is open inside the row (snooze etc.)
         t?.closest('details[open]') ||
+        // Prevent navigation when row is snoozing (data-snoozing attribute set)
+        t?.closest('[data-snoozing="true"]') ||
         (t?.closest('.trailing') && t?.closest('summary,button,input,select,textarea,[role="menu"],[role="menuitem"]'))) {
       e.preventDefault();
       e.stopPropagation();
