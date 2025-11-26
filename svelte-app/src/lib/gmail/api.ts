@@ -457,7 +457,7 @@ export async function getMessageMetadata(id: string): Promise<GmailMessage> {
     payload?: { headers?: { name: string; value: string }[] };
   };
   const data = await api<GmailMessageApiResponse>(
-    `/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date&metadataHeaders=To&metadataHeaders=Cc&metadataHeaders=Bcc`
+    `/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date&metadataHeaders=To&metadataHeaders=Cc&metadataHeaders=Bcc&metadataHeaders=List-Unsubscribe&metadataHeaders=List-Unsubscribe-Post`
   );
   const headers: Record<string, string> = {};
   for (const h of data.payload?.headers || []) headers[h.name] = h.value;

@@ -1033,12 +1033,7 @@
           </span>
         {/if}
       </span>
-      {threadDisplaySubject}
-      {#if hasUnsubscribeCapability}
-        <button class="inline-unsubscribe" aria-label="Unsubscribe" onclick={handleUnsubscribe} disabled={extractingUnsub} title={extractingUnsub ? 'Finding unsubscribe link…' : 'Unsubscribe'}>
-          <Icon icon={iconUnsubscribe} width="0.875rem" height="0.875rem" />
-        </button>
-      {/if}
+      {threadDisplaySubject}{#if hasUnsubscribeCapability}<button class="inline-unsubscribe" aria-label="Unsubscribe" onclick={handleUnsubscribe} disabled={extractingUnsub} title={extractingUnsub ? 'Finding unsubscribe link…' : 'Unsubscribe'}><Icon icon={iconUnsubscribe} width="0.875rem" height="0.875rem" /></button>{/if}
       <!-- Tooltip is rendered as a fixed element attached to document.body -->
     </span>
   </span>
@@ -1378,8 +1373,8 @@
   .row-headline {
     display: inline-flex;
     align-items: baseline;
-    justify-content: space-between;
-    gap: 0.5rem;
+    justify-content: flex-start;
+    gap: 0.375rem;
     width: 100%;
   }
   .row-headline .title {
@@ -1431,15 +1426,14 @@
     justify-content: center;
     width: 1.25rem;
     height: 1.25rem;
-    margin-left: 0.375rem;
     padding: 0;
     border: none;
     border-radius: var(--m3-util-rounding-small);
     background: transparent;
     color: rgb(var(--m3-scheme-on-surface-variant));
     cursor: pointer;
-    vertical-align: middle;
     flex-shrink: 0;
+    align-self: center;
     transition: background 120ms ease, color 120ms ease;
   }
   .inline-unsubscribe:hover {
