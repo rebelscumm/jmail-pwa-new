@@ -957,20 +957,23 @@ import BottomSheet from "$lib/containers/BottomSheet.svelte";
   // Snooze functionality
   async function onSnoozeSelect(ruleKey: string) {
     if (!currentThread) return;
+    const threadIdToSnooze = currentThread.threadId;
+    // Close the snooze menu immediately
+    if (snoozeDetails) snoozeDetails.open = false;
+    // Navigate to inbox immediately (before optimistic updates can cause thread to disappear)
+    // This ensures the user doesn't see "thread not loaded" message
+    navigateToInbox(true).catch(() => {
+      // Fallback navigation if goto fails
+      try { location.href = '/inbox'; } catch {}
+    });
+    // Perform snooze operation (may complete after navigation)
     try {
-      await snoozeThreadByRule(currentThread.threadId, ruleKey);
+      await snoozeThreadByRule(threadIdToSnooze, ruleKey);
       showSnackbar({ 
         message: `Snoozed ${ruleKey}`, 
         actions: { Undo: () => undoLast(1) },
         closable: true 
       });
-      // Close the snooze menu
-      if (snoozeDetails) snoozeDetails.open = false;
-      // Navigate back to inbox
-      await navigateToInbox(true);
-      await navigateToInbox(true);
-      await navigateToInbox(true);
-      await navigateToInbox(true);
     } catch (error) {
       console.error('Failed to snooze thread:', error);
       showSnackbar({ message: 'Failed to snooze thread', closable: true });

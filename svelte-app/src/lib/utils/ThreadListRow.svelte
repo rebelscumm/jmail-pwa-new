@@ -34,6 +34,7 @@
   import iconUnsubscribe from '@ktibow/iconset-material-symbols/unsubscribe';
   import { findUnsubscribeTarget, aiExtractUnsubscribeUrl, getFriendlyAIErrorMessage } from '$lib/ai/providers';
   import { getMessageFull } from '$lib/gmail/api';
+  import iconTask from '@ktibow/iconset-material-symbols/task-alt';
 
   // Lazy import to avoid circular or route coupling; fallback no-op if route not mounted
   async function scheduleReload() {
@@ -538,6 +539,32 @@
     }
   }
 
+  async function handleCreateTask(e: MouseEvent): Promise<void> {
+    e.preventDefault();
+    e.stopPropagation();
+    const link = `https://mail.google.com/mail/u/0/#inbox/${thread.threadId}`;
+    const subject = threadDisplaySubject;
+    const line = `[${subject}](${link})`;
+    try {
+      // Desktop: copy; user can paste into their task file
+      await navigator.clipboard.writeText(line);
+      // Verify clipboard actually contains the line; if read is blocked or mismatch, fallback to showing the text
+      try {
+        const readBack = await navigator.clipboard.readText();
+        if (readBack === line) {
+          showSnackbar({ message: 'Task line copied to clipboard.', closable: true });
+        } else {
+          showSnackbar({ message: line, closable: true });
+        }
+      } catch (_) {
+        // If we cannot read the clipboard (permission), show the line for manual copy
+        showSnackbar({ message: line, closable: true });
+      }
+    } catch {
+      showSnackbar({ message: line, closable: true });
+    }
+  }
+
   async function explainAiMissing(e: Event): Promise<void> {
     try {
       e.preventDefault?.();
@@ -1006,6 +1033,9 @@
         <Icon icon={iconUnsubscribe} width="1rem" height="1rem" />
       </Button>
     {/if}
+    <Button variant="text" iconType="full" aria-label="Create Task" onclick={handleCreateTask} title="Create Task">
+      <Icon icon={iconTask} width="1rem" height="1rem" />
+    </Button>
     {#if isSnoozedThread(thread)}
       <Button variant="text" onclick={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); animateAndUnsnooze(); }}>Unsnooze</Button>
     {/if}
