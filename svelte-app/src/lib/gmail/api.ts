@@ -687,6 +687,42 @@ export async function sendMessageRaw(raw: string, threadId?: string): Promise<{ 
   });
 }
 
+export async function getMessageRaw(id: string): Promise<string> {
+  type GmailMessageRawResponse = {
+    id: string;
+    threadId: string;
+    raw?: string;
+  };
+  const data = await api<GmailMessageRawResponse>(`/messages/${id}?format=raw`);
+  if (!data.raw) {
+    throw new GmailApiError('Raw email source not available', 404);
+  }
+  // Decode base64url-encoded raw email (RFC 2822 format)
+  try {
+    // Gmail API returns raw email as base64url-encoded string
+    // Normalize URL-safe base64 and fix padding
+    let base64 = data.raw.replace(/-/g, '+').replace(/_/g, '/');
+    const pad = base64.length % 4;
+    if (pad) base64 = base64 + '='.repeat(4 - pad);
+    // Decode to binary string (RFC 2822 emails are ASCII-compatible)
+    const binary = atob(base64);
+    // Convert binary string to UTF-8 string reliably
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+  } catch (e) {
+    // Fallback: try simple atob if TextDecoder fails
+    try {
+      let base64 = data.raw.replace(/-/g, '+').replace(/_/g, '/');
+      const pad = base64.length % 4;
+      if (pad) base64 = base64 + '='.repeat(4 - pad);
+      return atob(base64);
+    } catch (fallbackError) {
+      throw new GmailApiError(`Failed to decode raw email: ${e instanceof Error ? e.message : String(e)}`, 500);
+    }
+  }
+}
+
 // Quick profile ping to gauge account message/thread totals for diagnostics
 export async function getProfile(): Promise<{ emailAddress: string; messagesTotal: number; threadsTotal: number; historyId: string }> {
   const data = await api<{ emailAddress?: string; messagesTotal?: number; threadsTotal?: number; historyId?: string }>(`/profile`);

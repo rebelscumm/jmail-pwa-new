@@ -35,6 +35,7 @@
   import { aiSummarizeSubject, aiSummarizeEmail, aiDetectCollegeRecruiting } from '$lib/ai/providers';
   import Icon from '$lib/misc/_icon.svelte';
   import iconSync from '@ktibow/iconset-material-symbols/sync';
+  import { markOnline, markError } from '$lib/stores/server-status';
 
   // Helper: check pending ops with retries; returns array of ops, or null if lookup failed
   async function getPendingOpsWithRetry(db: any, scopeKey: string, attempts = 3): Promise<any[] | null> {
@@ -201,9 +202,12 @@
         // Emit completion event for TopAppBar
         window.dispatchEvent(new CustomEvent('jmail:authSyncComplete'));
       } catch (e) {
+        const err = e instanceof Error ? e : new Error(String(e));
         console.error('[Inbox] Authoritative sync failed:', e);
-        // Still emit completion event so TopAppBar doesn't hang
-        window.dispatchEvent(new CustomEvent('jmail:authSyncComplete'));
+        // Emit error event so TopAppBar can show proper feedback
+        window.dispatchEvent(new CustomEvent('jmail:authSyncError', {
+          detail: { error: err.message, stack: err.stack }
+        }));
         throw e;
       }
     };
@@ -527,7 +531,15 @@
     return (m ? (m[1] || m[2]) : raw).toLowerCase();
   }
   function getSubject(a: import('$lib/types').GmailThread): string { return (a.lastMsgMeta.subject || '').toLowerCase(); }
-  function getDate(a: import('$lib/types').GmailThread): number { return num(a.lastMsgMeta.date) || 0; }
+  function getDate(a: import('$lib/types').GmailThread): number {
+    const d = a.lastMsgMeta?.date;
+    if (typeof d === 'number' && !Number.isNaN(d)) return d;
+    if (typeof d === 'string') {
+      const parsed = Number(d);
+      if (!Number.isNaN(parsed)) return parsed;
+    }
+    return 0;
+  }
   function isUnread(a: import('$lib/types').GmailThread): boolean { return (a.labelIds || []).includes('UNREAD'); }
   const currentSort: InboxSort = $derived(($settings.inboxSort || 'date_desc') as InboxSort);
   const sortedVisibleThreads = $derived.by(() => {
@@ -535,62 +547,72 @@
       if (!Array.isArray(filteredThreads)) return [];
       const arr = [...filteredThreads];
       
+      // Sort comparison that ensures consistent ordering
+      function dateCompareDesc(a: import('$lib/types').GmailThread, b: import('$lib/types').GmailThread): number {
+        const dateA = getDate(a);
+        const dateB = getDate(b);
+        // Threads without dates (0) go to the end
+        if (dateA === 0 && dateB === 0) return 0;
+        if (dateA === 0) return 1; // a goes after b
+        if (dateB === 0) return -1; // b goes after a
+        return dateB - dateA; // newest first
+      }
+      function dateCompareAsc(a: import('$lib/types').GmailThread, b: import('$lib/types').GmailThread): number {
+        const dateA = getDate(a);
+        const dateB = getDate(b);
+        // Threads without dates (0) go to the end
+        if (dateA === 0 && dateB === 0) return 0;
+        if (dateA === 0) return 1;
+        if (dateB === 0) return -1;
+        return dateA - dateB; // oldest first
+      }
+      
       switch (currentSort) {
         case 'date_asc':
-          arr.sort((a, b) => getDate(a) - getDate(b));
+          arr.sort(dateCompareAsc);
           break;
         case 'unread_first':
           arr.sort((a, b) => {
             const d = (isUnread(b) as any) - (isUnread(a) as any);
             if (d !== 0) return d;
-            return getDate(b) - getDate(a);
+            return dateCompareDesc(a, b);
           });
           break;
         case 'sender_az':
           arr.sort((a, b) => {
             const s = cmp(getSender(a), getSender(b));
             if (s !== 0) return s;
-            return getDate(b) - getDate(a);
+            return dateCompareDesc(a, b);
           });
           break;
         case 'sender_za':
           arr.sort((a, b) => {
             const s = cmp(getSender(b), getSender(a));
             if (s !== 0) return s;
-            return getDate(b) - getDate(a);
+            return dateCompareDesc(a, b);
           });
           break;
         case 'subject_az':
           arr.sort((a, b) => {
             const s = cmp(getSubject(a), getSubject(b));
             if (s !== 0) return s;
-            return getDate(b) - getDate(a);
+            return dateCompareDesc(a, b);
           });
           break;
         case 'subject_za':
           arr.sort((a, b) => {
             const s = cmp(getSubject(b), getSubject(a));
             if (s !== 0) return s;
-            return getDate(b) - getDate(a);
+            return dateCompareDesc(a, b);
           });
           break;
         case 'date_desc':
         default:
-          arr.sort((a, b) => getDate(b) - getDate(a));
+          arr.sort(dateCompareDesc);
           break;
       }
       
-      // Prioritize threads that already have an AI summary, then others,
-      // and keep threads with pending AI subject at the bottom until ready
-      try {
-        const pending = arr.filter((t) => ((t as any).aiSubjectStatus || 'none') === 'pending');
-        const notPending = arr.filter((t) => ((t as any).aiSubjectStatus || 'none') !== 'pending');
-        const withSummary = notPending.filter((t) => (t.summaryStatus === 'ready' && (t.summary || '').trim() !== ''));
-        const withoutSummary = notPending.filter((t) => !(t.summaryStatus === 'ready' && (t.summary || '').trim() !== ''));
-        return [...withSummary, ...withoutSummary, ...pending];
-      } catch (_) {
-        return arr;
-      }
+      return arr;
     } catch (e) {
       console.warn('Error in sortedVisibleThreads derived:', e);
       return [];
@@ -1421,6 +1443,7 @@
       const journalByThread: Record<string, any[]> = {};
       try {
         const allOps = await db.getAll('ops');
+        console.log(`[AuthSync] Found ${allOps?.length || 0} pending operations`);
         for (const op of (allOps || [])) {
           const anyOp = op as any;
           const key = anyOp.scopeKey || (anyOp.op && anyOp.op.threadId) || '';
@@ -1429,17 +1452,29 @@
             opsByScope[key].push(op);
           }
         }
+        if (Object.keys(opsByScope).length > 0) {
+          console.log(`[AuthSync] Pending ops for threads:`, Object.keys(opsByScope).slice(0, 5));
+        }
         
         const recentCutoff = Date.now() - (2 * 60 * 1000); // 2 minute window
         const allJournal = await db.getAll('journal');
+        console.log(`[AuthSync] Found ${allJournal?.length || 0} total journal entries`);
+        let recentJournalCount = 0;
         for (const entry of (allJournal || [])) {
           const e = entry as any;
           if (!e || !e.threadId) continue;
           if (e.createdAt && e.createdAt < recentCutoff) continue;
+          recentJournalCount++;
           journalByThread[e.threadId] = journalByThread[e.threadId] || [];
           journalByThread[e.threadId].push(e);
         }
-      } catch (_) {}
+        console.log(`[AuthSync] ${recentJournalCount} journal entries within 2-minute window for ${Object.keys(journalByThread).length} threads`);
+        if (Object.keys(journalByThread).length > 0) {
+          console.log(`[AuthSync] Protected threads:`, Object.keys(journalByThread).slice(0, 5));
+        }
+      } catch (e) {
+        console.error('[AuthSync] Failed to prefetch ops/journal:', e);
+      }
       
       // Helper to check if thread has pending INBOX changes
       function hasPendingInboxChanges(threadId: string): boolean {
@@ -1611,27 +1646,42 @@
       // STEP 5: Remove INBOX label from local threads NOT in Gmail
       console.log(`[AuthSync] Step 5: Removing INBOX from threads not in Gmail...`);
       const allLocalThreads = await db.getAll('threads');
+      const localInboxThreads = allLocalThreads.filter((t: any) => t.labelIds?.includes('INBOX'));
+      console.log(`[AuthSync] Step 5: Local has ${localInboxThreads.length} INBOX threads, Gmail enumerated ${gmailThreadIds.size} threads`);
+      
       const threadsToRemoveInbox: any[] = [];
+      let skippedInGmail = 0;
+      let skippedPending = 0;
+      let skippedTerminal = 0;
       
       for (const t of allLocalThreads) {
         if (!t.labelIds?.includes('INBOX')) continue;
-        if (gmailThreadIds.has(t.threadId)) continue;
+        
+        if (gmailThreadIds.has(t.threadId)) {
+          skippedInGmail++;
+          continue;
+        }
         
         // Skip if has pending operations
         if (hasPendingInboxChanges(t.threadId)) {
           console.log(`[AuthSync] Skipping INBOX removal for ${t.threadId} - has pending changes`);
+          skippedPending++;
           continue;
         }
         
         // Skip terminal labels
         if (t.labelIds?.includes('TRASH') || t.labelIds?.includes('SPAM')) {
           console.log(`[AuthSync] Skipping ${t.threadId} - has terminal label`);
+          skippedTerminal++;
           continue;
         }
         
+        console.log(`[AuthSync] Will remove INBOX from ${t.threadId} (not in Gmail's ${gmailThreadIds.size} thread set)`);
         const labels = (t.labelIds || []).filter((l: string) => l !== 'INBOX');
         threadsToRemoveInbox.push({ ...t, labelIds: labels });
       }
+      
+      console.log(`[AuthSync] Step 5 Summary: ${skippedInGmail} in Gmail, ${skippedPending} pending, ${skippedTerminal} terminal, ${threadsToRemoveInbox.length} to remove`);
       
       if (threadsToRemoveInbox.length > 0) {
         console.log(`[AuthSync] Removing INBOX from ${threadsToRemoveInbox.length} stale threads:`);
@@ -1640,10 +1690,15 @@
         
         const tx = db.transaction('threads', 'readwrite');
         for (const t of threadsToRemoveInbox) {
-          try { tx.store.put(t); } catch (_) {}
+          try { tx.store.put(t); } catch (e) { console.error(`[AuthSync] Failed to update thread ${t.threadId}:`, e); }
         }
         await tx.done;
         console.log(`[AuthSync] Step 5 Complete: Removed INBOX from ${threadsToRemoveInbox.length} threads`);
+        
+        // Verify removal - re-read from DB to confirm
+        const verifyThreads = await db.getAll('threads');
+        const verifyInbox = verifyThreads.filter((t: any) => t.labelIds?.includes('INBOX'));
+        console.log(`[AuthSync] Step 5 Verify: DB now has ${verifyInbox.length} INBOX threads (was ${localInboxThreads.length})`);
       } else {
         console.log(`[AuthSync] Step 5: No stale threads to clean`);
       }
@@ -1698,18 +1753,31 @@
       // FINAL: Refresh in-memory store and log summary
       authoritativeSyncProgress = { ...authoritativeSyncProgress, running: false };
       
-      // Clear trailing holds
+      // Clear trailing holds to ensure removed threads don't stay visible
       try {
         const { trailingHolds } = await import('$lib/stores/holds');
+        const { get } = await import('svelte/store');
+        const currentHolds = get(trailingHolds);
+        const holdCount = Object.keys(currentHolds || {}).length;
+        if (holdCount > 0) {
+          console.log(`[AuthSync] Clearing ${holdCount} trailing holds:`, Object.keys(currentHolds).slice(0, 5));
+        }
         trailingHolds.set({});
-      } catch (_) {}
+      } catch (e) {
+        console.error('[AuthSync] Failed to clear trailing holds:', e);
+      }
 
-      // Refresh in-memory store
+      // Refresh in-memory store from database
       try {
         const allThreads = await db.getAll('threads');
+        const inboxCount = allThreads.filter((t: any) => t.labelIds?.includes('INBOX')).length;
+        console.log(`[AuthSync] Refreshing store with ${allThreads.length} total threads (${inboxCount} with INBOX)`);
         const { setThreadsWithReset } = await import('$lib/stores/optimistic-counters');
         setThreadsWithReset(allThreads as any);
-      } catch (_) {}
+        console.log(`[AuthSync] Store refreshed`);
+      } catch (e) {
+        console.error('[AuthSync] Failed to refresh store:', e);
+      }
       
       // Final summary
       const finalThreads = await db.getAll('threads');
@@ -1735,15 +1803,39 @@
         console.warn(`[AuthSync] ⚠️ Local has ${Math.abs(discrepancy)} more threads than Gmail`);
       }
       
+      // Mark server as online - sync completed successfully
+      markOnline();
+      
     } catch (e) {
       authoritativeSyncProgress = { ...authoritativeSyncProgress, running: false };
       console.error('[AuthSync] Sync failed:', e);
+      
+      // Determine error type and mark server status appropriately
+      const err = e instanceof Error ? e : new Error(String(e));
+      const msg = err.message.toLowerCase();
+      
+      if (msg.includes('failed to fetch') || msg.includes('network') || msg.includes('net::')) {
+        markError('Network error - server unreachable', undefined);
+      } else if (msg.includes('timeout') || msg.includes('page_timeout')) {
+        markError('Request timeout', undefined);
+      } else if (msg.includes('401') || msg.includes('unauthorized')) {
+        markError('Session expired', 401);
+      } else if (msg.includes('503')) {
+        markError('Service unavailable', 503);
+      } else if (msg.includes('500') || msg.includes('502') || msg.includes('504')) {
+        const code = msg.match(/\d{3}/)?.[0];
+        markError('Server error', code ? parseInt(code) : 500);
+      }
+      
       try { 
         showSnackbar({ 
-          message: 'Sync failed. Tap to retry.', 
+          message: '❌ Sync failed. Tap to retry.', 
           timeout: 8000, 
           closable: true,
-          actions: { 'Retry': () => { void performAuthoritativeInboxSync(); } } 
+          actions: { 
+            'Retry': () => { void performAuthoritativeInboxSync(); },
+            'Diagnostics': () => { location.href = '/diagnostics'; }
+          } 
         }); 
       } catch (_) {}
       throw e;

@@ -116,6 +116,105 @@ let recruitingDiagnostics: {
 	running: false
 };
 
+// Settings persistence debug state
+let settingsDebugResult: {
+	isPersistent: boolean;
+	storageEstimate: { usage: number; quota: number } | null;
+	appSettings: boolean;
+	hasApiKey: boolean;
+	aiProvider: string | null;
+	labelMappingCount: number;
+	precomputeSummaries: boolean;
+	rawData: any;
+} | null = null;
+let settingsDebugRunning = false;
+
+async function debugSettingsPersistence() {
+	settingsDebugRunning = true;
+	addLog('info', ['Starting settings persistence debug...']);
+	
+	try {
+		const { getDB } = await import('$lib/db/indexeddb');
+		const db = await getDB();
+		
+		// Check storage persistence
+		let isPersistent = false;
+		let storageEstimate: { usage: number; quota: number } | null = null;
+		
+		if (navigator.storage && navigator.storage.persisted) {
+			isPersistent = await navigator.storage.persisted();
+			addLog('info', ['Storage persistent:', isPersistent]);
+		}
+		
+		if (navigator.storage && navigator.storage.estimate) {
+			const estimate = await navigator.storage.estimate();
+			storageEstimate = {
+				usage: estimate.usage || 0,
+				quota: estimate.quota || 0
+			};
+			addLog('info', ['Storage estimate:', storageEstimate]);
+		}
+		
+		// Read settings from IndexedDB
+		const [appSettings, labelMapping] = await Promise.all([
+			db.get('settings', 'app'),
+			db.get('settings', 'labelMapping')
+		]);
+		
+		addLog('info', ['Raw app settings from IndexedDB:', appSettings]);
+		addLog('info', ['Raw label mapping from IndexedDB:', labelMapping]);
+		
+		const appSettingsObj = appSettings as any;
+		
+		settingsDebugResult = {
+			isPersistent,
+			storageEstimate,
+			appSettings: !!appSettings,
+			hasApiKey: !!appSettingsObj?.aiApiKey,
+			aiProvider: appSettingsObj?.aiProvider || null,
+			labelMappingCount: labelMapping ? Object.keys(labelMapping as object).filter(k => !!(labelMapping as any)[k]).length : 0,
+			precomputeSummaries: !!appSettingsObj?.precomputeSummaries,
+			rawData: {
+				appSettings: appSettings || null,
+				labelMapping: labelMapping || null,
+				checkedAt: new Date().toISOString()
+			}
+		};
+		
+		showSnackbar({ message: 'Settings debug complete - check results below', closable: true });
+	} catch (e) {
+		addLog('error', ['Settings debug failed:', e]);
+		showSnackbar({ message: `Settings debug failed: ${String(e)}`, closable: true });
+	} finally {
+		settingsDebugRunning = false;
+	}
+}
+
+async function requestStoragePersistence() {
+	addLog('info', ['Requesting persistent storage...']);
+	
+	try {
+		if (navigator.storage && navigator.storage.persist) {
+			const wasGranted = await navigator.storage.persist();
+			addLog('info', ['Persistent storage request result:', wasGranted]);
+			
+			if (wasGranted) {
+				showSnackbar({ message: '✅ Persistent storage granted - data will not be cleared', closable: true });
+			} else {
+				showSnackbar({ message: '⚠️ Persistent storage denied - browser may clear data under storage pressure', closable: true });
+			}
+			
+			// Refresh the debug info
+			await debugSettingsPersistence();
+		} else {
+			showSnackbar({ message: 'Storage API not available in this browser', closable: true });
+		}
+	} catch (e) {
+		addLog('error', ['Request persistent storage failed:', e]);
+		showSnackbar({ message: `Failed to request persistent storage: ${String(e)}`, closable: true });
+	}
+}
+
 async function runRecruitingDiagnostics() {
 	recruitingDiagnostics.running = true;
 	try {
@@ -4016,6 +4115,50 @@ ${window.location.origin}/api/google-callback`;
 						<strong>Test Failed:</strong> {aiSummaryTestResult.error}
 					</div>
 				{/if}
+			</div>
+		{/if}
+	</Card>
+
+	<Card variant="outlined">
+		<div class="section-header">
+			<div class="section-title">
+				<h2>Settings Persistence Debug</h2>
+			</div>
+			<Button variant="text" iconType="left" class="copy-button" onclick={() => copySection('Settings Debug', settingsDebugResult)}>
+				<Icon icon={iconCopy} />
+				Copy Section
+			</Button>
+		</div>
+		<p style="color: rgb(var(--m3-scheme-on-surface-variant)); margin-bottom: 1rem;">
+			Debug settings persistence issues. This checks what's stored in IndexedDB and whether storage is persistent.
+		</p>
+		<div class="controls">
+			<Button variant="filled" onclick={debugSettingsPersistence} disabled={settingsDebugRunning}>
+				{settingsDebugRunning ? 'Checking...' : 'Check Settings Storage'}
+			</Button>
+			<Button variant="outlined" onclick={requestStoragePersistence}>
+				Request Persistent Storage
+			</Button>
+		</div>
+		{#if settingsDebugResult}
+			<div class="summary" style="margin-top: 1rem;">
+				<strong>Storage Status:</strong>
+				<ul style="margin: 0.5rem 0; padding-left: 1.5rem;">
+					<li>Storage Persistent: {settingsDebugResult.isPersistent ? '✅ Yes' : '⚠️ No (browser may clear data)'}</li>
+					<li>Storage Quota: {settingsDebugResult.storageEstimate ? `${Math.round(settingsDebugResult.storageEstimate.usage / 1024)} KB used of ${Math.round(settingsDebugResult.storageEstimate.quota / 1024 / 1024)} MB` : 'N/A'}</li>
+				</ul>
+				<strong>Settings in IndexedDB:</strong>
+				<ul style="margin: 0.5rem 0; padding-left: 1.5rem;">
+					<li>App Settings: {settingsDebugResult.appSettings ? '✅ Present' : '❌ Not found'}</li>
+					<li>API Key: {settingsDebugResult.hasApiKey ? '✅ Configured' : '❌ Not set'}</li>
+					<li>AI Provider: {settingsDebugResult.aiProvider || 'Not set'}</li>
+					<li>Label Mapping: {settingsDebugResult.labelMappingCount} keys mapped</li>
+					<li>Precompute Summaries: {settingsDebugResult.precomputeSummaries ? '✅ Enabled' : '❌ Disabled'}</li>
+				</ul>
+				<details style="margin-top: 0.5rem;">
+					<summary style="cursor: pointer; color: rgb(var(--m3-scheme-primary));">Raw Settings Data</summary>
+					<pre style="white-space:pre-wrap; font-size: 0.75rem; max-height: 300px; overflow: auto; margin-top: 0.5rem;">{JSON.stringify(settingsDebugResult.rawData, null, 2)}</pre>
+				</details>
 			</div>
 		{/if}
 	</Card>

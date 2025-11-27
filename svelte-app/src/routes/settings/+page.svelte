@@ -10,6 +10,7 @@
   import type { AppSettings } from '$lib/stores/settings';
   import { createBackup, listBackups, pruneOldBackups, restoreBackup } from '$lib/db/backups';
   import Card from '$lib/containers/Card.svelte';
+  import Dialog from '$lib/containers/Dialog.svelte';
   import Button from '$lib/buttons/Button.svelte';
   import TextField from '$lib/forms/TextField.svelte';
   import TextFieldOutlined from '$lib/forms/TextFieldOutlined.svelte';
@@ -157,6 +158,11 @@
   // Track dirty state for guards
   let initialLoaded = $state(false);
   let suppressGuards = $state(false);
+  
+  // MD3-compliant discard confirmation dialog state
+  let showDiscardDialog = $state(false);
+  let pendingNavigation = $state<{ cancel: () => void } | null>(null);
+  
   let isDirty = $derived((): boolean => {
     // Compare current UI state against $settings where possible
     const s = $settings as AppSettings;
@@ -176,13 +182,13 @@
         _aiDraftModel !== (s.aiDraftModel || '') ||
         _aiPageFetchOptIn !== !!s.aiPageFetchOptIn ||
         _taskFilePath !== (s.taskFilePath || '') ||
-        Number(_trailingRefreshDelayMs || 0) !== Number(s.trailingRefreshDelayMs || 5000) ||
-        Number(_trailingSlideOutDurationMs || 0) !== Number((s as any).trailingSlideOutDurationMs || 260) ||
+        Number(_trailingRefreshDelayMs || 5000) !== Number(s.trailingRefreshDelayMs || 5000) ||
+        Number(_trailingSlideOutDurationMs || 260) !== Number((s as any).trailingSlideOutDurationMs || 260) ||
         (_swipeRightPrimary as any) !== (s.swipeRightPrimary || 'archive') ||
         (_swipeLeftPrimary as any) !== (s.swipeLeftPrimary || 'delete') ||
         !!_confirmDelete !== !!s.confirmDelete ||
         Number(_swipeCommitVelocityPxPerSec || 1000) !== Number(s.swipeCommitVelocityPxPerSec || 1000) ||
-        Number(_swipeDisappearMs || 5000) !== Number(s.swipeDisappearMs || 800)
+        Number(_swipeDisappearMs || 5000) !== Number(s.swipeDisappearMs || 5000)
       );
       return mappingChanged || uiMappingChanged || appChanged || (Number(_fontScalePercent || 100) !== Number((s as any).fontScalePercent || 100));
     } catch { return false; }
@@ -194,12 +200,23 @@
   let removeBeforeUnload: (() => void) | null = null;
   const removeBeforeNavigate = beforeNavigate((nav) => {
     if (suppressGuards || !(isDirty as unknown as boolean)) return;
-    const msg = 'You have unsaved changes. Discard them?';
-    if (!confirm(msg)) {
-      nav.cancel();
-      return;
-    }
+    // Cancel navigation and show MD3 dialog for user confirmation
+    nav.cancel();
+    pendingNavigation = nav;
+    showDiscardDialog = true;
   });
+  
+  function handleDiscardConfirm() {
+    showDiscardDialog = false;
+    suppressGuards = true;
+    // Navigate after confirming discard
+    goto('/inbox');
+  }
+  
+  function handleDiscardCancel() {
+    showDiscardDialog = false;
+    pendingNavigation = null;
+  }
 
   // Browser unload guard
   $effect(() => {
@@ -824,3 +841,21 @@
     </p>
   </Card>
 {/if}
+
+<!-- MD3-compliant Discard Changes Confirmation Dialog -->
+<Dialog
+  bind:open={showDiscardDialog}
+  headline="Discard changes?"
+  closeOnEsc={true}
+  closeOnClick={false}
+>
+  {#snippet children()}
+    <p style="margin: 0;">
+      You have unsaved changes. Are you sure you want to leave without saving?
+    </p>
+  {/snippet}
+  {#snippet buttons()}
+    <Button variant="text" onclick={handleDiscardCancel}>Keep editing</Button>
+    <Button variant="filled" onclick={handleDiscardConfirm}>Discard</Button>
+  {/snippet}
+</Dialog>

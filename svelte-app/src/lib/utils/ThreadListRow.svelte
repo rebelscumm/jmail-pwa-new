@@ -33,8 +33,11 @@
   import { openGmailPopup } from '$lib/utils/gmail-links';
   import iconUnsubscribe from '@ktibow/iconset-material-symbols/unsubscribe';
   import { findUnsubscribeTarget, aiExtractUnsubscribeUrl, getFriendlyAIErrorMessage } from '$lib/ai/providers';
-  import { getMessageFull } from '$lib/gmail/api';
+  import { getMessageFull, sendMessageRaw, getProfile } from '$lib/gmail/api';
+  import { settings as settingsStore } from '$lib/stores/settings';
   import iconTask from '@ktibow/iconset-material-symbols/task-alt';
+  import Dialog from '$lib/containers/Dialog.svelte';
+  import iconMarkEmailUnread from '@ktibow/iconset-material-symbols/mark-email-unread';
 
   // Lazy import to avoid circular or route coupling; fallback no-op if route not mounted
   async function scheduleReload() {
@@ -502,6 +505,9 @@
   })());
 
   let extractingUnsub = $state(false);
+  let unsubscribeDialogOpen = $state(false);
+  let unsubscribeMailtoInfo: { to: string; subject: string; body: string; target: string } | null = $state(null);
+  let sendingUnsubscribeEmail = $state(false);
 
   async function removeLabelInline(labelId: string, labelName?: string): Promise<void> {
     try {
@@ -511,6 +517,46 @@
     } catch {
       showSnackbar({ message: 'Failed to remove label' });
     }
+  }
+
+  // Parse a mailto: URL to extract recipient, subject, and body
+  function parseMailtoUrl(mailto: string): { to: string; subject: string; body: string } | null {
+    try {
+      if (!mailto.startsWith('mailto:')) return null;
+      const url = new URL(mailto);
+      const to = url.pathname || '';
+      const subject = url.searchParams.get('subject') || 'Unsubscribe';
+      const body = url.searchParams.get('body') || 'Please unsubscribe me from this mailing list.';
+      return { to, subject, body };
+    } catch {
+      // Fallback for malformed mailto: links
+      const match = mailto.match(/^mailto:([^?]+)/i);
+      if (match && match[1]) {
+        return { to: match[1], subject: 'Unsubscribe', body: 'Please unsubscribe me from this mailing list.' };
+      }
+      return null;
+    }
+  }
+
+  // Create RFC 2822 raw email for sending
+  function createRawEmail(from: string, to: string, subject: string, body: string): string {
+    const boundary = `----=_Part_${Date.now()}_${Math.random().toString(36).substring(2)}`;
+    const email = [
+      `From: ${from}`,
+      `To: ${to}`,
+      `Subject: ${subject}`,
+      `MIME-Version: 1.0`,
+      `Content-Type: text/plain; charset="UTF-8"`,
+      `Content-Transfer-Encoding: 7bit`,
+      ``,
+      body
+    ].join('\r\n');
+    // Base64 encode for Gmail API (URL-safe base64)
+    const base64 = btoa(unescape(encodeURIComponent(email)))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+    return base64;
   }
 
   async function handleUnsubscribe(e: MouseEvent): Promise<void> {
@@ -524,8 +570,9 @@
       return;
     }
     extractingUnsub = true;
+    let usedAI = false;
     try {
-      showSnackbar({ message: 'Looking for unsubscribe link…' });
+      showSnackbar({ message: 'Looking for unsubscribe option…' });
       // Get full message if not already available
       let msg = $messagesStore[lastId];
       if (!msg?.bodyHtml && !msg?.bodyText) {
@@ -540,32 +587,62 @@
         showSnackbar({ message: 'Message not found', closable: true });
         return;
       }
-      // Try to find unsubscribe target
+      // Try to find unsubscribe target via standard detection first
       let target = findUnsubscribeTarget(msg.headers, msg.bodyHtml);
-      if (!target && msg.bodyHtml) {
-        // Try AI extraction as fallback
-        try {
-          target = await aiExtractUnsubscribeUrl(msg.headers?.Subject || '', msg.bodyText, msg.bodyHtml);
-        } catch (aiErr) {
-          // AI extraction failed, but we'll show the error below if no target found
+      
+      // Always try AI extraction as fallback if standard detection fails
+      if (!target && (msg.bodyHtml || msg.bodyText)) {
+        const hasAiKey = !!$settingsStore?.geminiApiKey || !!$settingsStore?.openaiApiKey || !!$settingsStore?.anthropicApiKey;
+        if (hasAiKey) {
+          showSnackbar({ message: 'Using AI to find unsubscribe option…' });
+          usedAI = true;
+          try {
+            target = await aiExtractUnsubscribeUrl(msg.headers?.Subject || '', msg.bodyText, msg.bodyHtml);
+          } catch (aiErr) {
+            // AI extraction failed, show specific error
+            const { message: aiErrMsg } = getFriendlyAIErrorMessage(aiErr, 'AI Unsubscribe');
+            showSnackbar({ message: aiErrMsg, closable: true, timeout: 6000 });
+            return;
+          }
         }
       }
-      if (target) {
-        // Show snackbar with action buttons instead of browser confirm
-        showSnackbar({
-          message: `Unsubscribe link found: ${target.length > 60 ? target.substring(0, 60) + '…' : target}`,
-          actions: {
-            Open: () => {
-              window.open(target, '_blank');
-              showSnackbar({ message: 'Opened unsubscribe link', closable: true });
-            }
-          },
-          closable: true,
-          timeout: 10000
+      
+      if (!target) {
+        showSnackbar({ 
+          message: 'No unsubscribe option found in this email', 
+          closable: true, 
+          timeout: 5000 
         });
-      } else {
-        showSnackbar({ message: 'No unsubscribe link found', closable: true, timeout: 5000 });
+        return;
       }
+      
+      // Handle mailto: links - show modal dialog to confirm sending email
+      if (target.toLowerCase().startsWith('mailto:')) {
+        const mailto = parseMailtoUrl(target);
+        if (mailto) {
+          unsubscribeMailtoInfo = {
+            to: mailto.to,
+            subject: mailto.subject,
+            body: mailto.body,
+            target: target
+          };
+          unsubscribeDialogOpen = true;
+        } else {
+          // Malformed mailto, open in default email client
+          window.open(target, '_blank');
+          showSnackbar({ message: 'Opened in email client', closable: true });
+        }
+        return;
+      }
+      
+      // Handle http/https links - open directly without asking
+      window.open(target, '_blank');
+      const methodLabel = usedAI ? 'AI found unsubscribe link' : 'Unsubscribe link found';
+      showSnackbar({ 
+        message: `${methodLabel} opened in new window`, 
+        closable: true, 
+        timeout: 3000 
+      });
     } catch (e) {
       const { message } = getFriendlyAIErrorMessage(e, 'Unsubscribe');
       showSnackbar({
@@ -575,6 +652,44 @@
       });
     } finally {
       extractingUnsub = false;
+    }
+  }
+
+  async function sendUnsubscribeEmail(): Promise<void> {
+    if (!unsubscribeMailtoInfo || sendingUnsubscribeEmail) return;
+    sendingUnsubscribeEmail = true;
+    try {
+      const profile = await getProfile();
+      if (!profile.emailAddress) {
+        showSnackbar({ message: 'Could not get your email address', closable: true });
+        unsubscribeDialogOpen = false;
+        return;
+      }
+      const raw = createRawEmail(profile.emailAddress, unsubscribeMailtoInfo.to, unsubscribeMailtoInfo.subject, unsubscribeMailtoInfo.body);
+      await sendMessageRaw(raw);
+      unsubscribeDialogOpen = false;
+      showSnackbar({ 
+        message: `✓ Unsubscribe email sent to ${unsubscribeMailtoInfo.to}`, 
+        closable: true, 
+        timeout: 6000 
+      });
+      unsubscribeMailtoInfo = null;
+    } catch (sendErr) {
+      console.error('Failed to send unsubscribe email:', sendErr);
+      showSnackbar({ 
+        message: 'Failed to send unsubscribe email. Try opening in your email client.', 
+        actions: {
+          Open: () => {
+            if (unsubscribeMailtoInfo) {
+              window.open(unsubscribeMailtoInfo.target, '_blank');
+            }
+          }
+        },
+        closable: true, 
+        timeout: 8000 
+      });
+    } finally {
+      sendingUnsubscribeEmail = false;
     }
   }
 
@@ -995,17 +1110,32 @@
       collapsing = true;
       setTimeout(() => { animating = false; }, 160);
     }
+    function handleResetSlid() {
+      // Reset slide state for this row on refresh
+      if (committed || dx !== 0 || animating || exiting || collapsing) {
+        animating = true;
+        dx = 0;
+        committed = false;
+        exiting = false;
+        collapsing = false;
+        lastCommittedAction = null;
+        rowHeightPx = null; // Reset to auto height
+        setTimeout(() => { animating = false; }, 200);
+      }
+    }
     window.addEventListener('jmail:groupSlide', handleGroupSlide as EventListener);
     window.addEventListener('jmail:keyboardAction', handleKeyboardAction as EventListener);
     window.addEventListener('jmail:keyboardSnooze', handleKeyboardSnooze as EventListener);
     window.addEventListener('jmail:openSnoozeMenu', handleOpenSnoozeMenu as EventListener);
     window.addEventListener('jmail:disappearNow', handleDisappear);
+    window.addEventListener('jmail:resetSlidRows', handleResetSlid);
     return () => { 
       window.removeEventListener('jmail:groupSlide', handleGroupSlide as EventListener); 
       window.removeEventListener('jmail:keyboardAction', handleKeyboardAction as EventListener);
       window.removeEventListener('jmail:keyboardSnooze', handleKeyboardSnooze as EventListener);
       window.removeEventListener('jmail:openSnoozeMenu', handleOpenSnoozeMenu as EventListener);
-      window.removeEventListener('jmail:disappearNow', handleDisappear); 
+      window.removeEventListener('jmail:disappearNow', handleDisappear);
+      window.removeEventListener('jmail:resetSlidRows', handleResetSlid);
     };
   });
 </script>
@@ -1033,9 +1163,22 @@
           </span>
         {/if}
       </span>
-      {threadDisplaySubject}{#if hasUnsubscribeCapability}<button class="inline-unsubscribe" aria-label="Unsubscribe" onclick={handleUnsubscribe} disabled={extractingUnsub} title={extractingUnsub ? 'Finding unsubscribe link…' : 'Unsubscribe'}><Icon icon={iconUnsubscribe} width="0.875rem" height="0.875rem" /></button>{/if}
+      {threadDisplaySubject}
       <!-- Tooltip is rendered as a fixed element attached to document.body -->
     </span>
+    <button 
+      class={`unsubscribe-btn ${hasUnsubscribeCapability ? 'detected' : 'ai-powered'} ${extractingUnsub ? 'loading' : ''}`}
+      aria-label={extractingUnsub ? 'Finding unsubscribe option…' : (hasUnsubscribeCapability ? 'Unsubscribe (link detected)' : 'Unsubscribe (AI-powered)')}
+      onclick={handleUnsubscribe} 
+      disabled={extractingUnsub} 
+      title={extractingUnsub ? 'Finding unsubscribe option…' : (hasUnsubscribeCapability ? 'Unsubscribe' : 'Unsubscribe via AI')}
+    >
+      {#if extractingUnsub}
+        <span class="loading-spinner"></span>
+      {:else}
+        <Icon icon={iconUnsubscribe} width="1rem" height="1rem" />
+      {/if}
+    </button>
   </span>
 {/snippet}
 
@@ -1239,6 +1382,36 @@
 </div>
 </div>
 
+<Dialog icon={iconMarkEmailUnread} headline="Send unsubscribe email?" bind:open={unsubscribeDialogOpen} closeOnClick={false}>
+  {#snippet children()}
+    {#if unsubscribeMailtoInfo}
+      <div style="display:flex; flex-direction:column; gap:0.75rem;">
+        <p class="m3-font-body-medium">
+          This will send an unsubscribe email to <strong>{unsubscribeMailtoInfo.to}</strong>.
+        </p>
+        {#if unsubscribeMailtoInfo.subject || unsubscribeMailtoInfo.body}
+          <div style="padding:0.75rem; background:rgb(var(--m3-scheme-surface-container)); border-radius:8px; font-size:0.875rem;">
+            {#if unsubscribeMailtoInfo.subject}
+              <div style="margin-bottom:0.5rem;"><strong>Subject:</strong> {unsubscribeMailtoInfo.subject}</div>
+            {/if}
+            {#if unsubscribeMailtoInfo.body}
+              <div style="white-space:pre-wrap;"><strong>Body:</strong> {unsubscribeMailtoInfo.body}</div>
+            {/if}
+          </div>
+        {/if}
+      </div>
+    {/if}
+  {/snippet}
+  {#snippet buttons()}
+    <Button variant="text" onclick={() => { unsubscribeDialogOpen = false; unsubscribeMailtoInfo = null; }} disabled={sendingUnsubscribeEmail}>
+      Cancel
+    </Button>
+    <Button variant="filled" onclick={sendUnsubscribeEmail} disabled={sendingUnsubscribeEmail || !unsubscribeMailtoInfo}>
+      {sendingUnsubscribeEmail ? 'Sending…' : 'Send'}
+    </Button>
+  {/snippet}
+</Dialog>
+
 <style>
   .row-container { will-change: height, opacity; }
   .swipe-wrapper {
@@ -1372,7 +1545,7 @@
   }
   .row-headline {
     display: inline-flex;
-    align-items: baseline;
+    align-items: center;
     justify-content: flex-start;
     gap: 0.375rem;
     width: 100%;
@@ -1383,6 +1556,7 @@
     text-overflow: ellipsis;
     white-space: normal; /* Allow wrapping for multiline */
     font-weight: 500;
+    line-height: 1.3;
   }
   .row-headline .meta {
     flex: 0 0 auto;
@@ -1420,33 +1594,87 @@
     color: rgb(var(--m3-scheme-on-secondary-container));
     white-space: nowrap;
   }
-  .inline-unsubscribe {
+  /* Unsubscribe button - visually distinctive from subject line */
+  .unsubscribe-btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 1.25rem;
-    height: 1.25rem;
-    padding: 0;
+    min-width: 2rem;
+    height: 1.75rem;
+    padding: 0 0.5rem;
+    margin-left: 0.5rem;
     border: none;
-    border-radius: var(--m3-util-rounding-small);
-    background: transparent;
-    color: rgb(var(--m3-scheme-on-surface-variant));
+    border-radius: var(--m3-util-rounding-full);
     cursor: pointer;
     flex-shrink: 0;
-    align-self: center;
-    transition: background 120ms ease, color 120ms ease;
+    transition: background-color 150ms ease, color 150ms ease, transform 100ms ease, box-shadow 150ms ease;
+    font-size: 0.75rem;
+    font-weight: 500;
+    gap: 0.25rem;
+    position: relative;
+    --icon-color: currentColor;
   }
-  .inline-unsubscribe:hover {
-    background: rgb(var(--m3-scheme-surface-variant));
-    color: rgb(var(--m3-scheme-on-surface));
+  
+  /* Detected unsubscribe link - use tertiary container (tonal) */
+  .unsubscribe-btn.detected {
+    background-color: rgb(var(--m3-scheme-tertiary-container));
+    color: rgb(var(--m3-scheme-on-tertiary-container));
+    --icon-color: rgb(var(--m3-scheme-on-tertiary-container));
   }
-  .inline-unsubscribe:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
+  .unsubscribe-btn.detected:hover:not(:disabled) {
+    background-color: rgb(var(--m3-scheme-tertiary));
+    color: rgb(var(--m3-scheme-on-tertiary));
+    --icon-color: rgb(var(--m3-scheme-on-tertiary));
+    transform: scale(1.02);
+    box-shadow: var(--m3-util-elevation-1);
   }
-  .inline-unsubscribe :global(svg) {
+  
+  /* AI-powered unsubscribe - use secondary container (less prominent but still visible) */
+  .unsubscribe-btn.ai-powered {
+    background-color: rgb(var(--m3-scheme-surface-variant));
+    color: rgb(var(--m3-scheme-on-surface-variant));
+    --icon-color: rgb(var(--m3-scheme-on-surface-variant));
+    border: 1px dashed rgb(var(--m3-scheme-outline-variant));
+  }
+  .unsubscribe-btn.ai-powered:hover:not(:disabled) {
+    background-color: rgb(var(--m3-scheme-secondary-container));
+    color: rgb(var(--m3-scheme-on-secondary-container));
+    --icon-color: rgb(var(--m3-scheme-on-secondary-container));
+    border-color: rgb(var(--m3-scheme-secondary));
+    transform: scale(1.02);
+  }
+  
+  .unsubscribe-btn:disabled {
+    opacity: 0.7;
+    cursor: wait;
+  }
+  
+  .unsubscribe-btn:active:not(:disabled) {
+    transform: scale(0.96);
+  }
+  
+  .unsubscribe-btn :global(svg) {
+    width: 1rem;
+    height: 1rem;
+    color: var(--icon-color, currentColor);
+  }
+  .unsubscribe-btn :global(svg),
+  .unsubscribe-btn :global(svg *) {
+    fill: var(--icon-color, currentColor) !important;
+  }
+  
+  /* Loading spinner animation */
+  .unsubscribe-btn .loading-spinner {
     width: 0.875rem;
     height: 0.875rem;
+    border: 2px solid currentColor;
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: unsub-spin 0.8s linear infinite;
+  }
+  
+  @keyframes unsub-spin {
+    to { transform: rotate(360deg); }
   }
 </style>
 

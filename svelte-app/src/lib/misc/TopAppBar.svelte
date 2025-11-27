@@ -1,11 +1,12 @@
 <script lang="ts">
   import { get } from 'svelte/store';
-import { syncState } from '$lib/stores/queue';
+  import { syncState } from '$lib/stores/queue';
 import { settings } from '$lib/stores/settings';
 import { precomputeStatus } from '$lib/stores/precompute';
   import { undoLast, redoLast, getUndoHistory, getRedoHistory } from '$lib/queue/intents';
   import Button from '$lib/buttons/Button.svelte';
   import SplitButton from '$lib/buttons/SplitButton.svelte';
+  import SyncButton from '$lib/components/SyncButton.svelte';
   import TextField from '$lib/forms/TextField.svelte';
   import Menu from '$lib/containers/Menu.svelte';
   import MenuItem from '$lib/containers/MenuItem.svelte';
@@ -18,6 +19,7 @@ import { precomputeStatus } from '$lib/stores/precompute';
   import { checkForUpdateOnce, hardReloadNow } from '$lib/update/checker';
   import { signOut, acquireTokenInteractive, resolveGoogleClientId, initAuth, getAuthDiagnostics } from '$lib/gmail/auth';
   import { threads as threadsStore } from '$lib/stores/threads';
+  import { serverStatus, markOnline, markError, performHealthCheck } from '$lib/stores/server-status';
   import iconSearch from '@ktibow/iconset-material-symbols/search';
   import iconMore from '@ktibow/iconset-material-symbols/more-vert';
   import iconInfo from '@ktibow/iconset-material-symbols/info';
@@ -47,6 +49,7 @@ import { precomputeStatus } from '$lib/stores/precompute';
   let { onSyncNow, backHref, backLabel }: { onSyncNow?: () => void; backHref?: string; backLabel?: string } = $props();
   let overflowDetails: HTMLDetailsElement;
   let aboutOpen = $state(false);
+  let comprehensiveRefreshInProgress = $state(false);
   let notificationsOpen = $state(false);
   let notifications = $state([] as any[]);
   let __menuPushed = $state(false);
@@ -96,44 +99,132 @@ import { precomputeStatus } from '$lib/stores/precompute';
     }
   }
   async function doComprehensiveRefresh() {
+    if (comprehensiveRefreshInProgress) {
+      showSnackbar({ message: 'Sync already in progress...', timeout: 2000 });
+      return;
+    }
+    
+    comprehensiveRefreshInProgress = true;
     console.log('[TopAppBar] ===== COMPREHENSIVE REFRESH STARTED =====');
     
     try {
-      // Step 1: Show initial message
-      showSnackbar({ message: 'Starting inbox refresh…' });
+      // Step 0: Check if we're online first
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        showSnackbar({
+          message: '📵 You\'re offline - connect to the internet to sync',
+          timeout: 5000,
+          closable: true,
+          actions: {
+            'Retry': () => doComprehensiveRefresh()
+          }
+        });
+        return;
+      }
       
-      // Step 2: Refresh authentication session
+      // Step 1: Show initial message with progress indicator
+      showSnackbar({ message: '🔄 Starting inbox refresh…', timeout: null });
+      
+      // Step 2: Check server health before proceeding
+      console.log('[TopAppBar] Step 0: Checking server health...');
+      try {
+        const serverState = await performHealthCheck();
+        if (serverState === 'offline') {
+          showSnackbar({
+            message: '📵 You\'re offline - check your connection',
+            timeout: 6000,
+            closable: true,
+            actions: { 'Retry': () => doComprehensiveRefresh() }
+          });
+          return;
+        }
+        if (serverState === 'unreachable') {
+          showSnackbar({
+            message: '🔌 Server is unavailable - it might be down for maintenance',
+            timeout: 8000,
+            closable: true,
+            actions: {
+              'Retry': () => doComprehensiveRefresh(),
+              'Diagnostics': () => { location.href = '/diagnostics'; }
+            }
+          });
+          return;
+        }
+        if (serverState === 'error') {
+          showSnackbar({
+            message: '⚠️ Server error - please try again in a few minutes',
+            timeout: 8000,
+            closable: true,
+            actions: {
+              'Retry': () => doComprehensiveRefresh(),
+              'Diagnostics': () => { location.href = '/diagnostics'; }
+            }
+          });
+          return;
+        }
+      } catch (healthErr) {
+        console.warn('[TopAppBar] Health check failed:', healthErr);
+        // Continue anyway - maybe it's just the health endpoint that's missing
+      }
+      
+      // Step 3: Refresh authentication session
       console.log('[TopAppBar] Step 1: Refreshing session...');
       try {
         const { sessionManager } = await import('$lib/auth/session-manager');
         await sessionManager.refreshSession();
         console.log('[TopAppBar] Step 1: Session refresh completed');
-        showSnackbar({ message: 'Session refreshed', timeout: 1500 });
+        markOnline(); // Mark server as online since API call succeeded
+        showSnackbar({ message: '✓ Session refreshed', timeout: 1500 });
       } catch (e) {
-        console.warn('[TopAppBar] Step 1: Session refresh failed (continuing):', e);
+        const err = e instanceof Error ? e : new Error(String(e));
+        console.warn('[TopAppBar] Step 1: Session refresh failed:', e);
+        
+        // Check if this is a network/server error
+        if (isServerError(err)) {
+          handleServerError(err, 'Session refresh');
+          return;
+        }
+        
         showSnackbar({ message: 'Session refresh skipped (may not be needed)', timeout: 1500 });
       }
       
-      // Step 3: Sync pending queue operations first
+      // Step 4: Sync pending queue operations first
       console.log('[TopAppBar] Step 2: Syncing pending operations...');
       try {
         const { syncNow } = await import('$lib/stores/queue');
         await syncNow();
         console.log('[TopAppBar] Step 2: Queue sync completed');
-        showSnackbar({ message: 'Pending operations synced', timeout: 1500 });
+        markOnline();
+        showSnackbar({ message: '✓ Pending operations synced', timeout: 1500 });
       } catch (e) {
+        const err = e instanceof Error ? e : new Error(String(e));
         console.error('[TopAppBar] Step 2: Queue sync failed:', e);
-        showSnackbar({ message: 'Warning: Some pending operations may not have synced', timeout: 2000 });
+        
+        if (isServerError(err)) {
+          handleServerError(err, 'Queue sync');
+          return;
+        }
+        
+        showSnackbar({ message: '⚠️ Some pending operations may not have synced', timeout: 2000 });
       }
       
-      // Step 4: Clear visual holds to prepare for fresh data
+      // Step 4: Reset slid rows and clear visual holds to prepare for fresh data
       try {
-        console.log('[TopAppBar] Step 3: Clearing holds...');
+        console.log('[TopAppBar] Step 3: Resetting slid rows and clearing holds...');
+        // Cancel any pending disappear timer
+        try {
+          const w = window as any;
+          if (w.__jmailDisappearTimer) {
+            clearTimeout(w.__jmailDisappearTimer);
+            w.__jmailDisappearTimer = null;
+          }
+        } catch {}
+        // Reset slid rows back to their normal position
+        window.dispatchEvent(new CustomEvent('jmail:resetSlidRows'));
         const { clearAllHolds } = await import('$lib/stores/holds');
         clearAllHolds();
-        console.log('[TopAppBar] Step 3: Holds cleared');
+        console.log('[TopAppBar] Step 3: Slid rows reset and holds cleared');
       } catch (e) {
-        console.error('[TopAppBar] Step 3: Failed to clear holds:', e);
+        console.error('[TopAppBar] Step 3: Failed to reset slid rows/clear holds:', e);
       }
       
       // Step 5: Get pre-sync counts for comparison
@@ -157,7 +248,7 @@ import { precomputeStatus } from '$lib/stores/precompute';
       
       // Step 6: Perform authoritative inbox sync
       console.log('[TopAppBar] Step 4: Performing authoritative inbox sync...');
-      showSnackbar({ message: 'Syncing with Gmail server…', timeout: null });
+      showSnackbar({ message: '📨 Syncing with Gmail server…', timeout: null });
       
       const isInboxPage = typeof window !== 'undefined' && window.location.pathname.includes('/inbox');
       if (isInboxPage) {
@@ -172,38 +263,59 @@ import { precomputeStatus } from '$lib/stores/precompute';
             // Fallback: dispatch event and wait a bit
             window.dispatchEvent(new CustomEvent('jmail:performAuthoritativeSync'));
             // Wait for sync to complete (listen for completion event or timeout)
-            await new Promise((resolve) => {
+            await new Promise((resolve, reject) => {
               let resolved = false;
-              const handler = () => {
+              const successHandler = () => {
                 if (!resolved) {
                   resolved = true;
                   resolve(undefined);
                 }
               };
-              window.addEventListener('jmail:authSyncComplete', handler, { once: true });
+              const errorHandler = (e: Event) => {
+                if (!resolved) {
+                  resolved = true;
+                  const detail = (e as CustomEvent).detail;
+                  reject(new Error(detail?.error || 'Sync failed'));
+                }
+              };
+              window.addEventListener('jmail:authSyncComplete', successHandler, { once: true });
+              window.addEventListener('jmail:authSyncError', errorHandler, { once: true });
               // Timeout after 60 seconds
               setTimeout(() => {
                 if (!resolved) {
                   resolved = true;
-                  window.removeEventListener('jmail:authSyncComplete', handler);
-                  resolve(undefined);
+                  window.removeEventListener('jmail:authSyncComplete', successHandler);
+                  window.removeEventListener('jmail:authSyncError', errorHandler);
+                  reject(new Error('Sync timed out after 60 seconds'));
                 }
               }, 60000);
             });
           }
           console.log('[TopAppBar] Step 4: Authoritative sync completed');
+          markOnline();
         } catch (e) {
+          const err = e instanceof Error ? e : new Error(String(e));
           console.error('[TopAppBar] Step 4: Authoritative sync failed:', e);
+          
+          if (isServerError(err)) {
+            handleServerError(err, 'Gmail sync');
+            return;
+          }
+          
           showSnackbar({ 
-            message: `Sync failed: ${e instanceof Error ? e.message : 'Unknown error'}`, 
+            message: `❌ Sync failed: ${err.message.slice(0, 50)}${err.message.length > 50 ? '...' : ''}`, 
             closable: true,
-            timeout: 5000
+            timeout: 6000,
+            actions: {
+              'Retry': () => doComprehensiveRefresh(),
+              'Diagnostics': () => { location.href = '/diagnostics'; }
+            }
           });
           return;
         }
       } else {
         console.log('[TopAppBar] Not on inbox page, skipping authoritative sync');
-        showSnackbar({ message: 'Not on inbox page, skipping sync', timeout: 2000 });
+        showSnackbar({ message: 'ℹ️ Navigate to Inbox to sync emails', timeout: 2000 });
       }
       
       // Step 7: Refresh label stats to update counters with authoritative Gmail counts
@@ -246,9 +358,9 @@ import { precomputeStatus } from '$lib/stores/precompute';
         
         // Build human-friendly message
         let message = '';
-        const discrepancy = Math.abs(gmailTotal - postCount);
+        const discrepancy = gmailTotal - postCount;
         
-        if (discrepancy <= 2) {
+        if (Math.abs(discrepancy) <= 2) {
           // Counts match - show success message
           message = `✓ Inbox synced: ${postCount} emails`;
           if (postUnreadCount > 0) {
@@ -260,18 +372,49 @@ import { precomputeStatus } from '$lib/stores/precompute';
             if (removed > 0) changes.push(`-${removed}`);
             message += ` (${changes.join(', ')})`;
           }
+          showSnackbar({ message, timeout: 4000, closable: true });
+        } else if (discrepancy > 0) {
+          // Gmail has more - might need to fetch more
+          message = `⚠️ Synced ${postCount}/${gmailTotal} emails (${discrepancy} missing)`;
+          showSnackbar({ 
+            message, 
+            timeout: 8000, 
+            closable: true,
+            actions: {
+              'View Diagnostics': () => { location.href = '/diagnostics'; }
+            }
+          });
         } else {
-          // Counts don't match - show warning with details
-          message = `Synced ${postCount}/${gmailTotal} emails`;
-          if (postUnreadCount > 0) {
-            message += `, ${postUnreadCount} unread`;
-          }
-          if (gmailTotal > postCount) {
-            message += ` (${gmailTotal - postCount} may be syncing)`;
-          }
+          // Local has more than Gmail - stale threads not removed
+          message = `⚠️ Local has ${postCount} emails but Gmail has ${gmailTotal}`;
+          console.warn(`[TopAppBar] Sync issue: Local has ${Math.abs(discrepancy)} more threads than Gmail`);
+          showSnackbar({ 
+            message, 
+            timeout: 8000, 
+            closable: true,
+            actions: {
+              'Force Resync': () => { 
+                // Clear database and resync
+                (async () => {
+                  try {
+                    showSnackbar({ message: 'Clearing local data and resyncing...', timeout: null });
+                    const { getDB } = await import('$lib/db/indexeddb');
+                    const db = await getDB();
+                    // Clear threads table
+                    const tx = db.transaction('threads', 'readwrite');
+                    await tx.store.clear();
+                    await tx.done;
+                    // Trigger fresh sync
+                    await doComprehensiveRefresh();
+                  } catch (err) {
+                    showSnackbar({ message: 'Force resync failed', timeout: 3000 });
+                  }
+                })();
+              },
+              'Diagnostics': () => { location.href = '/diagnostics'; }
+            }
+          });
         }
-        
-        showSnackbar({ message, timeout: 4000, closable: true });
       } catch (e) {
         console.warn('[TopAppBar] Could not get post-sync counts:', e);
         showSnackbar({ message: 'Inbox synced successfully', timeout: 2500 });
@@ -283,16 +426,119 @@ import { precomputeStatus } from '$lib/stores/precompute';
       console.log('[TopAppBar] Step 6: Global refresh event dispatched');
       
     } catch (e) {
+      const err = e instanceof Error ? e : new Error(String(e));
       console.error('[TopAppBar] Comprehensive refresh failed:', e);
-      showSnackbar({ 
-        message: `Refresh failed: ${e instanceof Error ? e.message : 'Unknown error'}`, 
-        closable: true,
-        timeout: 5000
-      });
+      
+      if (isServerError(err)) {
+        handleServerError(err, 'Inbox refresh');
+      } else {
+        showSnackbar({ 
+          message: `❌ Refresh failed: ${err.message.slice(0, 50)}${err.message.length > 50 ? '...' : ''}`, 
+          closable: true,
+          timeout: 6000,
+          actions: {
+            'Retry': () => doComprehensiveRefresh(),
+            'Copy Error': async () => {
+              try {
+                await navigator.clipboard.writeText(err.message + '\n' + err.stack);
+                showSnackbar({ message: 'Error copied', timeout: 2000 });
+              } catch {
+                showSnackbar({ message: 'Check console for details', timeout: 2000 });
+              }
+            }
+          }
+        });
+      }
+    } finally {
+      comprehensiveRefreshInProgress = false;
     }
     
     onSyncNow && onSyncNow();
     console.log('[TopAppBar] ===== COMPREHENSIVE REFRESH COMPLETE =====');
+  }
+
+  /**
+   * Helper: Check if an error indicates a server/network issue
+   */
+  function isServerError(err: Error): boolean {
+    const msg = err.message.toLowerCase();
+    return (
+      msg.includes('failed to fetch') ||
+      msg.includes('networkerror') ||
+      msg.includes('net::') ||
+      msg.includes('timeout') ||
+      msg.includes('timed out') ||
+      msg.includes('500') ||
+      msg.includes('502') ||
+      msg.includes('503') ||
+      msg.includes('504') ||
+      msg.includes('econnrefused') ||
+      msg.includes('enotfound')
+    );
+  }
+  
+  /**
+   * Helper: Handle server errors with human-friendly messages
+   */
+  function handleServerError(err: Error, context: string) {
+    const msg = err.message.toLowerCase();
+    
+    let userMessage: string;
+    let emoji: string;
+    
+    if (msg.includes('failed to fetch') || msg.includes('networkerror') || msg.includes('net::')) {
+      emoji = '🔌';
+      userMessage = 'Server is not responding';
+      markError('Network error - server unreachable', undefined);
+    } else if (msg.includes('timeout') || msg.includes('timed out')) {
+      emoji = '⏱️';
+      userMessage = 'Request timed out - server may be busy';
+      markError('Request timeout', undefined);
+    } else if (msg.includes('503')) {
+      emoji = '🔧';
+      userMessage = 'Server is temporarily unavailable (maintenance?)';
+      markError('Service unavailable', 503);
+    } else if (msg.includes('502') || msg.includes('504')) {
+      emoji = '🌐';
+      userMessage = 'Gateway error - server infrastructure issue';
+      markError('Gateway error', msg.includes('502') ? 502 : 504);
+    } else if (msg.includes('500')) {
+      emoji = '⚠️';
+      userMessage = 'Server error - something went wrong';
+      markError('Internal server error', 500);
+    } else {
+      emoji = '❌';
+      userMessage = `${context} failed`;
+      markError(err.message, undefined);
+    }
+    
+    console.error(`[TopAppBar] ${context} server error:`, err);
+    
+    showSnackbar({
+      message: `${emoji} ${userMessage}`,
+      timeout: 8000,
+      closable: true,
+      actions: {
+        'Retry': () => doComprehensiveRefresh(),
+        'Copy Error': async () => {
+          try {
+            const diagnostics = {
+              context,
+              error: err.message,
+              stack: err.stack,
+              timestamp: new Date().toISOString(),
+              online: navigator.onLine,
+              serverStatus: $serverStatus
+            };
+            await navigator.clipboard.writeText(JSON.stringify(diagnostics, null, 2));
+            showSnackbar({ message: 'Error details copied', timeout: 2000 });
+          } catch {
+            console.log('Error details:', err);
+            showSnackbar({ message: 'Logged to console', timeout: 2000 });
+          }
+        }
+      }
+    });
   }
 
   function handleBack() {
@@ -1226,9 +1472,12 @@ import { precomputeStatus } from '$lib/stores/precompute';
       </Button>
     {/if}
 
-    <Button variant="outlined" iconType="full" onclick={doComprehensiveRefresh} aria-label="Comprehensive refresh" title="Refresh session, sync queue, and reload data">
-      <Icon icon={iconSync} />
-    </Button>
+    <SyncButton 
+      onSync={doComprehensiveRefresh}
+      syncing={comprehensiveRefreshInProgress}
+      compact={true}
+      variant="outlined"
+    />
 
     <SplitButton variant="filled" x="right" y="down" onclick={() => doUndo(1)} on:toggle={(e) => { if (e.detail) refreshUndo(); }}>
       {#snippet children()}

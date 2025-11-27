@@ -143,9 +143,11 @@
       console.warn('[Init] Session monitoring failed:', err);
     }
     
-    // Load settings at app start
+    // Load settings at app start (don't await to avoid blocking, but log errors)
     try {
-      import('$lib/stores/settings').then((m)=>m.loadSettings()).catch(() => {});
+      import('$lib/stores/settings').then((m)=>m.loadSettings()).catch((err) => {
+        console.error('[Init] loadSettings() failed:', err);
+      });
     } catch (err) {
       console.warn('[Init] settings loading failed:', err);
     }

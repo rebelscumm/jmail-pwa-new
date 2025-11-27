@@ -1,6 +1,25 @@
 import { writable } from 'svelte/store';
 import { getDB } from '$lib/db/indexeddb';
 
+// Request persistent storage to prevent browser from clearing IndexedDB
+async function requestPersistentStorage(): Promise<boolean> {
+  try {
+    if (typeof navigator !== 'undefined' && navigator.storage && navigator.storage.persist) {
+      const isPersisted = await navigator.storage.persisted();
+      if (!isPersisted) {
+        const granted = await navigator.storage.persist();
+        console.log('[Settings] Persistent storage requested:', granted ? 'granted' : 'denied');
+        return granted;
+      }
+      console.log('[Settings] Storage is already persistent');
+      return true;
+    }
+  } catch (e) {
+    console.warn('[Settings] Failed to request persistent storage:', e);
+  }
+  return false;
+}
+
 export type LabelMapping = Record<string, string>; // ruleKey => labelId
 
 export type AppSettings = {
@@ -86,16 +105,38 @@ const DEFAULTS: AppSettings = {
 export const settings = writable<AppSettings>({ ...DEFAULTS });
 
 export async function loadSettings(): Promise<void> {
+  console.log('[Settings] loadSettings() called');
+  
+  // Request persistent storage on first load
+  await requestPersistentStorage();
+  
   const db = await getDB();
   const [app, mapping] = await Promise.all([
     db.get('settings', 'app'),
     db.get('settings', 'labelMapping')
   ]);
+  
+  console.log('[Settings] Raw data from IndexedDB:', { 
+    app: app ? 'present' : 'null/undefined', 
+    appKeys: app ? Object.keys(app as object) : [],
+    hasApiKey: !!(app as any)?.aiApiKey,
+    mapping: mapping ? 'present' : 'null/undefined',
+    mappingKeys: mapping ? Object.keys(mapping as object).length : 0
+  });
+  
   const merged: AppSettings = {
     ...DEFAULTS,
     ...(app as Partial<AppSettings> | undefined),
     labelMapping: (mapping as LabelMapping | undefined) || {}
   };
+  
+  console.log('[Settings] Merged settings:', {
+    aiProvider: merged.aiProvider,
+    hasApiKey: !!merged.aiApiKey,
+    labelMappingCount: Object.keys(merged.labelMapping).length,
+    precomputeSummaries: merged.precomputeSummaries
+  });
+  
   // Normalize slide-out duration back to normal pace if previously slowed
   const normalSlideMs = 260;
   let needsWrite = false;
@@ -112,21 +153,43 @@ export async function loadSettings(): Promise<void> {
     const nextApp = { ...(app as object), trailingSlideOutDurationMs: normalSlideMs };
     await db.put('settings', nextApp, 'app');
   }
+  
+  console.log('[Settings] loadSettings() complete');
 }
 
 export async function saveLabelMapping(newMapping: LabelMapping): Promise<void> {
+  console.log('[Settings] saveLabelMapping() called with', Object.keys(newMapping).length, 'keys');
   const db = await getDB();
   // Ensure we persist a plain object (avoid Svelte $state proxies not being cloneable)
   const clean: LabelMapping = JSON.parse(JSON.stringify(newMapping));
   await db.put('settings', clean, 'labelMapping');
   settings.update((s) => ({ ...s, labelMapping: clean }));
+  
+  // Verify the save worked
+  const verify = await db.get('settings', 'labelMapping');
+  console.log('[Settings] saveLabelMapping() verification:', {
+    saved: !!verify,
+    keyCount: verify ? Object.keys(verify as object).length : 0
+  });
 }
 
 export async function updateAppSettings(patch: Partial<AppSettings>): Promise<void> {
+  console.log('[Settings] updateAppSettings() called with keys:', Object.keys(patch));
+  console.log('[Settings] updateAppSettings() hasApiKey:', !!patch.aiApiKey);
+  
   settings.update((s) => ({ ...s, ...patch }));
   const db = await getDB();
   const current = await db.get('settings', 'app');
-  await db.put('settings', { ...(current as object), ...patch }, 'app');
+  const merged = { ...(current as object), ...patch };
+  await db.put('settings', merged, 'app');
+  
+  // Verify the save worked
+  const verify = await db.get('settings', 'app');
+  console.log('[Settings] updateAppSettings() verification:', {
+    saved: !!verify,
+    hasApiKey: !!(verify as any)?.aiApiKey,
+    aiProvider: (verify as any)?.aiProvider
+  });
 }
 
 export function seedDefaultMapping(): Record<string, string> {

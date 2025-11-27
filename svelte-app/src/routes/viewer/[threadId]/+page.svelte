@@ -12,7 +12,7 @@
   import Card from "$lib/containers/Card.svelte";
   import Divider from "$lib/utils/Divider.svelte";
   import LoadingIndicator from "$lib/forms/LoadingIndicator.svelte";
-  import { getMessageFull, copyGmailDiagnosticsToClipboard } from "$lib/gmail/api";
+  import { getMessageFull, copyGmailDiagnosticsToClipboard, sendMessageRaw, getProfile, getMessageRaw } from "$lib/gmail/api";
   import { getThreadSummary } from "$lib/gmail/api";
   import { getDB } from "$lib/db/indexeddb";
   import { acquireTokenForScopes, SCOPES, fetchTokenInfo, signOut, acquireTokenInteractive } from "$lib/gmail/auth";
@@ -52,6 +52,7 @@ import iconUnsnooze from "@ktibow/iconset-material-symbols/alarm-off";
 import iconSummarize from "@ktibow/iconset-material-symbols/summarize";
 import iconReply from "@ktibow/iconset-material-symbols/reply";
 import iconUnsubscribe from "@ktibow/iconset-material-symbols/unsubscribe";
+import iconMarkEmailUnread from "@ktibow/iconset-material-symbols/mark-email-unread";
 import iconBugReport from "@ktibow/iconset-material-symbols/bug-report";
 import iconKey from "@ktibow/iconset-material-symbols/key";
 import iconLogin from "@ktibow/iconset-material-symbols/login";
@@ -161,6 +162,49 @@ import BottomSheet from "$lib/containers/BottomSheet.svelte";
   let summarizing: boolean = $state(false);
   let replying: boolean = $state(false);
   let extractingUnsub: boolean = $state(false);
+  let unsubscribeDialogOpen = $state(false);
+  let unsubscribeMailtoInfo: { to: string; subject: string; body: string; target: string } | null = $state(null);
+  let sendingUnsubscribeEmail = $state(false);
+  
+  // Parse a mailto: URL to extract recipient, subject, and body
+  function parseMailtoUrl(mailto: string): { to: string; subject: string; body: string } | null {
+    try {
+      if (!mailto.startsWith('mailto:')) return null;
+      const url = new URL(mailto);
+      const to = url.pathname || '';
+      const subject = url.searchParams.get('subject') || 'Unsubscribe';
+      const body = url.searchParams.get('body') || 'Please unsubscribe me from this mailing list.';
+      return { to, subject, body };
+    } catch {
+      // Fallback for malformed mailto: links
+      const match = mailto.match(/^mailto:([^?]+)/i);
+      if (match && match[1]) {
+        return { to: match[1], subject: 'Unsubscribe', body: 'Please unsubscribe me from this mailing list.' };
+      }
+      return null;
+    }
+  }
+
+  // Create RFC 2822 raw email for sending
+  function createRawEmail(from: string, to: string, subject: string, body: string): string {
+    const boundary = `----=_Part_${Date.now()}_${Math.random().toString(36).substring(2)}`;
+    const email = [
+      `From: ${from}`,
+      `To: ${to}`,
+      `Subject: ${subject}`,
+      `MIME-Version: 1.0`,
+      `Content-Type: text/plain; charset="UTF-8"`,
+      `Content-Transfer-Encoding: 7bit`,
+      ``,
+      body
+    ].join('\r\n');
+    // Base64 encode for Gmail API (URL-safe base64)
+    const base64 = btoa(unescape(encodeURIComponent(email)))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+    return base64;
+  }
   let aiSubjectSummary: string | null = $state(null);
   let aiBodySummary: string | null = $state(null);
   let aiDiagnostics: AISummaryDiagnostics | null = $state(null);
@@ -213,6 +257,18 @@ import BottomSheet from "$lib/containers/BottomSheet.svelte";
       await navigator.clipboard.writeText(aiBodySummary);
       showSnackbar({ message: 'AI summary copied', closable: true });
     } catch (e) { showSnackbar({ message: 'Failed to copy AI summary', closable: true }); }
+  }
+
+  async function copyEmailSource(mid: string) {
+    try {
+      showSnackbar({ message: 'Fetching email source…', closable: true });
+      const raw = await getMessageRaw(mid);
+      await navigator.clipboard.writeText(raw);
+      showSnackbar({ message: 'Email source copied to clipboard', closable: true });
+    } catch (e) {
+      const errorMsg = e instanceof Error ? e.message : String(e);
+      showSnackbar({ message: `Failed to copy email source: ${errorMsg}`, closable: true });
+    }
   }
   function fmtIso(input?: string | null): string {
     if (!input) return '—';
@@ -363,53 +419,81 @@ import BottomSheet from "$lib/containers/BottomSheet.svelte";
   }
 
   function getSubject(a: import('$lib/types').GmailThread): string { return (a.lastMsgMeta.subject || '').toLowerCase(); }
-  function getDate(a: import('$lib/types').GmailThread): number { return num(a.lastMsgMeta.date) || 0; }
+  function getDate(a: import('$lib/types').GmailThread): number {
+    const d = a.lastMsgMeta?.date;
+    if (typeof d === 'number' && !Number.isNaN(d)) return d;
+    if (typeof d === 'string') {
+      const parsed = Number(d);
+      if (!Number.isNaN(parsed)) return parsed;
+    }
+    return 0;
+  }
   function isUnread(a: import('$lib/types').GmailThread): boolean { return (a.labelIds || []).includes('UNREAD'); }
   const currentSort: NonNullable<import('$lib/stores/settings').AppSettings['inboxSort']> = $derived(($settings.inboxSort || 'date_desc') as NonNullable<import('$lib/stores/settings').AppSettings['inboxSort']>);
   const sortedCandidates = $derived((() => {
     const arr = [...filteredCandidates];
+    
+    // Sort comparison that ensures consistent ordering
+    function dateCompareDesc(a: import('$lib/types').GmailThread, b: import('$lib/types').GmailThread): number {
+      const dateA = getDate(a);
+      const dateB = getDate(b);
+      // Threads without dates (0) go to the end
+      if (dateA === 0 && dateB === 0) return 0;
+      if (dateA === 0) return 1;
+      if (dateB === 0) return -1;
+      return dateB - dateA;
+    }
+    function dateCompareAsc(a: import('$lib/types').GmailThread, b: import('$lib/types').GmailThread): number {
+      const dateA = getDate(a);
+      const dateB = getDate(b);
+      if (dateA === 0 && dateB === 0) return 0;
+      if (dateA === 0) return 1;
+      if (dateB === 0) return -1;
+      return dateA - dateB;
+    }
+    
     switch (currentSort) {
       case 'date_asc':
-        arr.sort((a, b) => getDate(a) - getDate(b));
+        arr.sort(dateCompareAsc);
         break;
       case 'unread_first':
         arr.sort((a, b) => {
           const d = (isUnread(b) as any) - (isUnread(a) as any);
           if (d !== 0) return d;
-          return getDate(b) - getDate(a);
+          return dateCompareDesc(a, b);
         });
         break;
       case 'sender_az':
         arr.sort((a, b) => {
           const s = cmp(getSender(a), getSender(b));
           if (s !== 0) return s;
-          return getDate(b) - getDate(a);
+          return dateCompareDesc(a, b);
         });
         break;
       case 'sender_za':
         arr.sort((a, b) => {
           const s = cmp(getSender(b), getSender(a));
           if (s !== 0) return s;
-          return getDate(b) - getDate(a);
+          return dateCompareDesc(a, b);
         });
         break;
       case 'subject_az':
         arr.sort((a, b) => {
           const s = cmp(getSubject(a), getSubject(b));
           if (s !== 0) return s;
-          return getDate(b) - getDate(a);
+          return dateCompareDesc(a, b);
         });
         break;
       case 'subject_za':
         arr.sort((a, b) => {
           const s = cmp(getSubject(b), getSubject(a));
           if (s !== 0) return s;
-          return getDate(b) - getDate(a);
+          return dateCompareDesc(a, b);
         });
         break;
       case 'date_desc':
       default:
-        arr.sort((a, b) => getDate(b) - getDate(a));
+        arr.sort(dateCompareDesc);
         break;
     }
     return arr;
@@ -877,17 +961,31 @@ import BottomSheet from "$lib/containers/BottomSheet.svelte";
       let target = findUnsubscribeTarget(m.headers, m.bodyHtml);
       if (!target) target = await aiExtractUnsubscribeUrl(m.headers?.Subject || '', m.bodyText, m.bodyHtml);
       if (target) {
-        // Show snackbar with action buttons instead of browser confirm
-        showSnackbar({
-          message: `Unsubscribe link found: ${target.length > 60 ? target.substring(0, 60) + '…' : target}`,
-          actions: {
-            Open: () => {
-              window.open(target, '_blank');
-              showSnackbar({ message: 'Opened unsubscribe link', closable: true });
-            }
-          },
-          closable: true,
-          timeout: 10000
+        // Handle mailto: links - show modal dialog to confirm sending email
+        if (target.toLowerCase().startsWith('mailto:')) {
+          const mailto = parseMailtoUrl(target);
+          if (mailto) {
+            unsubscribeMailtoInfo = {
+              to: mailto.to,
+              subject: mailto.subject,
+              body: mailto.body,
+              target: target
+            };
+            unsubscribeDialogOpen = true;
+          } else {
+            // Malformed mailto, open in default email client
+            window.open(target, '_blank');
+            showSnackbar({ message: 'Opened in email client', closable: true });
+          }
+          return;
+        }
+        
+        // Handle http/https links - open directly without asking
+        window.open(target, '_blank');
+        showSnackbar({ 
+          message: 'Unsubscribe link opened in new window', 
+          closable: true, 
+          timeout: 3000 
         });
       } else {
         showSnackbar({ message: 'No unsubscribe target found', closable: true });
@@ -909,6 +1007,44 @@ import BottomSheet from "$lib/containers/BottomSheet.svelte";
       });
     } finally {
       extractingUnsub = false;
+    }
+  }
+
+  async function sendUnsubscribeEmail(): Promise<void> {
+    if (!unsubscribeMailtoInfo || sendingUnsubscribeEmail) return;
+    sendingUnsubscribeEmail = true;
+    try {
+      const profile = await getProfile();
+      if (!profile.emailAddress) {
+        showSnackbar({ message: 'Could not get your email address', closable: true });
+        unsubscribeDialogOpen = false;
+        return;
+      }
+      const raw = createRawEmail(profile.emailAddress, unsubscribeMailtoInfo.to, unsubscribeMailtoInfo.subject, unsubscribeMailtoInfo.body);
+      await sendMessageRaw(raw);
+      unsubscribeDialogOpen = false;
+      showSnackbar({ 
+        message: `✓ Unsubscribe email sent to ${unsubscribeMailtoInfo.to}`, 
+        closable: true, 
+        timeout: 6000 
+      });
+      unsubscribeMailtoInfo = null;
+    } catch (sendErr) {
+      console.error('Failed to send unsubscribe email:', sendErr);
+      showSnackbar({ 
+        message: 'Failed to send unsubscribe email. Try opening in your email client.', 
+        actions: {
+          Open: () => {
+            if (unsubscribeMailtoInfo) {
+              window.open(unsubscribeMailtoInfo.target, '_blank');
+            }
+          }
+        },
+        closable: true, 
+        timeout: 8000 
+      });
+    } finally {
+      sendingUnsubscribeEmail = false;
     }
   }
 
@@ -1326,6 +1462,17 @@ onMount(() => {
               </MenuItem>
               {#if currentThread.messageIds?.length}
                 {@const mid = currentThread.messageIds[currentThread.messageIds.length-1]}
+                <MenuItem onclick={async (e) => {
+                  await copyEmailSource(mid);
+                  // Close the details menu
+                  if (e?.target && e.target instanceof HTMLElement) {
+                    const details = e.target.closest('details');
+                    if (details) details.open = false;
+                  }
+                }}>
+                  <Icon icon={iconCopy} />
+                  Copy Email Source
+                </MenuItem>
                 <MenuItem onclick={() => createTask(mid)}>
                   <Icon icon={iconTask} />
                   Create Task
@@ -1428,9 +1575,14 @@ onMount(() => {
               {#if m?.internalDate}
                 <div style="display:flex; align-items:center; justify-content:space-between; margin:0.25rem 0;">
                   <p class="m3-font-body-small" style="margin:0; color:rgb(var(--m3-scheme-on-surface-variant))">{formatDateTime(m.internalDate)}</p>
-                  <Button variant="text" iconType="full" aria-label="Open message in Gmail" onclick={() => openGmailMessagePopup(threadId, mid)}>
-                    <Icon icon={iconGmail} width="1rem" height="1rem" />
-                  </Button>
+                  <div style="display:flex; align-items:center; gap:0.25rem;">
+                    <Button variant="text" iconType="full" aria-label="Copy email source" onclick={() => copyEmailSource(mid)}>
+                      <Icon icon={iconCopy} width="1rem" height="1rem" />
+                    </Button>
+                    <Button variant="text" iconType="full" aria-label="Open message in Gmail" onclick={() => openGmailMessagePopup(threadId, mid)}>
+                      <Icon icon={iconGmail} width="1rem" height="1rem" />
+                    </Button>
+                  </div>
                 </div>
               {/if}
               {#if m?.headers}
@@ -1465,9 +1617,14 @@ onMount(() => {
               {#if m?.internalDate}
                 <div style="display:flex; align-items:center; justify-content:space-between; margin:0.25rem 0;">
                   <p class="m3-font-body-small" style="margin:0; color:rgb(var(--m3-scheme-on-surface-variant))">{formatDateTime(m.internalDate)}</p>
-                  <Button variant="text" iconType="full" aria-label="Open message in Gmail" onclick={() => openGmailMessagePopup(threadId, mid)}>
-                    <Icon icon={iconGmail} width="1rem" height="1rem" />
-                  </Button>
+                  <div style="display:flex; align-items:center; gap:0.25rem;">
+                    <Button variant="text" iconType="full" aria-label="Copy email source" onclick={() => copyEmailSource(mid)}>
+                      <Icon icon={iconCopy} width="1rem" height="1rem" />
+                    </Button>
+                    <Button variant="text" iconType="full" aria-label="Open message in Gmail" onclick={() => openGmailMessagePopup(threadId, mid)}>
+                      <Icon icon={iconGmail} width="1rem" height="1rem" />
+                    </Button>
+                  </div>
                 </div>
               {/if}
               {#if m?.headers}
@@ -1503,9 +1660,14 @@ onMount(() => {
                 {#if m?.internalDate}
                   <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.5rem;">
                     <p class="m3-font-body-small" style="margin:0; color:rgb(var(--m3-scheme-on-surface-variant))">{formatDateTime(m.internalDate)}</p>
-                    <Button variant="text" iconType="full" aria-label="Open message in Gmail" onclick={() => openGmailMessagePopup(threadId, mid)}>
-                      <Icon icon={iconGmail} width="1rem" height="1rem" />
-                    </Button>
+                    <div style="display:flex; align-items:center; gap:0.25rem;">
+                      <Button variant="text" iconType="full" aria-label="Copy email source" onclick={() => copyEmailSource(mid)}>
+                        <Icon icon={iconCopy} width="1rem" height="1rem" />
+                      </Button>
+                      <Button variant="text" iconType="full" aria-label="Open message in Gmail" onclick={() => openGmailMessagePopup(threadId, mid)}>
+                        <Icon icon={iconGmail} width="1rem" height="1rem" />
+                      </Button>
+                    </div>
                   </div>
                 {/if}
                 {#if m?.headers}
@@ -1670,6 +1832,17 @@ onMount(() => {
               </MenuItem>
               {#if currentThread.messageIds?.length}
                 {@const mid = currentThread.messageIds[currentThread.messageIds.length-1]}
+                <MenuItem onclick={async (e) => {
+                  await copyEmailSource(mid);
+                  // Close the details menu
+                  if (e?.target && e.target instanceof HTMLElement) {
+                    const details = e.target.closest('details');
+                    if (details) details.open = false;
+                  }
+                }}>
+                  <Icon icon={iconCopy} />
+                  Copy Email Source
+                </MenuItem>
                 <MenuItem onclick={() => createTask(mid)}>
                   <Icon icon={iconTask} />
                   Create Task
@@ -1822,6 +1995,36 @@ onMount(() => {
       <Button variant="text" onclick={() => { attDialogOpen = false; }}>
         <Icon icon={iconClose} />
         Close
+      </Button>
+    {/snippet}
+  </Dialog>
+
+  <Dialog icon={iconMarkEmailUnread} headline="Send unsubscribe email?" bind:open={unsubscribeDialogOpen} closeOnClick={false}>
+    {#snippet children()}
+      {#if unsubscribeMailtoInfo}
+        <div style="display:flex; flex-direction:column; gap:0.75rem;">
+          <p class="m3-font-body-medium">
+            This will send an unsubscribe email to <strong>{unsubscribeMailtoInfo.to}</strong>.
+          </p>
+          {#if unsubscribeMailtoInfo.subject || unsubscribeMailtoInfo.body}
+            <div style="padding:0.75rem; background:rgb(var(--m3-scheme-surface-container)); border-radius:8px; font-size:0.875rem;">
+              {#if unsubscribeMailtoInfo.subject}
+                <div style="margin-bottom:0.5rem;"><strong>Subject:</strong> {unsubscribeMailtoInfo.subject}</div>
+              {/if}
+              {#if unsubscribeMailtoInfo.body}
+                <div style="white-space:pre-wrap;"><strong>Body:</strong> {unsubscribeMailtoInfo.body}</div>
+              {/if}
+            </div>
+          {/if}
+        </div>
+      {/if}
+    {/snippet}
+    {#snippet buttons()}
+      <Button variant="text" onclick={() => { unsubscribeDialogOpen = false; unsubscribeMailtoInfo = null; }} disabled={sendingUnsubscribeEmail}>
+        Cancel
+      </Button>
+      <Button variant="filled" onclick={sendUnsubscribeEmail} disabled={sendingUnsubscribeEmail || !unsubscribeMailtoInfo}>
+        {sendingUnsubscribeEmail ? 'Sending…' : 'Send'}
       </Button>
     {/snippet}
   </Dialog>

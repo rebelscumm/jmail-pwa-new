@@ -51,7 +51,15 @@ export async function updateLocalThreadAndMessages(
 
   // Update stores
   const currentThreads = get(threadsStore);
-  const updatedThreads = currentThreads.map((t) => (t.threadId === threadId ? newThread : t));
+  const existingIndex = currentThreads.findIndex((t) => t.threadId === threadId);
+  let updatedThreads: GmailThread[];
+  if (existingIndex >= 0) {
+    // Thread exists in store, update it
+    updatedThreads = currentThreads.map((t) => (t.threadId === threadId ? newThread : t));
+  } else {
+    // Thread not in store (e.g., was removed or store was reset), add it back
+    updatedThreads = [...currentThreads, newThread];
+  }
 
   // Just update the threads store directly - optimistic counter adjustment was already applied
   // Don't use setThreadsWithReset here because it recalculates from pending ops, but the

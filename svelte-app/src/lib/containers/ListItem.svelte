@@ -80,14 +80,8 @@
     <Layer />
     {@render content(leading, overline, headline, headlineSnippet, supporting, trailing, supportingSnippet)}
   </label>
-{:else if "onclick" in props}
-  {@const { leading, overline = "", headline = "", headlineSnippet, supporting = "", supportingSnippet, trailing, unread = false, ...extra } = props}
-  <button type="button" class="m3-container lines-{_lines}" class:unread={unread} {...extra}>
-    <Layer />
-    {@render content(leading, overline, headline, headlineSnippet, supporting, trailing, supportingSnippet)}
-  </button>
 {:else if "href" in props}
-  {@const { leading, overline = "", headline = "", headlineSnippet, supporting = "", supportingSnippet, trailing, unread = false, ...extra } = props}
+  {@const { leading, overline = "", headline = "", headlineSnippet, supporting = "", supportingSnippet, trailing, unread = false, onclick: parentOnClick, ...extra } = props}
   <a class="m3-container lines-{_lines}" class:unread={unread} onclick={(e) => {
     const t = e.target as Element | null;
     // Only prevent navigation if the click came from interactive elements in trailing actions
@@ -103,10 +97,20 @@
       e.stopPropagation();
       return;
     }
+    // Call parent onclick if provided (this allows ThreadListRow to add additional checks)
+    if (parentOnClick) {
+      parentOnClick(e);
+    }
   }} {...extra}>
     <Layer />
     {@render content(leading, overline, headline, headlineSnippet, supporting, trailing, supportingSnippet)}
   </a>
+{:else if "onclick" in props}
+  {@const { leading, overline = "", headline = "", headlineSnippet, supporting = "", supportingSnippet, trailing, unread = false, ...extra } = props}
+  <button type="button" class="m3-container lines-{_lines}" class:unread={unread} {...extra}>
+    <Layer />
+    {@render content(leading, overline, headline, headlineSnippet, supporting, trailing, supportingSnippet)}
+  </button>
 {:else}
   {@const { leading, overline = "", headline = "", headlineSnippet, supporting = "", supportingSnippet, trailing, unread = false, ...extra } = props}
   <div class="m3-container lines-{_lines}" class:unread={unread} {...extra}>
