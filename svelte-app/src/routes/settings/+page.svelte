@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { onDestroy } from 'svelte';
+  import { get } from 'svelte/store';
   import { beforeNavigate } from '$app/navigation';
   import { getDB } from '$lib/db/indexeddb';
   import { listLabels } from '$lib/gmail/api';
@@ -94,7 +95,7 @@
       await loadSettings();
       console.log('[Settings] Settings loaded successfully');
       
-      const s = $settings as AppSettings;
+      const s = get(settings) as AppSettings;
       _anchorHour = s.anchorHour;
       _roundMinutes = s.roundMinutes;
       _unreadOnUnsnooze = s.unreadOnUnsnooze;

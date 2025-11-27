@@ -78,6 +78,38 @@
     } catch {}
     return thread.lastMsgMeta?.subject || '(no subject)';
   })());
+  function formatDeletedMessage(): string {
+    const sender = senderDisplay;
+    const subject = threadDisplaySubject;
+    if (sender) {
+      return `Deleted • ${sender}: ${subject}`;
+    }
+    return `Deleted • ${subject}`;
+  }
+  function formatArchivedMessage(): string {
+    const sender = senderDisplay;
+    const subject = threadDisplaySubject;
+    if (sender) {
+      return `Archived • ${sender}: ${subject}`;
+    }
+    return `Archived • ${subject}`;
+  }
+  function formatSnoozedMessage(ruleKey: string): string {
+    const sender = senderDisplay;
+    const subject = threadDisplaySubject;
+    if (sender) {
+      return `Snoozed • ${sender}: ${subject} • ${ruleKey}`;
+    }
+    return `Snoozed • ${subject} • ${ruleKey}`;
+  }
+  function formatUnsnoozedMessage(): string {
+    const sender = senderDisplay;
+    const subject = threadDisplaySubject;
+    if (sender) {
+      return `Unsnoozed • ${sender}: ${subject}`;
+    }
+    return `Unsnoozed • ${subject}`;
+  }
   const aiSubjectReady = $derived((() => {
     try {
       const status = (thread as any).aiSubjectStatus as ('none'|'pending'|'ready'|'error') | undefined;
@@ -339,15 +371,15 @@
       lastCommittedAction = { type: action, ruleKey: opts?.ruleKey };
       if (action === 'archive') {
         await archiveThread(thread.threadId);
-        if (!opts?.suppressSnackbar) showSnackbar({ message: 'Archived 1 conversation', actions: { Undo: () => undoLast(1) }, timeout: 5000 });
+        if (!opts?.suppressSnackbar) showSnackbar({ message: formatArchivedMessage(), actions: { Undo: () => undoLast(1) }, timeout: 5000 });
       } else if (action === 'delete') {
         await trashThread(thread.threadId);
-        if (!opts?.suppressSnackbar) showSnackbar({ message: 'Deleted 1 conversation', actions: { Undo: () => undoLast(1) }, timeout: 5000 });
+        if (!opts?.suppressSnackbar) showSnackbar({ message: formatDeletedMessage(), actions: { Undo: () => undoLast(1) }, timeout: 5000 });
       } else if (action === 'snooze') {
         const k = opts?.ruleKey || defaultSnoozeKey;
         if (k) {
           await snoozeThreadByRule(thread.threadId, k, { optimisticLocal: true });
-          if (!opts?.suppressSnackbar) showSnackbar({ message: `Snoozed ${k}`, actions: { Undo: () => undoLast(1) }, timeout: 5000 });
+          if (!opts?.suppressSnackbar) showSnackbar({ message: formatSnoozedMessage(k), actions: { Undo: () => undoLast(1) }, timeout: 5000 });
         } else {
           showSnackbar({ message: 'No snooze labels configured. Map them in Settings.' });
         }
@@ -467,7 +499,7 @@
   async function animateAndUnsnooze(): Promise<void> {
     // Unsnooze keeps INBOX; no collapse
     await manualUnsnoozeThread(thread.threadId, { optimisticLocal: true });
-    showSnackbar({ message: 'Unsnoozed', actions: { Undo: () => undoLast(1) } });
+    showSnackbar({ message: formatUnsnoozedMessage(), actions: { Undo: () => undoLast(1) } });
   }
 
   async function animateAndSnooze(ruleKey: string, label = 'Snoozed'): Promise<void> { await commitAction('snooze', { ruleKey }); }

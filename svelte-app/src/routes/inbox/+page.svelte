@@ -25,7 +25,7 @@
   import { pullForwardSnoozedEmails } from '$lib/snooze/pull-forward';
   
   import { getLabel } from '$lib/gmail/api';
-  import { trailingHolds } from '$lib/stores/holds';
+  import { trailingHolds, clearAllHolds } from '$lib/stores/holds';
   import Menu from '$lib/containers/Menu.svelte';
   import MenuItem from '$lib/containers/MenuItem.svelte';
   import Dialog from '$lib/containers/Dialog.svelte';
@@ -192,6 +192,15 @@
   onMount(() => {
     window.addEventListener('keydown', handleKeyboardShortcuts);
     return () => window.removeEventListener('keydown', handleKeyboardShortcuts);
+  });
+  
+  // Clear stale holds when navigating away to prevent resurrected emails on return
+  // Holds are only needed for the swipe animation while the user is on the inbox page
+  onMount(() => {
+    return () => {
+      // When leaving inbox, clear any active holds to prevent resurrection on return
+      try { clearAllHolds(); } catch {}
+    };
   });
   
   // Listen for authoritative sync requests from TopAppBar
@@ -531,6 +540,61 @@
     return (m ? (m[1] || m[2]) : raw).toLowerCase();
   }
   function getSubject(a: import('$lib/types').GmailThread): string { return (a.lastMsgMeta.subject || '').toLowerCase(); }
+  function extractSender(raw?: string): string {
+    try {
+      const r = raw || '';
+      const m = r.match(/^\s*"?([^"<]+)"?\s*<[^>]+>\s*$/);
+      if (m && m[1]) return m[1].trim();
+      const lt = r.indexOf('<');
+      if (lt > 0) return r.slice(0, lt).trim();
+      const at = r.indexOf('@');
+      if (at > 0) return r.slice(0, at).trim();
+      return r.trim();
+    } catch { return raw || ''; }
+  }
+  function getThreadSubject(thread: import('$lib/types').GmailThread | undefined): string {
+    if (!thread) return '(no subject)';
+    const aiSubject = (thread as any).aiSubjectStatus === 'ready' && (thread as any).aiSubject 
+      ? (thread as any).aiSubject 
+      : thread.lastMsgMeta?.subject || '(no subject)';
+    return aiSubject;
+  }
+  function formatDeletedMessage(thread: import('$lib/types').GmailThread | undefined): string {
+    if (!thread) return 'Deleted';
+    const sender = extractSender(thread.lastMsgMeta?.from);
+    const subject = getThreadSubject(thread);
+    if (sender) {
+      return `Deleted • ${sender}: ${subject}`;
+    }
+    return `Deleted • ${subject}`;
+  }
+  function formatArchivedMessage(thread: import('$lib/types').GmailThread | undefined): string {
+    if (!thread) return 'Archived';
+    const sender = extractSender(thread.lastMsgMeta?.from);
+    const subject = getThreadSubject(thread);
+    if (sender) {
+      return `Archived • ${sender}: ${subject}`;
+    }
+    return `Archived • ${subject}`;
+  }
+  function formatSnoozedMessage(thread: import('$lib/types').GmailThread | undefined, ruleKey: string): string {
+    if (!thread) return `Snoozed • ${ruleKey}`;
+    const sender = extractSender(thread.lastMsgMeta?.from);
+    const subject = getThreadSubject(thread);
+    if (sender) {
+      return `Snoozed • ${sender}: ${subject} • ${ruleKey}`;
+    }
+    return `Snoozed • ${subject} • ${ruleKey}`;
+  }
+  function formatSpamMessage(thread: import('$lib/types').GmailThread | undefined): string {
+    if (!thread) return 'Marked as spam';
+    const sender = extractSender(thread.lastMsgMeta?.from);
+    const subject = getThreadSubject(thread);
+    if (sender) {
+      return `Marked as spam • ${sender}: ${subject}`;
+    }
+    return `Marked as spam • ${subject}`;
+  }
   function getDate(a: import('$lib/types').GmailThread): number {
     const d = a.lastMsgMeta?.date;
     if (typeof d === 'number' && !Number.isNaN(d)) return d;
@@ -677,21 +741,33 @@
     const ids = Object.keys(selectedMap);
     if (!ids.length) return;
     
+    // Get first thread for snackbar message
+    const firstThread = ids.length > 0 ? ($threadsStore || []).find(t => t.threadId === ids[0]) : undefined;
+    const message = ids.length === 1 
+      ? formatArchivedMessage(firstThread)
+      : `Archived ${ids.length}`;
+    
     // For bulk operations, we update local state for each thread immediately
     // The baseInboxCount will decrease naturally, so no counter adjustment needed
     for (const id of ids) await archiveThread(id);
     selectedMap = {};
-    showSnackbar({ message: 'Archived', actions: { Undo: () => undoLast(ids.length) } });
+    showSnackbar({ message, actions: { Undo: () => undoLast(ids.length) } });
   }
   async function bulkDelete() {
     const ids = Object.keys(selectedMap);
     if (!ids.length) return;
     
+    // Get first thread for snackbar message
+    const firstThread = ids.length > 0 ? ($threadsStore || []).find(t => t.threadId === ids[0]) : undefined;
+    const message = ids.length === 1 
+      ? formatDeletedMessage(firstThread)
+      : `Deleted ${ids.length}`;
+    
     // For bulk operations, we update local state for each thread immediately
     // The baseInboxCount will decrease naturally, so no counter adjustment needed
     for (const id of ids) await trashThread(id);
     selectedMap = {};
-    showSnackbar({ message: 'Deleted', actions: { Undo: () => undoLast(ids.length) } });
+    showSnackbar({ message, actions: { Undo: () => undoLast(ids.length) } });
   }
   async function bulkSnooze(ruleKey: string) {
     const ids = Object.keys(selectedMap);
@@ -702,7 +778,11 @@
     } catch (_) {}
     for (const id of ids) await snoozeThreadByRule(id, ruleKey, { optimisticLocal: true });
     selectedMap = {};
-    showSnackbar({ message: `Snoozed ${ids.length} • ${ruleKey}`, actions: { Undo: () => undoLast(ids.length) } });
+    const firstThread = ids.length > 0 ? ($threadsStore || []).find(t => t.threadId === ids[0]) : undefined;
+    const message = ids.length === 1 
+      ? formatSnoozedMessage(firstThread, ruleKey)
+      : `Snoozed ${ids.length} • ${ruleKey}`;
+    showSnackbar({ message, actions: { Undo: () => undoLast(ids.length) } });
   }
   const totalThreadsCount = $derived.by(() => {
     try {
@@ -3260,7 +3340,20 @@
       if (f.action === 'archive') await archiveThread(id, { optimisticLocal: false });
       else if (f.action === 'delete') await trashThread(id, { optimisticLocal: false });
     }
-    showSnackbar({ message: `${f.action === 'archive' ? 'Archived' : 'Deleted'} ${targetIds.length}`, actions: { Undo: () => undoLast(targetIds.length) } });
+    let message: string;
+    if (targetIds.length === 1) {
+      const firstThread = ($threadsStore || []).find(t => t.threadId === targetIds[0]);
+      if (f.action === 'delete') {
+        message = formatDeletedMessage(firstThread);
+      } else if (f.action === 'archive') {
+        message = formatArchivedMessage(firstThread);
+      } else {
+        message = `${f.action === 'archive' ? 'Archived' : 'Deleted'} ${targetIds.length}`;
+      }
+    } else {
+      message = `${f.action === 'archive' ? 'Archived' : 'Deleted'} ${targetIds.length}`;
+    }
+    showSnackbar({ message, actions: { Undo: () => undoLast(targetIds.length) } });
   }
 </script>
 

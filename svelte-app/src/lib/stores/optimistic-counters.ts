@@ -113,12 +113,17 @@ export async function setThreadsWithReset(threads: any[]) {
     const db = await getDB();
     const pendingOps = await db.getAll('ops');
 
-    // If there are pending operations, recalculate counters instead of resetting
-    if (pendingOps && pendingOps.length > 0) {
-      await recalculateOptimisticCounters();
-    } else {
+    // If there are pending operations, PRESERVE current optimistic counter values
+    // We cannot recalculate from IndexedDB because the thread labels have already 
+    // been updated optimistically, so the delta calculation would be incorrect.
+    // The adjustOptimisticCounters() calls in queueThreadModify ensure counters
+    // are accurate from the moment of user action.
+    if (!pendingOps || pendingOps.length === 0) {
+      // No pending ops means all operations have been flushed to server
+      // Safe to reset counters since server state matches local state
       resetOptimisticCounters();
     }
+    // If there ARE pending ops, we keep the current counter values unchanged
   } catch (e) {
     // If we can't check pending ops, just reset to be safe
     resetOptimisticCounters();
@@ -130,31 +135,15 @@ export async function setThreadsWithReset(threads: any[]) {
   setTimeout(() => { isSettingThreads = false; }, 0);
 }
 
-// Monitor thread store updates to auto-reset optimistic counters ONLY when appropriate
-let lastThreadsLength = 0;
-let lastThreadsUnreadCount = 0;
+// Monitor thread store updates
+// Note: We no longer auto-recalculate counters here because:
+// 1. User actions (archive, delete, snooze) call adjustOptimisticCounters directly
+// 2. Sync operations use setThreadsWithReset which handles counter management
+// 3. recalculateOptimisticCounters reads from IndexedDB which is already updated,
+//    so it would calculate incorrect deltas
 let isSettingThreads = false;
 
+// Track changes for debugging purposes only
 threadsStore.subscribe(threads => {
-  // Avoid resetting if we're in the middle of a setThreadsWithReset call
-  if (isSettingThreads) return;
-
-  const newLength = threads?.length || 0;
-  const newUnreadCount = threads?.filter((t: any) =>
-    Array.isArray(t.labelIds) && t.labelIds.includes('INBOX') && t.labelIds.includes('UNREAD')
-  ).length || 0;
-
-  // Only recalculate if threads changed significantly (more than 1 thread added/removed at once)
-  // Single thread changes are typically from user actions that already applied optimistic adjustments
-  // This prevents race conditions where we recalculate before the operation is enqueued
-  const lengthDelta = Math.abs(newLength - lastThreadsLength);
-  const unreadDelta = Math.abs(newUnreadCount - lastThreadsUnreadCount);
-  
-  // Recalculate only for bulk changes (likely from sync) or when many unread changed
-  if (lengthDelta > 2 || unreadDelta > 2) {
-    void recalculateOptimisticCounters();
-  }
-
-  lastThreadsLength = newLength;
-  lastThreadsUnreadCount = newUnreadCount;
+  // No-op: counter management is now handled by adjustOptimisticCounters and setThreadsWithReset
 });

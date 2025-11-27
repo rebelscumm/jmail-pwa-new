@@ -90,6 +90,35 @@ export async function queueThreadModify(threadId: string, addLabelIds: string[],
   const thread = await db.get('threads', threadId);
   if (!thread) return;
   
+  // Calculate optimistic counter adjustments BEFORE updating local state
+  // This ensures accurate delta calculation based on the original labels
+  if (options?.optimisticLocal !== false) {
+    try {
+      const currentLabels = new Set(thread.labelIds || []);
+      const wasInInbox = currentLabels.has('INBOX');
+      const wasUnread = currentLabels.has('UNREAD');
+      
+      // Apply the pending changes to calculate new state
+      const newLabels = new Set(currentLabels);
+      for (const label of removeLabelIds) newLabels.delete(label);
+      for (const label of addLabelIds) newLabels.add(label);
+      
+      const willBeInInbox = newLabels.has('INBOX');
+      const willBeUnread = newLabels.has('UNREAD');
+      
+      const inboxDelta = (willBeInInbox ? 1 : 0) - (wasInInbox ? 1 : 0);
+      const unreadDelta = (willBeUnread ? 1 : 0) - (wasUnread ? 1 : 0);
+      
+      // Apply optimistic counter adjustments immediately if there's a change
+      if (inboxDelta !== 0 || unreadDelta !== 0) {
+        const { adjustOptimisticCounters } = await import('$lib/stores/optimistic-counters');
+        adjustOptimisticCounters(inboxDelta, unreadDelta);
+      }
+    } catch (e) {
+      console.warn('[queueThreadModify] Failed to adjust optimistic counters:', e);
+    }
+  }
+  
   // When optimisticLocal is true (default), update local store immediately
   // This updates the base count immediately, providing instant UI feedback
   // When optimisticLocal is false (bulk operations), DON'T update local store
@@ -100,17 +129,8 @@ export async function queueThreadModify(threadId: string, addLabelIds: string[],
   
   const queued = await maybeEnqueue(threadId, thread.messageIds, addLabelIds, removeLabelIds);
   
-  // After enqueuing, recalculate optimistic counters to ensure they reflect pending ops
-  // This ensures counts update immediately even if local state update hasn't propagated yet
+  // After enqueuing, refresh sync state to update pending operations count
   if (queued) {
-    try {
-      const { recalculateOptimisticCounters } = await import('$lib/stores/optimistic-counters');
-      // Recalculate immediately to update counts optimistically
-      void recalculateOptimisticCounters();
-    } catch (e) {
-      console.warn('[queueThreadModify] Failed to recalculate optimistic counters:', e);
-    }
-    
     try {
       const { refreshSyncState } = await import('$lib/stores/queue');
       await refreshSyncState();

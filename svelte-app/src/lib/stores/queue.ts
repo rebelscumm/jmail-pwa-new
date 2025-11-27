@@ -23,21 +23,22 @@ export async function syncNow(): Promise<void> {
   
   // Check if there are still pending operations after flush
   // Only reset counters if all operations completed successfully
+  // If there are still pending ops, we preserve current counter values
+  // because they were correctly set by adjustOptimisticCounters when the action was taken
   try {
     const { getDB } = await import('$lib/db/indexeddb');
-    const { resetOptimisticCounters, recalculateOptimisticCounters } = await import('$lib/stores/optimistic-counters');
+    const { resetOptimisticCounters } = await import('$lib/stores/optimistic-counters');
     
     const db = await getDB();
     const remainingOps = await db.getAll('ops');
     
-    if (remainingOps && remainingOps.length > 0) {
-      // Some operations still pending - recalculate counters to reflect current state
-      console.log(`[syncNow] ${remainingOps.length} operations still pending, recalculating counters`);
-      await recalculateOptimisticCounters();
-    } else {
-      // All operations completed - safe to reset
+    if (!remainingOps || remainingOps.length === 0) {
+      // All operations completed - safe to reset counters
       console.log('[syncNow] All operations completed, resetting counters');
       resetOptimisticCounters();
+    } else {
+      // Some operations still pending - keep current counter values
+      console.log(`[syncNow] ${remainingOps.length} operations still pending, preserving current counters`);
     }
   } catch (e) {
     console.warn('Failed to update optimistic counters:', e);

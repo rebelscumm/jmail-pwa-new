@@ -84,11 +84,17 @@ export async function flushOnce(now = Date.now()): Promise<void> {
     }
   }
   
-  // Recalculate optimistic counters after operations complete to reflect updated pending state
+  // After operations complete, check if we should reset optimistic counters
+  // We reset when there are no more pending operations (all synced to server)
+  // We preserve counters when there are still pending ops (they reflect the pending changes)
   if (anyOpsCompleted) {
     try {
-      const { recalculateOptimisticCounters } = await import('$lib/stores/optimistic-counters');
-      await recalculateOptimisticCounters();
+      const remainingOps = await db.getAll('ops');
+      if (!remainingOps || remainingOps.length === 0) {
+        const { resetOptimisticCounters } = await import('$lib/stores/optimistic-counters');
+        resetOptimisticCounters();
+      }
+      // If there are still pending ops, keep current counter values
     } catch (_) {}
   }
   
