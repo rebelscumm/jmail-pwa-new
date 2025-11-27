@@ -1958,7 +1958,32 @@ import { precomputeStatus } from '$lib/stores/precompute';
     gap: 0 !important;
   }
   .last-sync { color: rgb(var(--m3-scheme-on-surface-variant)); margin-inline-start: 0; }
-  .about { display:flex; flex-direction:column; gap:0.5rem; }
+  .about { 
+    display:flex; 
+    flex-direction:column; 
+    gap:0.75rem; 
+    min-height: auto;
+    width: 100%;
+  }
+  
+  /* Ensure About dialog is large enough to be readable */
+  :global(dialog:has(.about)) {
+    min-width: 22rem !important;
+    max-width: 32rem !important;
+    width: auto !important;
+  }
+  
+  :global(dialog:has(.about) .content) {
+    min-height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    padding: 0.25rem 0 !important;
+  }
+  
+  :global(dialog:has(.about) .d) {
+    min-height: auto !important;
+    padding: 1.5rem !important;
+  }
   
     /* Menu section headers with solid background - no transparency issues */
     .overflow :global(.menu-section-header) {
@@ -2011,9 +2036,27 @@ import { precomputeStatus } from '$lib/stores/precompute';
    :global(dialog[open]) {
      z-index: 10010 !important;
    }
-  .about .row { display:flex; justify-content:space-between; gap:1rem; }
-  .about .k { color: rgb(var(--m3-scheme-on-surface-variant)); }
-  .about .v { color: rgb(var(--m3-scheme-on-surface)); font-variant-numeric: tabular-nums; }
+  .about .row { 
+    display:flex; 
+    justify-content:space-between; 
+    gap:1rem; 
+    align-items:center;
+    min-height: 2rem;
+    padding: 0.25rem 0;
+    line-height: 1.5;
+  }
+  .about .k { 
+    color: rgb(var(--m3-scheme-on-surface-variant)); 
+    font-size: 0.9375rem;
+    flex-shrink: 0;
+  }
+  .about .v { 
+    color: rgb(var(--m3-scheme-on-surface)); 
+    font-variant-numeric: tabular-nums; 
+    font-size: 0.9375rem;
+    text-align: right;
+    word-break: break-all;
+  }
   /* Fix the history menu sizing issues */
   :global(.history-menu.m3-container) {
     min-width: 24rem !important;
