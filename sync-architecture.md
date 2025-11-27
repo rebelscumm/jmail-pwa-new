@@ -112,26 +112,53 @@ When refresh is triggered, choose sync method based on state:
 **Priority**: Always prefer History API when possible (faster, less bandwidth), but use Authoritative Sync when accuracy is critical.
 
 ### 3. Authoritative Sync (On startup / manual refresh)
-- Enumerates all inbox threads from Gmail
-- **Protection**: Checks **BOTH** ops queue **AND** journal before modifications
-  - Ops queue: Operations still pending/retrying
-  - Journal: Recently completed operations (kept for undo even after sync succeeds)
-  - Journal time window: 
-    - **Phase 1 (adding INBOX)**: 30 seconds - very short to allow new emails to appear quickly
-    - **Phase 2 (removing INBOX)**: 2 minutes - more conservative about removing INBOX
-  - If EITHER indicates a user action, that thread is skipped during reconciliation
-- **Before Sync**: Attempts to flush pending operations, but preserves them if they fail
-- **Action**: Full reconciliation in two phases:
-  1. **Phase 1**: Adds missing INBOX label to threads that should have it (30-second protection)
-  2. **Phase 2**: Removes INBOX from threads that shouldn't have it (2-minute protection)
-- **Result**: Nuclear option for complete accuracy
-- **Important**: 
-  - Optimistic counters are only reset if all pending ops successfully complete; otherwise they're recalculated to preserve visual state
-  - **New threads from Gmail**: Always fetched and stored (no pending ops can exist for unseen threads)
-  - **Existing threads**: Only modified if no pending/recent actions found
-  - If ops/journal lookup returns `null` or empty, proceed (means no conflicts exist)
-  - After 30 seconds (Phase 1) or 2 minutes (Phase 2), sync can reconcile a thread
-  - **Short windows balance**: protecting immediate user actions vs showing fresh Gmail data
+
+Uses `threads.list` API as the **primary source of truth** for reliable enumeration.
+
+**How It Works:**
+
+1. **Step 1: Enumerate all Gmail INBOX thread IDs**
+   - Uses `threads.list` API with `labelIds=INBOX`
+   - Paginates through ALL pages (500 threads/page) until no more pages
+   - No arbitrary page limits - fetches everything Gmail reports
+   - Dynamic page limits based on Gmail's reported thread count
+
+2. **Step 2: Identify missing threads**
+   - Compares Gmail's thread IDs with local IndexedDB
+   - Threads in Gmail but not local → fetch and store
+   - Threads in local missing INBOX label → add label (with protection checks)
+
+3. **Step 3: Fetch missing threads**
+   - Fetches thread summaries for all missing threads
+   - Processes in batches of 20 with concurrency of 4
+   - Stores threads and messages to IndexedDB
+   - Ensures INBOX label is present
+
+4. **Step 4: Add INBOX label to existing threads**
+   - For threads that exist locally but are missing INBOX label
+   - Checks for pending operations and terminal labels first
+
+5. **Step 5: Remove INBOX from stale threads**
+   - Local threads with INBOX that aren't in Gmail's list
+   - Protected by pending ops check (2-minute window)
+   - Terminal labels (TRASH/SPAM) are never modified
+
+6. **Step 6: Refresh labels for existing threads**
+   - Updates labels for a subset of existing INBOX threads
+   - Catches read/unread state changes
+   - Limited to 50 threads per sync for performance
+
+**Protection Logic:**
+- **Terminal labels**: TRASH/SPAM threads are never modified
+- **Pending operations**: Threads with queued ops are skipped
+- **Recent journal entries**: Actions within 2 minutes are protected
+- **New threads**: Always fetched (no protection needed - they're new)
+
+**Why threads.list is Primary:**
+- More reliable than message-based enumeration
+- Consistent pagination behavior
+- Directly returns thread IDs without extra API calls
+- Matches Gmail's reported thread counts
 
 ---
 

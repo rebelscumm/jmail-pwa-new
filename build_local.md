@@ -1,6 +1,13 @@
-# Local Development Setup
+# Local Development Restart Guide
 
-This guide explains how to run the JMail PWA locally with full API support.
+This guide explains how to restart the JMail PWA locally after a reboot.
+
+**Important context:**
+- All tools and dependencies are already installed
+- The environment has been running properly — nothing needs to be reinstalled
+- This is only about restarting processes with the correct ports for GCP OAuth
+
+> **For AI agents:** If terminal commands fail to start the server properly, ask the user to manually run the startup command in their PowerShell terminal.
 
 ## Required Ports — DO NOT CHANGE
 
@@ -14,54 +21,15 @@ These exact ports are registered in Google Cloud Console OAuth settings. Changin
 
 **Access the app at http://localhost:4280** — this is the OAuth redirect target.
 
-### Clearing Ports Before Starting
-
-If any port is already in use, Vite or SWA will pick a different port and OAuth will fail. Kill existing processes first:
-
-```powershell
-# Kill func.exe and any processes on required ports
-taskkill /IM func.exe /F 2>$null
-netstat -ano | findstr ":4280 :5173 :7071" | ForEach-Object { $_ -match '\s+(\d+)$'; taskkill /PID $matches[1] /F 2>$null }
-```
-
-## Prerequisites
-
-Install these global tools (one-time setup):
-
-```bash
-npm install -g @azure/static-web-apps-cli
-npm install -g azure-functions-core-tools@4
-```
-
-## Configuration
-
-1. Ensure `api/local.settings.json` exists with your credentials:
-   - `GOOGLE_CLIENT_ID` — Your Google OAuth Client ID
-   - `GOOGLE_CLIENT_SECRET` — Your Google OAuth Client Secret
-   - `COOKIE_SECRET` — A 32-character random string
-   - `COOKIE_SIGNING_SECRET` — Another 32-character random string
-
-   If the file doesn't exist, copy from `api/local.settings.example.json` and fill in the values.
-
-2. Install frontend dependencies (if not already installed):
-   ```bash
-   cd svelte-app
-   pnpm install
-   ```
-
 ## Starting the Full Environment
 
-From the project root (`jmail-pwa-new`):
+Open a PowerShell terminal and run this single command from the project root:
 
 ```powershell
-# 1. Clear ports first (especially after reboot or if previous session crashed)
-taskkill /IM func.exe /F 2>$null
-netstat -ano | findstr ":4280 :5173 :7071" | ForEach-Object { $_ -match '\s+(\d+)$'; taskkill /PID $matches[1] /F 2>$null }
-
-# 2. Start the environment
-cd "C:\Users\jmeng\OneDrive\repos\rebelscumm\jmail-pwa-new"
-swa start ./svelte-app --api-location ./api --run "cd svelte-app && pnpm dev -- --port 5173 --force" --port 4280
+cd "C:\Users\jmeng\OneDrive\repos\rebelscumm\jmail-pwa-new"; swa start ./svelte-app --api-location ./api --run "cd svelte-app && pnpm dev -- --port 5173 --force" --port 4280
 ```
+
+Wait for output showing all three services are ready (Vite, Functions, and SWA proxy).
 
 This starts:
 | Service | URL | Description |
@@ -74,12 +42,13 @@ This starts:
 
 ## Alternative: Frontend Only
 
-If you only need the frontend without API (limited functionality):
+If you only need the frontend without API (limited functionality, no OAuth):
 
-```bash
-cd svelte-app
-pnpm dev -- --port 5173
+```powershell
+cd "C:\Users\jmeng\OneDrive\repos\rebelscumm\jmail-pwa-new\svelte-app"; pnpm dev -- --port 5173
 ```
+
+Access at http://localhost:5173
 
 ## Stopping the Environment
 
@@ -87,16 +56,21 @@ Press `Ctrl+C` in the terminal running the SWA CLI.
 
 ## Troubleshooting
 
-### "Port 5173 is in use"
-**Do not let Vite pick another port** — this will break Google OAuth. Kill the process using port 5173 first (see "Required Ports" section above), then restart.
+### Port already in use
+
+If any required port is in use, kill existing processes first:
+
+```powershell
+taskkill /IM func.exe /F 2>$null; taskkill /IM node.exe /F 2>$null
+```
+
+**Do not let Vite pick another port** — this will break Google OAuth.
 
 ### API proxy errors / blank page after sign-in
 The API server isn't running. Make sure you're using the full `swa start` command, not just `pnpm dev`.
 
 ### "ECONNREFUSED" errors
-The Azure Functions backend isn't responding. Check that:
-1. `api/local.settings.json` exists and is valid JSON
-2. Azure Functions Core Tools is installed (`func --version`)
+The Azure Functions backend isn't responding. Check that `api/local.settings.json` exists and is valid JSON.
 
 ### Google OAuth errors
 Verify your OAuth credentials in `api/local.settings.json` and ensure your Google Cloud Console has `http://localhost:4280` as an authorized redirect URI.

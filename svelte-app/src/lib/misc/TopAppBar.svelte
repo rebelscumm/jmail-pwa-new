@@ -215,9 +215,10 @@ import { precomputeStatus } from '$lib/stores/precompute';
         console.warn('[TopAppBar] Step 5: Could not refresh label stats:', e);
       }
       
-      // Step 8: Get post-sync counts and show detailed results
+      // Step 8: Get post-sync counts and compare with Gmail
       try {
         const { getDB } = await import('$lib/db/indexeddb');
+        const { getLabel } = await import('$lib/gmail/api');
         const db = await getDB();
         const threads = await db.getAll('threads');
         const inboxThreads = threads.filter((t: any) => 
@@ -228,23 +229,45 @@ import { precomputeStatus } from '$lib/stores/precompute';
           Array.isArray(t.labelIds) && t.labelIds.includes('UNREAD')
         ).length;
         
+        // Get Gmail's reported counts for comparison
+        let gmailTotal = 0;
+        let gmailUnread = 0;
+        try {
+          const inboxLabel = await getLabel('INBOX');
+          gmailTotal = inboxLabel.threadsTotal || 0;
+          gmailUnread = inboxLabel.threadsUnread || 0;
+        } catch (_) {}
+        
         console.log('[TopAppBar] Post-sync:', postCount, 'inbox threads,', postUnreadCount, 'unread');
+        console.log('[TopAppBar] Gmail reports:', gmailTotal, 'total,', gmailUnread, 'unread');
         
         const added = Math.max(0, postCount - preCount);
         const removed = Math.max(0, preCount - postCount);
-        const unreadChange = postUnreadCount - preUnreadCount;
         
-        let message = `Inbox synced: ${postCount} threads`;
-        if (added > 0 || removed > 0) {
-          const parts = [];
-          if (added > 0) parts.push(`+${added} new`);
-          if (removed > 0) parts.push(`-${removed} removed`);
-          message += ` (${parts.join(', ')})`;
-        }
-        if (postUnreadCount > 0) {
-          message += `, ${postUnreadCount} unread`;
-          if (unreadChange !== 0) {
-            message += ` (${unreadChange > 0 ? '+' : ''}${unreadChange})`;
+        // Build human-friendly message
+        let message = '';
+        const discrepancy = Math.abs(gmailTotal - postCount);
+        
+        if (discrepancy <= 2) {
+          // Counts match - show success message
+          message = `✓ Inbox synced: ${postCount} emails`;
+          if (postUnreadCount > 0) {
+            message += `, ${postUnreadCount} unread`;
+          }
+          if (added > 0 || removed > 0) {
+            const changes = [];
+            if (added > 0) changes.push(`+${added}`);
+            if (removed > 0) changes.push(`-${removed}`);
+            message += ` (${changes.join(', ')})`;
+          }
+        } else {
+          // Counts don't match - show warning with details
+          message = `Synced ${postCount}/${gmailTotal} emails`;
+          if (postUnreadCount > 0) {
+            message += `, ${postUnreadCount} unread`;
+          }
+          if (gmailTotal > postCount) {
+            message += ` (${gmailTotal - postCount} may be syncing)`;
           }
         }
         
