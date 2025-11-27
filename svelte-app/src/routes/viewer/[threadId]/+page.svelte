@@ -982,11 +982,6 @@ import BottomSheet from "$lib/containers/BottomSheet.svelte";
         
         // Handle http/https links - open directly without asking
         window.open(target, '_blank');
-        showSnackbar({ 
-          message: 'Unsubscribe link opened in new window', 
-          closable: true, 
-          timeout: 3000 
-        });
       } else {
         showSnackbar({ message: 'No unsubscribe target found', closable: true });
       }

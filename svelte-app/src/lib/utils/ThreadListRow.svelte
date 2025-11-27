@@ -637,12 +637,6 @@
       
       // Handle http/https links - open directly without asking
       window.open(target, '_blank');
-      const methodLabel = usedAI ? 'AI found unsubscribe link' : 'Unsubscribe link found';
-      showSnackbar({ 
-        message: `${methodLabel} opened in new window`, 
-        closable: true, 
-        timeout: 3000 
-      });
     } catch (e) {
       const { message } = getFriendlyAIErrorMessage(e, 'Unsubscribe');
       showSnackbar({
