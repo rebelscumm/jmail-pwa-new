@@ -68,12 +68,26 @@
     <Actions
       {clearable}
       chosenDate={Boolean(chosenDate)}
-      clear={() => (chosenDate = "")}
-      cancel={() => {
+      clear={(e) => {
+        if (e && typeof e.stopPropagation === 'function') {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+        chosenDate = "";
+      }}
+      cancel={(e) => {
+        if (e && typeof e.stopPropagation === 'function') {
+          e.preventDefault();
+          e.stopPropagation();
+        }
         chosenDate = date;
         close();
       }}
-      ok={() => {
+      ok={(e) => {
+        if (e && typeof e.stopPropagation === 'function') {
+          e.preventDefault();
+          e.stopPropagation();
+        }
         setDate(chosenDate);
         close();
       }}
@@ -83,7 +97,11 @@
       options={Array.from({ length: 12 }, (_, i) => ({
         name: getLongMonth(i),
         selected: i == focusedMonth,
-        activate: () => {
+        activate: (e) => {
+          if (e && typeof e.stopPropagation === 'function') {
+            e.preventDefault();
+            e.stopPropagation();
+          }
           focusedMonth = i;
           currentView = "calendar";
         },
@@ -94,7 +112,11 @@
       options={Array.from({ length: endYear - startYear }, (_, i) => ({
         name: (startYear + i + 1).toString(),
         selected: startYear + i + 1 == focusedYear,
-        activate: () => {
+        activate: (e) => {
+          if (e && typeof e.stopPropagation === 'function') {
+            e.preventDefault();
+            e.stopPropagation();
+          }
           focusedYear = startYear + i + 1;
           currentView = "calendar";
         },

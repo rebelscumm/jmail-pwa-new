@@ -46,7 +46,7 @@
         day.day == today.getDate()}
       selected={day.iso == chosenDate}
       label={day.day.toString()}
-      onclick={() => (chosenDate = day.iso)}
+      onclick={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); chosenDate = day.iso; }}
     />
   {/each}
 </div>

@@ -224,6 +224,8 @@ import BottomSheet from "$lib/containers/BottomSheet.svelte";
   // Snooze menu state
   let snoozeMenuOpen: boolean = $state(false);
   let snoozeDetails: HTMLDetailsElement | null = $state(null);
+  // Message expansion state - track which messages are expanded (default: only the latest)
+  let expandedMessages: Set<string> = $state(new Set());
   // Derive adjacent thread navigation using Inbox context + global search/filter/sort
   const inboxThreads = $derived((allThreads || []).filter((t) => (t.labelIds || []).includes('INBOX')));
   const visibleCandidates = $derived((() => {
@@ -800,6 +802,34 @@ import BottomSheet from "$lib/containers/BottomSheet.svelte";
     messagesWithDates.sort((a, b) => a.date - b.date);
     return messagesWithDates.map((m) => m.id);
   })());
+
+  // Initialize expanded messages - only the latest message should be expanded by default
+  let previousThreadId: string | undefined = $state(undefined);
+  $effect(() => {
+    // Reset expanded messages when thread changes
+    if (threadId !== previousThreadId) {
+      previousThreadId = threadId;
+      if (sortedMessageIds.length > 0) {
+        const latestMessageId = sortedMessageIds[sortedMessageIds.length - 1];
+        if (latestMessageId) {
+          expandedMessages.clear();
+          expandedMessages.add(latestMessageId);
+        }
+      } else {
+        expandedMessages.clear();
+      }
+    }
+  });
+
+  // Toggle message expansion
+  function toggleMessageExpansion(mid: string) {
+    if (expandedMessages.has(mid)) {
+      expandedMessages.delete(mid);
+    } else {
+      expandedMessages.add(mid);
+    }
+    expandedMessages = new Set(expandedMessages); // Trigger reactivity
+  }
 
   // Auto-load messages' full content progressively (only if body scopes already granted)
   $effect(() => {
@@ -1599,6 +1629,8 @@ onMount(() => {
     <div class="messages">
       {#each sortedMessageIds as mid, idx}
         {@const m = $messages[mid]}
+        {@const isExpanded = expandedMessages.has(mid)}
+        {@const isLatest = idx === sortedMessageIds.length - 1}
         {#if idx > 0}
           <Divider />
         {/if}
@@ -1630,30 +1662,94 @@ onMount(() => {
                 </Button>
               </div>
             </div>
+          {:else if !isExpanded && !isLatest}
+            <!-- Collapsed message view -->
+            <div 
+              style="padding:0.75rem 1rem; cursor:pointer; display:flex; align-items:center; justify-content:space-between; gap:0.75rem;"
+              onclick={() => toggleMessageExpansion(mid)}
+              role="button"
+              tabindex="0"
+              onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleMessageExpansion(mid); } }}
+            >
+              <div style="flex:1; min-width:0;">
+                <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.25rem;">
+                  {#if m?.headers?.From || m?.headers?.from}
+                    <p class="m3-font-body-medium" style="margin:0; color:rgb(var(--m3-scheme-on-surface)); font-weight:500;">
+                      {extractSender(m.headers.From || m.headers.from)}
+                    </p>
+                  {/if}
+                  {#if m?.internalDate}
+                    <p class="m3-font-body-small" style="margin:0; color:rgb(var(--m3-scheme-on-surface-variant));">
+                      {formatDateTime(m.internalDate)}
+                    </p>
+                  {/if}
+                </div>
+                {#if m?.snippet}
+                  <p class="m3-font-body-small" style="margin:0; color:rgb(var(--m3-scheme-on-surface-variant)); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+                    {decodeEntities(m.snippet)}
+                  </p>
+                {:else if m?.bodyText}
+                  <p class="m3-font-body-small" style="margin:0; color:rgb(var(--m3-scheme-on-surface-variant)); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+                    {decodeEntities(m.bodyText.slice(0, 100))}{m.bodyText.length > 100 ? '...' : ''}
+                  </p>
+                {:else if m?.bodyHtml}
+                  <p class="m3-font-body-small" style="margin:0; color:rgb(var(--m3-scheme-on-surface-variant));">
+                    (HTML message)
+                  </p>
+                {/if}
+              </div>
+              <Icon icon={iconExpand} width="1.25rem" height="1.25rem" style="flex-shrink:0; color:rgb(var(--m3-scheme-on-surface-variant));" />
+            </div>
           {:else if m?.bodyHtml}
-              {#if m?.internalDate}
-                <div style="display:flex; align-items:center; justify-content:space-between; margin:0.25rem 0;">
-                  <p class="m3-font-body-small" style="margin:0; color:rgb(var(--m3-scheme-on-surface-variant))">{formatDateTime(m.internalDate)}</p>
-                  <div style="display:flex; align-items:center; gap:0.25rem;">
-                    <Button variant="text" iconType="full" aria-label="Copy email source" onclick={() => copyEmailSource(mid)}>
-                      <Icon icon={iconCopy} width="1rem" height="1rem" />
-                    </Button>
-                    <Button variant="text" iconType="full" aria-label="Open message in Gmail" onclick={() => openGmailMessagePopup(threadId, mid)}>
-                      <Icon icon={iconGmail} width="1rem" height="1rem" />
-                    </Button>
+              {#if !isLatest}
+                <!-- Collapse button for expanded messages -->
+                <div 
+                  style="padding:0.5rem 1rem; cursor:pointer; display:flex; align-items:center; justify-content:space-between; gap:0.75rem; border-bottom:1px solid rgb(var(--m3-scheme-outline-variant));"
+                  onclick={() => toggleMessageExpansion(mid)}
+                  role="button"
+                  tabindex="0"
+                  onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleMessageExpansion(mid); } }}
+                >
+                  <div style="flex:1; min-width:0;">
+                    {#if m?.headers?.From || m?.headers?.from}
+                      <p class="m3-font-body-medium" style="margin:0; color:rgb(var(--m3-scheme-on-surface)); font-weight:500;">
+                        {extractSender(m.headers.From || m.headers.from)}
+                      </p>
+                    {/if}
+                    {#if m?.internalDate}
+                      <p class="m3-font-body-small" style="margin:0; color:rgb(var(--m3-scheme-on-surface-variant));">
+                        {formatDateTime(m.internalDate)}
+                      </p>
+                    {/if}
                   </div>
+                  <Icon icon={iconArrowUp} width="1.25rem" height="1.25rem" style="flex-shrink:0; color:rgb(var(--m3-scheme-on-surface-variant));" />
                 </div>
               {/if}
-              {#if m?.headers}
-                <RecipientBadges 
-                  to={m.headers.To || m.headers.to || ''} 
-                  cc={m.headers.Cc || m.headers.cc || ''} 
-                  bcc={m.headers.Bcc || m.headers.bcc || ''} 
-                  maxDisplayCount={4}
-                  compact={true} 
-                />
-              {/if}
-              <div class="html-body" style="white-space:normal; overflow-wrap:anywhere;" use:processHtmlLinks>{@html m.bodyHtml}</div>
+              <div style="padding: 0 1rem;">
+                {#if m?.internalDate}
+                  <div style="display:flex; align-items:center; justify-content:space-between; margin:0.25rem 0;">
+                    <p class="m3-font-body-small" style="margin:0; color:rgb(var(--m3-scheme-on-surface-variant))">{formatDateTime(m.internalDate)}</p>
+                    <div style="display:flex; align-items:center; gap:0.25rem;">
+                      <Button variant="text" iconType="full" aria-label="Copy email source" onclick={() => copyEmailSource(mid)}>
+                        <Icon icon={iconCopy} width="1rem" height="1rem" />
+                      </Button>
+                      <Button variant="text" iconType="full" aria-label="Open message in Gmail" onclick={() => openGmailMessagePopup(threadId, mid)}>
+                        <Icon icon={iconGmail} width="1rem" height="1rem" />
+                      </Button>
+                    </div>
+                  </div>
+                {/if}
+                {#if m?.headers}
+                  <RecipientBadges 
+                    to={m.headers.To || m.headers.to || ''} 
+                    cc={m.headers.Cc || m.headers.cc || ''} 
+                    bcc={m.headers.Bcc || m.headers.bcc || ''} 
+                    maxDisplayCount={4}
+                    compact={true} 
+                  />
+                {/if}
+                <div class="html-body" style="white-space:normal; overflow-wrap:anywhere;" use:processHtmlLinks>{@html m.bodyHtml}</div>
+              </div>
               {#if Array.isArray(m?.attachments) && m.attachments.length}
                 <div class="attachments">
                   {#each m.attachments as a, i}
@@ -1673,29 +1769,55 @@ onMount(() => {
                 </div>
               {/if}
             {:else if m?.bodyText}
-              {#if m?.internalDate}
-                <div style="display:flex; align-items:center; justify-content:space-between; margin:0.25rem 0;">
-                  <p class="m3-font-body-small" style="margin:0; color:rgb(var(--m3-scheme-on-surface-variant))">{formatDateTime(m.internalDate)}</p>
-                  <div style="display:flex; align-items:center; gap:0.25rem;">
-                    <Button variant="text" iconType="full" aria-label="Copy email source" onclick={() => copyEmailSource(mid)}>
-                      <Icon icon={iconCopy} width="1rem" height="1rem" />
-                    </Button>
-                    <Button variant="text" iconType="full" aria-label="Open message in Gmail" onclick={() => openGmailMessagePopup(threadId, mid)}>
-                      <Icon icon={iconGmail} width="1rem" height="1rem" />
-                    </Button>
+              {#if !isLatest}
+                <!-- Collapse button for expanded messages -->
+                <div 
+                  style="padding:0.5rem 1rem; cursor:pointer; display:flex; align-items:center; justify-content:space-between; gap:0.75rem; border-bottom:1px solid rgb(var(--m3-scheme-outline-variant));"
+                  onclick={() => toggleMessageExpansion(mid)}
+                  role="button"
+                  tabindex="0"
+                  onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleMessageExpansion(mid); } }}
+                >
+                  <div style="flex:1; min-width:0;">
+                    {#if m?.headers?.From || m?.headers?.from}
+                      <p class="m3-font-body-medium" style="margin:0; color:rgb(var(--m3-scheme-on-surface)); font-weight:500;">
+                        {extractSender(m.headers.From || m.headers.from)}
+                      </p>
+                    {/if}
+                    {#if m?.internalDate}
+                      <p class="m3-font-body-small" style="margin:0; color:rgb(var(--m3-scheme-on-surface-variant));">
+                        {formatDateTime(m.internalDate)}
+                      </p>
+                    {/if}
                   </div>
+                  <Icon icon={iconArrowUp} width="1.25rem" height="1.25rem" style="flex-shrink:0; color:rgb(var(--m3-scheme-on-surface-variant));" />
                 </div>
               {/if}
-              {#if m?.headers}
-                <RecipientBadges 
-                  to={m.headers.To || m.headers.to || ''} 
-                  cc={m.headers.Cc || m.headers.cc || ''} 
-                  bcc={m.headers.Bcc || m.headers.bcc || ''} 
-                  maxDisplayCount={4}
-                  compact={true} 
-                />
-              {/if}
-              <div style="white-space:pre-wrap; font-family: monospace;">{@html linkifyText(decodeEntities(m.bodyText))}</div>
+              <div style="padding: 0 1rem;">
+                {#if m?.internalDate}
+                  <div style="display:flex; align-items:center; justify-content:space-between; margin:0.25rem 0;">
+                    <p class="m3-font-body-small" style="margin:0; color:rgb(var(--m3-scheme-on-surface-variant))">{formatDateTime(m.internalDate)}</p>
+                    <div style="display:flex; align-items:center; gap:0.25rem;">
+                      <Button variant="text" iconType="full" aria-label="Copy email source" onclick={() => copyEmailSource(mid)}>
+                        <Icon icon={iconCopy} width="1rem" height="1rem" />
+                      </Button>
+                      <Button variant="text" iconType="full" aria-label="Open message in Gmail" onclick={() => openGmailMessagePopup(threadId, mid)}>
+                        <Icon icon={iconGmail} width="1rem" height="1rem" />
+                      </Button>
+                    </div>
+                  </div>
+                {/if}
+                {#if m?.headers}
+                  <RecipientBadges 
+                    to={m.headers.To || m.headers.to || ''} 
+                    cc={m.headers.Cc || m.headers.cc || ''} 
+                    bcc={m.headers.Bcc || m.headers.bcc || ''} 
+                    maxDisplayCount={4}
+                    compact={true} 
+                  />
+                {/if}
+                <div style="white-space:pre-wrap; font-family: monospace;">{@html linkifyText(decodeEntities(m.bodyText))}</div>
+              </div>
               {#if Array.isArray(m?.attachments) && m.attachments.length}
                 <div class="attachments">
                   {#each m.attachments as a, i}

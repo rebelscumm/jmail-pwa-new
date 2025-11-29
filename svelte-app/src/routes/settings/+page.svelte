@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { onDestroy } from 'svelte';
-  import { get } from 'svelte/store';
   import { beforeNavigate } from '$app/navigation';
   import { getDB } from '$lib/db/indexeddb';
   import { listLabels } from '$lib/gmail/api';
@@ -23,6 +22,7 @@
   import { goto } from '$app/navigation';
   import ActionBar from '$lib/buttons/ActionBar.svelte';
   import { precomputeNow } from '$lib/ai/precompute';
+  import { show as showSnackbar } from '$lib/containers/snackbar';
 
   let labels = $state<GmailLabel[]>([]);
   let mappingJson = $state('');
@@ -143,6 +143,60 @@
       labels = await tx.store.getAll();
       backups = await listBackups();
       console.log('[Settings] Database data loaded successfully');
+      
+      // Auto-map labels if mapping is blank
+      const isMappingBlank = !s.labelMapping || Object.keys(s.labelMapping).length === 0;
+      if (isMappingBlank) {
+        try {
+          console.log('[Settings] Label mapping is blank, attempting auto-mapping...');
+          // Ensure labels are loaded - if not, try to discover them
+          if (labels.length === 0) {
+            console.log('[Settings] No labels cached, discovering labels...');
+            await discoverLabels();
+          }
+          
+          // Attempt auto-mapping
+          if (labels.length > 0) {
+            const beforeCount = Object.keys(uiMapping).filter(k => uiMapping[k]).length;
+            autoMapFromLabelNames();
+            const afterCount = Object.keys(uiMapping).filter(k => uiMapping[k]).length;
+            const applied = afterCount - beforeCount;
+            
+            if (applied > 0) {
+              // Save the auto-mapped labels
+              await saveLabelMapping(uiMapping);
+              showSnackbar({ 
+                message: `Auto-mapped ${applied} label(s) successfully.`, 
+                closable: true,
+                timeout: 5000
+              });
+              console.log('[Settings] Auto-mapping succeeded:', { applied, mapping: uiMapping });
+            } else {
+              showSnackbar({ 
+                message: 'No labels found to auto-map. Please map labels manually or ensure your Gmail labels match the expected names.', 
+                closable: true,
+                timeout: 6000
+              });
+              console.log('[Settings] Auto-mapping found no matches');
+            }
+          } else {
+            showSnackbar({ 
+              message: 'Could not auto-map labels: No labels available. Please refresh labels first.', 
+              closable: true,
+              timeout: 5000
+            });
+            console.log('[Settings] Auto-mapping failed: No labels available');
+          }
+        } catch (error) {
+          const errorMsg = error instanceof Error ? error.message : String(error);
+          showSnackbar({ 
+            message: `Auto-mapping failed: ${errorMsg}`, 
+            closable: true,
+            timeout: 6000
+          });
+          console.error('[Settings] Auto-mapping error:', error);
+        }
+      }
       
       // Mark initialLoaded only after we've populated local state from $settings
       initialLoaded = true;

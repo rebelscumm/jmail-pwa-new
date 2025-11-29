@@ -248,7 +248,9 @@ import { precomputeStatus } from '$lib/stores/precompute';
       
       // Step 6: Perform authoritative inbox sync
       console.log('[TopAppBar] Step 4: Performing authoritative inbox sync...');
-      showSnackbar({ message: '📨 Syncing with Gmail server…', timeout: null });
+      // Only show syncing snackbar briefly or let it be replaced by success/failure
+      // We don't use timeout: null anymore to avoid it getting stuck
+      const syncingSnack = showSnackbar({ message: '📨 Syncing with Gmail server…', timeout: 2000 });
       
       const isInboxPage = typeof window !== 'undefined' && window.location.pathname.includes('/inbox');
       if (isInboxPage) {
@@ -293,6 +295,10 @@ import { precomputeStatus } from '$lib/stores/precompute';
           }
           console.log('[TopAppBar] Step 4: Authoritative sync completed');
           markOnline();
+          // Manually close the syncing snackbar if it hasn't disappeared
+          // Wait for any completion event handlers to fire first
+          // Note: We can't close it directly without the ID or a close method on the snackbar API
+          // but the timeout we set earlier (2000ms) should handle it.
         } catch (e) {
           const err = e instanceof Error ? e : new Error(String(e));
           console.error('[TopAppBar] Step 4: Authoritative sync failed:', e);
@@ -362,62 +368,18 @@ import { precomputeStatus } from '$lib/stores/precompute';
         
         if (Math.abs(discrepancy) <= 2) {
           // Counts match - show success message
-          message = `✓ Inbox synced: ${postCount} emails`;
-          if (postUnreadCount > 0) {
-            message += `, ${postUnreadCount} unread`;
-          }
-          if (added > 0 || removed > 0) {
-            const changes = [];
-            if (added > 0) changes.push(`+${added}`);
-            if (removed > 0) changes.push(`-${removed}`);
-            message += ` (${changes.join(', ')})`;
-          }
-          showSnackbar({ message, timeout: 4000, closable: true });
+          // No snackbar for success to reduce noise
         } else if (discrepancy > 0) {
           // Gmail has more - might need to fetch more
-          message = `⚠️ Synced ${postCount}/${gmailTotal} emails (${discrepancy} missing)`;
-          showSnackbar({ 
-            message, 
-            timeout: 8000, 
-            closable: true,
-            actions: {
-              'View Diagnostics': () => { location.href = '/diagnostics'; }
-            }
-          });
+          // Redundant message removed - we already show a actionable snackbar in inbox/+page.svelte
+          console.log(`[TopAppBar] Sync discrepancy: ${discrepancy} missing locally`);
         } else {
           // Local has more than Gmail - stale threads not removed
-          message = `⚠️ Local has ${postCount} emails but Gmail has ${gmailTotal}`;
-          console.warn(`[TopAppBar] Sync issue: Local has ${Math.abs(discrepancy)} more threads than Gmail`);
-          showSnackbar({ 
-            message, 
-            timeout: 8000, 
-            closable: true,
-            actions: {
-              'Force Resync': () => { 
-                // Clear database and resync
-                (async () => {
-                  try {
-                    showSnackbar({ message: 'Clearing local data and resyncing...', timeout: null });
-                    const { getDB } = await import('$lib/db/indexeddb');
-                    const db = await getDB();
-                    // Clear threads table
-                    const tx = db.transaction('threads', 'readwrite');
-                    await tx.store.clear();
-                    await tx.done;
-                    // Trigger fresh sync
-                    await doComprehensiveRefresh();
-                  } catch (err) {
-                    showSnackbar({ message: 'Force resync failed', timeout: 3000 });
-                  }
-                })();
-              },
-              'Diagnostics': () => { location.href = '/diagnostics'; }
-            }
-          });
+          // Redundant message removed - we already show a actionable snackbar in inbox/+page.svelte
+          console.log(`[TopAppBar] Sync discrepancy: Local has ${Math.abs(discrepancy)} more threads`);
         }
       } catch (e) {
         console.warn('[TopAppBar] Could not get post-sync counts:', e);
-        showSnackbar({ message: 'Inbox synced successfully', timeout: 2500 });
       }
       
       // Step 9: Dispatch global refresh event for other components

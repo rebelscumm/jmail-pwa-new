@@ -1388,19 +1388,8 @@
                                errorMessage.includes('objectStore');
     
     if (isTransientDBError) {
-      // Show as a dismissible snackbar - these errors often self-resolve
-      showSnackbar({
-        message: 'Database sync issue detected (may self-resolve)',
-        timeout: 5000,
-        closable: true,
-        actions: {
-          'Details': () => {
-            console.error('[Inbox] IndexedDB error details:', e);
-          }
-        }
-      });
-      // Still log to console for debugging
-      console.warn('[Inbox] Transient IndexedDB error (shown as snackbar):', e);
+      // Log to console but don't show snackbar for transient errors as they usually self-resolve
+      console.warn('[Inbox] Transient IndexedDB error (suppressed snackbar):', e);
       return;
     }
     
@@ -1633,7 +1622,11 @@
           
           const fetched = await mapWithConcurrency(batch, 4, async (tid) => {
             try {
-              const result = await getThreadSummary(tid);
+              // Add 10s timeout to individual thread fetches to prevent hanging
+              const result = await Promise.race([
+                getThreadSummary(tid),
+                new Promise<never>((_, rej) => setTimeout(() => rej(new Error('fetch_timeout')), 10000))
+              ]);
               return result;
             } catch (e) {
               console.error(`[AuthSync] Failed to fetch thread ${tid}:`, e);
