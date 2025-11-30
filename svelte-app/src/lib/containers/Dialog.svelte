@@ -35,8 +35,15 @@
   let __overlayHandle: { token: string; marker: string; close: () => void } | null = $state(null);
   $effect(() => {
     if (!dialog) return;
-    if (open) dialog.showModal();
-    else dialog.close();
+    try {
+      if (open) {
+        if (!dialog.open) dialog.showModal();
+      } else {
+        if (dialog.open) dialog.close();
+      }
+    } catch (e) {
+      console.error('[Dialog] toggle failed:', e);
+    }
   });
 
   // Use centralized overlay history helper to avoid accidental navigation when

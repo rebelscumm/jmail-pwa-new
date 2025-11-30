@@ -1,6 +1,6 @@
 {
   "name": "m3-svelte",
-  "version": "5.1.2",
+  "version": "5.1.3",
   "engines": {
     "node": ">=20.19.0"
   },

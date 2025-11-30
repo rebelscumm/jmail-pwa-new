@@ -92,7 +92,7 @@ export async function queueThreadModify(threadId: string, addLabelIds: string[],
   
   // Calculate optimistic counter adjustments BEFORE updating local state
   // This ensures accurate delta calculation based on the original labels
-  if (options?.optimisticLocal !== false) {
+  if (options?.optimisticLocal === false) {
     try {
       const currentLabels = new Set(thread.labelIds || []);
       const wasInInbox = currentLabels.has('INBOX');
@@ -117,6 +117,12 @@ export async function queueThreadModify(threadId: string, addLabelIds: string[],
     } catch (e) {
       console.warn('[queueThreadModify] Failed to adjust optimistic counters:', e);
     }
+  } else {
+    // If optimisticLocal is true (default), updateLocalThreadAndMessages will update the store immediately.
+    // We used to calculate adjustments here too, but that resulted in double-counting because
+    // the store update changes baseInboxCount AND we were adding inboxDelta.
+    // Since updateLocalThreadAndMessages is fast enough (updates store before DB or concurrently),
+    // we rely on the store update for the immediate UI feedback.
   }
   
   // When optimisticLocal is true (default), update local store immediately

@@ -1313,7 +1313,7 @@ import { precomputeStatus } from '$lib/stores/precompute';
   // Apply optimistic adjustments on top of base counts (held threads are handled by trailing holds visual)
   const inboxCount = $derived(() => {
     try {
-      return baseInboxCount() + heldThreads().length;
+      return baseInboxCount();
     } catch {
       return 0;
     }
@@ -1328,7 +1328,7 @@ import { precomputeStatus } from '$lib/stores/precompute';
   const optimisticInboxCount = $derived(() => {
     try {
       const counters = $optimisticCounters || { inboxDelta: 0, unreadDelta: 0, timestamp: 0 };
-      return Math.max(0, baseInboxCount() + counters.inboxDelta + heldThreads().length);
+      return Math.max(0, baseInboxCount() + counters.inboxDelta);
     } catch {
       return 0;
     }
