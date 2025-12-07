@@ -18,27 +18,44 @@ export const faviconPalette = [
  */
 export const deriveFaviconSeed = (palette: number[] = faviconPalette) => {
   const vivid = palette.filter((c) => typeof c === "number" && c > 0);
-  if (!vivid.length) return Hct.fromInt(0xea4335).toInt();
+  // Default to Gmail red if anything looks off.
+  const base = vivid.find((c) => c === 0xea4335) ?? vivid[1] ?? vivid[0] ?? 0xea4335;
 
-  const harmonized = vivid.reduce((acc, color, idx) => {
-    if (idx === 0) return color;
-    // Pull each brand hue toward the base to keep the resulting scheme cohesive.
-    return Blend.harmonize(acc, color);
-  }, vivid[0]);
-
-  const hct = Hct.fromInt(harmonized);
+  // Keep the Gmail hue exact, but ensure chroma stays lively so accents don't wash out.
+  const hct = Hct.fromInt(base);
   const tone = 55; // Comfortable mid-tone for surfaces and accents
-  const chroma = Math.max(hct.chroma, 56); // Ensure enough saturation to avoid a muddy palette
+  const chroma = Math.max(hct.chroma, 60);
 
   return Hct.from(hct.hue, chroma, tone).toInt();
 };
 
 const seed = deriveFaviconSeed();
 const contrast = 0; // Keep default contrast
-const initialVariant = Variant.CONTENT;
+const initialVariant = Variant.TONAL_SPOT;
 const light = new (SchemeTonalSpot as any)(Hct.fromInt(seed), false, contrast, initialVariant);
 const dark = new (SchemeTonalSpot as any)(Hct.fromInt(seed), true, contrast, initialVariant);
 
-const css = genCSS(light, dark);
+// Keep Gmail-like paper surfaces: crisp white background and gentle greys for containers.
+const lightSurfaceOverrides = `
+@media (prefers-color-scheme: light) {
+  :root, ::backdrop {
+    --m3-scheme-background: 255 255 255;
+    --m3-scheme-surface: 255 255 255;
+    --m3-scheme-surface-container-lowest: 255 255 255;
+    --m3-scheme-surface-container-low: 252 252 252;
+    --m3-scheme-surface-container: 247 247 247;
+    --m3-scheme-surface-container-high: 244 244 244;
+    --m3-scheme-surface-container-highest: 240 240 240;
+    --m3-scheme-surface-variant: 241 243 244;
+    --m3-scheme-on-background: 32 33 36;
+    --m3-scheme-on-surface: 32 33 36;
+    --m3-scheme-outline: 218 220 224;
+    --m3-scheme-outline-variant: 232 234 237;
+  }
+}
+`;
+
+const css = `${genCSS(light, dark)}
+${lightSurfaceOverrides}`;
 
 export const styling = writable(css);

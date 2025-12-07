@@ -8,7 +8,7 @@
 
   const defaultSeed = deriveFaviconSeed();
   let sourceColor = $state(defaultSeed);
-  let variant = $state<Variant>(Variant.CONTENT);
+  let variant = $state<Variant>(Variant.TONAL_SPOT);
   let contrast = $state(0);
 
   let schemes: Record<Variant, { light: any; dark: any }> = $state({} as any);
