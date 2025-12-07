@@ -1,14 +1,14 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
   import { Hct, SchemeTonalSpot, Variant, hexFromArgb } from '@ktibow/material-color-utilities-nightly';
   import { genCSS } from '$lib/misc/utils';
-  import { styling } from '../themeStore';
+  import { deriveFaviconSeed, styling } from '../themeStore';
   import ColorChooser from './ColorChooser.svelte';
   import TransformChooser from './TransformChooser.svelte';
   import SchemeShowcase from './SchemeShowcase.svelte';
 
-  let sourceColor = $state(Hct.fromInt(0x1a73e8).toInt());
-  let variant = $state<Variant>(Variant.VIBRANT);
+  const defaultSeed = deriveFaviconSeed();
+  let sourceColor = $state(defaultSeed);
+  let variant = $state<Variant>(Variant.CONTENT);
   let contrast = $state(0);
 
   let schemes: Record<Variant, { light: any; dark: any }> = $state({} as any);
