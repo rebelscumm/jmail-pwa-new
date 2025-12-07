@@ -468,6 +468,17 @@
                   }
                 }
                 
+                // SNOOZE RULE: If a thread has a snooze label, it should not be in INBOX.
+                if (labels.includes('INBOX')) {
+                  const snoozeLabels = new Set(Object.values($settings.labelMapping || {}).filter(Boolean));
+                  const hasSnooze = labels.some((l: string) => snoozeLabels.has(l));
+                  if (hasSnooze) {
+                    const idx = labels.indexOf('INBOX');
+                    if (idx >= 0) labels.splice(idx, 1);
+                    console.log(`[HistorySync] Thread ${threadId}: Removed INBOX due to presence of snooze label`);
+                  }
+                }
+
                 const next = { ...existing, labelIds: labels } as any;
                 await txThreads.store.put(next);
               }
@@ -2118,6 +2129,18 @@
     const newlyArrived: Array<import('$lib/types').GmailThread> = [];
     for (const [threadId, v] of Object.entries(threadMap)) {
       const base = { threadId, messageIds: v.messageIds, lastMsgMeta: v.last, labelIds: Object.keys(v.labelIds) } as import('$lib/types').GmailThread;
+      
+      // SNOOZE RULE: If a thread has a snooze label, it should not be in INBOX.
+      // This handles cases where external clients or server-side rules add both labels.
+      if (base.labelIds && base.labelIds.includes('INBOX')) {
+        const snoozeLabels = new Set(Object.values($settings.labelMapping || {}).filter(Boolean));
+        const hasSnoozeLabel = base.labelIds.some(l => snoozeLabels.has(l));
+        if (hasSnoozeLabel) {
+           base.labelIds = base.labelIds.filter(l => l !== 'INBOX');
+           console.log(`[hydrate] Thread ${threadId}: Removed INBOX due to presence of snooze label`);
+        }
+      }
+
       try {
         const prev = await dbThreads.get('threads', threadId) as import('$lib/types').GmailThread | undefined;
         if (prev) {
