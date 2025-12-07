@@ -3,6 +3,7 @@ import { enqueueBatchModify, enqueueSendMessage, hashIntent } from '$lib/queue/o
 import type { GmailMessage, GmailThread, QueuedOp } from '$lib/types';
 import { get } from 'svelte/store';
 import { messages as messagesStore, threads as threadsStore } from '$lib/stores/threads';
+import { settings } from '$lib/stores/settings';
 
 const ACCOUNT_SUB = 'me';
 
@@ -395,6 +396,22 @@ export async function applyRemoteLabels(
   if (isLocallyInboxRemoved) {
     union.delete('INBOX');
     for (const a of locallyAddedLabels) union.add(a);
+  }
+  
+  // SNOOZE RULE: If a thread has a snooze label, it should not be in INBOX.
+  // This handles cases where external clients or server-side rules add both labels.
+  const appSettings = get(settings);
+  const snoozeLabels = new Set(Object.values(appSettings.labelMapping || {}).filter(Boolean));
+  let hasSnoozeLabel = false;
+  for (const label of union) {
+    if (snoozeLabels.has(label)) {
+      hasSnoozeLabel = true;
+      break;
+    }
+  }
+  if (hasSnoozeLabel && union.has('INBOX')) {
+    union.delete('INBOX');
+    console.log(`[applyRemoteLabels] Thread ${threadId}: Removed INBOX due to presence of snooze label`);
   }
   
   // TERMINAL LABEL RULE: Never add INBOX if TRASH or SPAM present
