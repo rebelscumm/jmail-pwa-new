@@ -39,6 +39,19 @@ const dark = new (SchemeTonalSpot as any)(Hct.fromInt(seed), true, contrast, ini
 const lightSurfaceOverrides = `
 @media (prefers-color-scheme: light) {
   :root, ::backdrop {
+    /* Gmail brand accents */
+    --m3-scheme-primary: 217 48 37; /* #d93025 */
+    --m3-scheme-on-primary: 255 255 255;
+    --m3-scheme-primary-container: 252 227 223; /* light red tint */
+    --m3-scheme-on-primary-container: 112 24 18;
+    --m3-scheme-secondary: 95 99 104; /* Gmail icon gray */
+    --m3-scheme-on-secondary: 255 255 255;
+    --m3-scheme-secondary-container: 232 234 237;
+    --m3-scheme-on-secondary-container: 60 64 67;
+    --m3-scheme-tertiary: 26 115 232; /* Google blue */
+    --m3-scheme-on-tertiary: 255 255 255;
+    --m3-scheme-tertiary-container: 234 241 251;
+    --m3-scheme-on-tertiary-container: 17 87 176;
     --m3-scheme-background: 255 255 255;
     --m3-scheme-surface: 255 255 255;
     --m3-scheme-surface-container-lowest: 255 255 255;
