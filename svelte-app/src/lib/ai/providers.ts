@@ -952,7 +952,21 @@ export function findUnsubscribeTarget(headers?: Record<string,string>, html?: st
     }
   }
   if (html) {
-    const m = html.match(/href\s*=\s*"(https?:[^"']*unsubscribe[^"']*)"/i);
+    // Look for anchor tags whose text or href imply unsubscribe / preference management
+    const anchorRegex = /<a[^>]+href\s*=\s*["']([^"']+)["'][^>]*>(.*?)<\/a>/gis;
+    let anchorMatch: RegExpExecArray | null;
+    while ((anchorMatch = anchorRegex.exec(html))) {
+      const href = anchorMatch[1] || '';
+      const text = anchorMatch[2] || '';
+      const normalizedText = text.replace(/<[^>]+>/g, ' ').toLowerCase();
+      const normalizedHref = href.toLowerCase();
+      const looksLikeUnsub = /unsubscribe|opt[-\s]?out|email preferences|manage preferences/.test(normalizedText) || normalizedHref.includes('unsubscribe');
+      if (looksLikeUnsub && /^(https?:|mailto:)/i.test(href)) {
+        return href;
+      }
+    }
+    // Fallback: loose match on unsubscribe in any href
+    const m = html.match(/href\s*=\s*["'](https?:[^"']*unsubscribe[^"']*)["']/i);
     if (m) return m[1];
   }
   return null;

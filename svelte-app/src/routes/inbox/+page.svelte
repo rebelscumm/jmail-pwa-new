@@ -23,6 +23,7 @@
   import { settings, updateAppSettings } from '$lib/stores/settings';
   import { show as showSnackbar } from '$lib/containers/snackbar';
   import { pullForwardSnoozedEmails } from '$lib/snooze/pull-forward';
+  import { isSnoozeLabel, removeInboxIfSnoozed } from '$lib/snooze/cleanup';
   
   import { getLabel } from '$lib/gmail/api';
   import { trailingHolds, clearAllHolds } from '$lib/stores/holds';
@@ -470,8 +471,11 @@
                 
                 // SNOOZE RULE: If a thread has a snooze label, it should not be in INBOX.
                 if (labels.includes('INBOX')) {
-                  const snoozeLabels = new Set(Object.values($settings.labelMapping || {}).filter(Boolean));
-                  const hasSnooze = labels.some((l: string) => snoozeLabels.has(l));
+                  const mapping = $settings.labelMapping || {};
+                  // Use store value directly
+                  const allLabels = $labelsStore || [];
+                  const hasSnooze = labels.some((l: string) => isSnoozeLabel(l, mapping, allLabels));
+                  
                   if (hasSnooze) {
                     const idx = labels.indexOf('INBOX');
                     if (idx >= 0) labels.splice(idx, 1);
@@ -503,12 +507,20 @@
   const inboxThreads = $derived.by(() => {
     try {
       const store = $threadsStore;
+      // React to mapping/labels changes so we can filter snoozed threads
+      const mapping = $settings.labelMapping || {};
+      const allLabels = $labelsStore || [];
+
       if (!store || !Array.isArray(store)) return [];
       return store.filter((t) => {
         // Guard against undefined/partial entries
         if (!t || typeof (t as any).threadId !== 'string') return false;
         const labels = Array.isArray((t as any).labelIds) ? ((t as any).labelIds as string[]) : [];
-        const inInbox = labels.includes('INBOX');
+        
+        // Exclude threads that have a snooze label, even if they have INBOX
+        const isSnoozed = labels.some(id => isSnoozeLabel(id, mapping, allLabels));
+        const inInbox = labels.includes('INBOX') && !isSnoozed;
+        
         const held = (($trailingHolds || {})[(t as any).threadId] || 0) > now;
         return inInbox || held;
       });
@@ -2133,8 +2145,9 @@
       // SNOOZE RULE: If a thread has a snooze label, it should not be in INBOX.
       // This handles cases where external clients or server-side rules add both labels.
       if (base.labelIds && base.labelIds.includes('INBOX')) {
-        const snoozeLabels = new Set(Object.values($settings.labelMapping || {}).filter(Boolean));
-        const hasSnoozeLabel = base.labelIds.some(l => snoozeLabels.has(l));
+        const mapping = $settings.labelMapping || {};
+        const allLabels = get(labelsStore);
+        const hasSnoozeLabel = base.labelIds.some(l => isSnoozeLabel(l, mapping, allLabels));
         if (hasSnoozeLabel) {
            base.labelIds = base.labelIds.filter(l => l !== 'INBOX');
            console.log(`[hydrate] Thread ${threadId}: Removed INBOX due to presence of snooze label`);
