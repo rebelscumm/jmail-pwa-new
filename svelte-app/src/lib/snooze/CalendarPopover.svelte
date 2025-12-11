@@ -7,11 +7,12 @@
   import MenuItem from '$lib/containers/MenuItem.svelte';
   import DatePickerDocked from '$lib/forms/DatePickerDocked.svelte';
 
-  const { onSelect } = $props<{ onSelect: (ruleKey: string) => void }>();
+  const { onSelect, active = false } = $props<{ onSelect: (ruleKey: string) => void, active?: boolean }>();
 
   let activeTab = $state<'Quick' | 'Hours' | 'Days' | 'Weekdays' | 'Times' | 'Custom'>('Quick');
   let preview = $state<string>('');
   let selectedRule = $state<string | null>(null);
+  let el: HTMLElement | null = null;
 
   function computePreview(ruleKey: string) {
     selectedRule = ruleKey;
@@ -41,8 +42,40 @@
   };
   const orderedLabels: string[] = ['1h','2h','3h','2p','6a','7p','2d','4d','Mon','Fri','7d','14d','30d'];
   const mapped = $derived(new Set(Object.keys($settings.labelMapping || {}).filter((k) => $settings.labelMapping[k]).map((k) => normalizeRuleKey(k))));
+  
   function isMappedDisplay(label: string): boolean {
     try { return mapped.has(normalizeRuleKey(displayToRule[label])); } catch { return false; }
+  }
+
+  // Compute visible labels and their shortcuts
+  const visibleLabelsWithShortcuts = $derived.by(() => {
+    const visible = orderedLabels.filter(isMappedDisplay);
+    return visible.map((label, index) => {
+      let key = '';
+      if (index < 9) {
+        key = (index + 1).toString();
+      } else if (index === 9) {
+        key = '0';
+      }
+      // We could add letters for more than 10 items if needed, but 1-0 covers most cases.
+      return { label, rule: displayToRule[label], key };
+    });
+  });
+
+  function handleKeydown(e: KeyboardEvent) {
+    if (!active) return;
+    // Check if element is visible
+    if (el && el.offsetParent === null) return;
+    // Don't trigger if user is typing in an input
+    if (e.target && (e.target as HTMLElement).tagName === 'INPUT') return;
+    
+    // Check for number keys
+    const match = visibleLabelsWithShortcuts.find(item => item.key === e.key);
+    if (match) {
+      e.preventDefault();
+      e.stopPropagation();
+      pick(match.rule);
+    }
   }
 
   function daysFromToday(dateStr: string): number {
@@ -69,13 +102,20 @@
   }
 </script>
 
-<div class="panel" role="menu" aria-label="Snooze options">
+<svelte:window onkeydown={handleKeydown} />
+
+<div class="panel" role="menu" aria-label="Snooze options" bind:this={el}>
   <div class="tabs" role="group" aria-label="Snooze presets">
     <div class="grid" role="group" aria-label="Snooze presets">
-      {#each orderedLabels as label}
-        {#if isMappedDisplay(label)}
-          <Chip variant="assist" onclick={(e: Event) => pick(displayToRule[label], e)} aria-label={`Snooze ${label}`}>{label}</Chip>
-        {/if}
+      {#each visibleLabelsWithShortcuts as { label, rule, key }}
+        <Chip variant="assist" onclick={(e: Event) => pick(rule, e)} aria-label={`Snooze ${label} (Shortcut: ${key})`}>
+          <span class="chip-content">
+            {label}
+            {#if active && key}
+              <span class="shortcut-key" aria-hidden="true">{key}</span>
+            {/if}
+          </span>
+        </Chip>
       {/each}
     </div>
   </div>
@@ -103,9 +143,31 @@
   .picker { display:flex; align-items:center; justify-content:center; padding: 0.25rem 0.25rem; position: relative; z-index: 10002; border: 0; pointer-events: auto; }
   /* Grid contains MD3 assist chips */
   .preview { font-size:0.875rem; color: rgb(var(--m3-scheme-on-surface-variant)); }
+  
+  .chip-content {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  
+  .shortcut-key {
+    font-size: 0.75rem;
+    color: rgb(var(--m3-scheme-primary));
+    background-color: rgb(var(--m3-scheme-primary-container));
+    color: rgb(var(--m3-scheme-on-primary-container));
+    border-radius: 4px;
+    padding: 0 4px;
+    font-weight: 500;
+    min-width: 1.2ch;
+    text-align: center;
+    line-height: 1.4;
+  }
+
   @media (max-width: 480px) {
     .panel { min-width: min(100vw - 1rem, 21rem); }
+    /* Hide shortcuts on mobile/touch if preferred, though prompts says "when... pressed on a desktop". 
+       Since we don't have reliable device detection, checking active prop (controlled by open state) is good enough.
+       Shortcuts can be visible on mobile too, they just won't be usable without a keyboard.
+    */
   }
 </style>
-
-

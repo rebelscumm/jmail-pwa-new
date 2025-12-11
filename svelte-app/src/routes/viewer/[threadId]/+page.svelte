@@ -1166,22 +1166,8 @@ import BottomSheet from "$lib/containers/BottomSheet.svelte";
     const link = `https://mail.google.com/mail/u/0/#inbox/${m.threadId}`;
     const subject = aiSubjectSummary || m.headers?.Subject || 'Email';
     const line = `[${subject}](${link})`;
-    try {
-      // Desktop: copy; user can paste into their task file
-      await navigator.clipboard.writeText(line);
-      // Verify clipboard actually contains the line; if read is blocked or mismatch, fallback to showing the text
-      try {
-        const readBack = await navigator.clipboard.readText();
-        if (readBack === line) {
-          showSnackbar({ message: 'Task line copied to clipboard.', closable: true });
-        } else {
-          showSnackbar({ message: line, closable: true });
-        }
-      } catch (_) {
-        // If we cannot read the clipboard (permission), show the line for manual copy
-        showSnackbar({ message: line, closable: true });
-      }
-    } catch { showSnackbar({ message: line, closable: true }); }
+    const url = `http://tasksmd.com/?open=task&text=${encodeURIComponent(line)}&priority=high`;
+    window.open(url, '_blank');
   }
   async function loadForEdit(filter: ThreadFilter) {
     // This function is not yet implemented in FilterBar, so surface via snackbar for now
@@ -1464,6 +1450,12 @@ onMount(() => {
           <Icon icon={iconReportSpam} />
           Spam
         </Button>
+        {#if currentThread.messageIds?.length}
+          <Button variant="outlined" onclick={() => createTask(currentThread.messageIds[currentThread.messageIds.length-1])} aria-label="Create Task">
+            <Icon icon={iconTask} />
+            Create Task
+          </Button>
+        {/if}
       </div>
 
       <!-- Snooze Actions Group -->
@@ -1499,7 +1491,7 @@ onMount(() => {
               </summary>
               <div class="snooze-menu-content">
                 <Menu>
-                  <CalendarPopover onSelect={onSnoozeSelect} />
+                  <CalendarPopover active={snoozeMenuOpen} onSelect={onSnoozeSelect} />
                 </Menu>
               </div>
             </details>
@@ -1561,10 +1553,6 @@ onMount(() => {
                 }}>
                   <Icon icon={iconCopy} />
                   Copy Email Source
-                </MenuItem>
-                <MenuItem onclick={() => createTask(mid)}>
-                  <Icon icon={iconTask} />
-                  Create Task
                 </MenuItem>
               {/if}
               <MenuItem onclick={() => { filterPopupOpen = true; }}>
@@ -1926,6 +1914,12 @@ onMount(() => {
           <Icon icon={iconReportSpam} />
           Spam
         </Button>
+        {#if currentThread.messageIds?.length}
+          <Button variant="outlined" onclick={() => createTask(currentThread.messageIds[currentThread.messageIds.length-1])} aria-label="Create Task">
+            <Icon icon={iconTask} />
+            Create Task
+          </Button>
+        {/if}
       </div>
 
       <!-- Snooze Actions Group -->
@@ -1961,7 +1955,7 @@ onMount(() => {
               </summary>
               <div class="snooze-menu-content">
                 <Menu>
-                  <CalendarPopover onSelect={onSnoozeSelect} />
+                  <CalendarPopover active={snoozeMenuOpen} onSelect={onSnoozeSelect} />
                 </Menu>
               </div>
             </details>
@@ -2023,10 +2017,6 @@ onMount(() => {
                 }}>
                   <Icon icon={iconCopy} />
                   Copy Email Source
-                </MenuItem>
-                <MenuItem onclick={() => createTask(mid)}>
-                  <Icon icon={iconTask} />
-                  Create Task
                 </MenuItem>
               {/if}
               <MenuItem onclick={() => { filterPopupOpen = true; }}>

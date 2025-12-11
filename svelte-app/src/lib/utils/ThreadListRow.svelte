@@ -725,24 +725,8 @@
     const link = `https://mail.google.com/mail/u/0/#inbox/${thread.threadId}`;
     const subject = threadDisplaySubject;
     const line = `[${subject}](${link})`;
-    try {
-      // Desktop: copy; user can paste into their task file
-      await navigator.clipboard.writeText(line);
-      // Verify clipboard actually contains the line; if read is blocked or mismatch, fallback to showing the text
-      try {
-        const readBack = await navigator.clipboard.readText();
-        if (readBack === line) {
-          showSnackbar({ message: 'Task line copied to clipboard.', closable: true });
-        } else {
-          showSnackbar({ message: line, closable: true });
-        }
-      } catch (_) {
-        // If we cannot read the clipboard (permission), show the line for manual copy
-        showSnackbar({ message: line, closable: true });
-      }
-    } catch {
-      showSnackbar({ message: line, closable: true });
-    }
+    const url = `http://tasksmd.com/?open=task&text=${encodeURIComponent(line)}&priority=high`;
+    window.open(url, '_blank');
   }
 
   async function explainAiMissing(e: Event): Promise<void> {
@@ -1325,7 +1309,7 @@
           <div class="snooze-menu" onpointerdown={(e: PointerEvent) => { e.preventDefault(); e.stopPropagation(); }} ontouchstart={(e: TouchEvent) => { e.preventDefault(); e.stopPropagation(); }}>
             <Menu>
               {#if mappedKeys.length > 0}
-                <CalendarPopover onSelect={(rk) => { 
+                <CalendarPopover active={snoozeMenuOpen} onSelect={(rk) => { 
                   lastSelectedSnoozeRuleKey.set(normalizeRuleKey(rk)); 
                   // Set flag immediately to prevent any navigation
                   isSnoozing = true;
