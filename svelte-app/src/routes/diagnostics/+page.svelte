@@ -14,6 +14,8 @@ import Icon from '$lib/misc/_icon.svelte';
 import { show as showSnackbar } from '$lib/containers/snackbar';
 import { checkForUpdateOnce } from '$lib/update/checker';
 import { aiSummarizeEmail, aiSummarizeSubject } from '$lib/ai/providers';
+import { pullForwardSnoozedEmails } from '$lib/snooze/pull-forward';
+import { getAndClearGmailDiagnostics } from '$lib/gmail/api';
 
 type LogEntry = { level: 'log' | 'warn' | 'error' | 'info'; msg: any[]; ts: string };
 
@@ -2370,6 +2372,65 @@ async function testAiSummary() {
 	}
 }
 
+// Pull Forward diagnostics state
+let testingPullForward = false;
+let pullForwardResult: any = null;
+
+async function testPullForward() {
+	testingPullForward = true;
+	pullForwardResult = null;
+	try {
+		addLog('info', ['Testing Pull Forward emails...']);
+		showSnackbar({ message: 'Testing Pull Forward...', timeout: 3000, closable: true });
+		
+		// Clear previous diagnostics to capture only relevant ones
+		getAndClearGmailDiagnostics();
+		
+		const result = await pullForwardSnoozedEmails(5); // Try to pull 5 emails
+		
+		const diagEntries = getAndClearGmailDiagnostics();
+		
+		pullForwardResult = {
+			timestamp: new Date().toISOString(),
+			result,
+			diagnostics: diagEntries,
+			success: result.success
+		};
+		
+		addLog('info', ['Pull Forward test completed', pullForwardResult]);
+		
+		if (result.success) {
+			showSnackbar({
+				message: `Pull Forward success: ${result.pulledCount} emails pulled.`,
+				timeout: 5000,
+				closable: true
+			});
+		} else {
+			showSnackbar({
+				message: `Pull Forward failed: ${result.error}`,
+				timeout: 8000,
+				closable: true
+			});
+		}
+		
+	} catch (e) {
+		pullForwardResult = {
+			timestamp: new Date().toISOString(),
+			error: e instanceof Error ? e.message : String(e),
+			success: false,
+			diagnostics: getAndClearGmailDiagnostics()
+		};
+		addLog('error', ['Pull Forward test failed', e]);
+		showSnackbar({
+			message: 'Pull Forward test failed',
+			timeout: 5000,
+			closable: true
+		});
+	} finally {
+		testingPullForward = false;
+	}
+}
+
 async function diagnoseSyncFailure() {
 	try {
 		addLog('info', ['Starting detailed sync failure analysis...']);
@@ -4114,6 +4175,62 @@ ${window.location.origin}/api/google-callback`;
 					<div style="color: rgb(var(--m3-scheme-error)); background: rgb(var(--m3-scheme-error-container) / 0.1); padding: 1rem; border-radius: var(--m3-util-rounding-small); margin-top: 1rem;">
 						<strong>Test Failed:</strong> {aiSummaryTestResult.error}
 					</div>
+				{/if}
+			</div>
+		{/if}
+	</Card>
+
+	<Card variant="filled">
+		<div class="section-header">
+			<div class="section-title">
+				<h2>Pull Forward Diagnostics</h2>
+			</div>
+			<Button variant="text" iconType="left" class="copy-button" onclick={() => copySection('Pull Forward Diagnostics', pullForwardResult)}>
+				<Icon icon={iconCopy} />
+				Copy Section
+			</Button>
+		</div>
+		<p style="color: rgb(var(--m3-scheme-on-surface-variant)); margin-bottom: 1rem;">
+			Test pulling forward snoozed emails. This runs the actual pull forward logic and captures detailed diagnostics about label matching and potential errors.
+		</p>
+		
+		<div class="controls">
+			<Button variant="filled" onclick={testPullForward} disabled={testingPullForward}>
+				<Icon icon={iconPlayArrow} />
+				{testingPullForward ? 'Pulling Forward...' : 'Test Pull Forward (Fetch 5)'}
+			</Button>
+		</div>
+		
+		{#if pullForwardResult}
+			<div class="summary">
+				<strong>Pull Forward Results</strong>
+				{#if pullForwardResult.success}
+					<div style="margin-top: 1rem;">
+						<div style="background: rgb(var(--m3-scheme-tertiary-container)); padding: 1rem; border-radius: var(--m3-util-rounding-small); margin-bottom: 1rem;">
+							<strong style="color: rgb(var(--m3-scheme-on-tertiary-container));">
+								✓ Success: Pulled {pullForwardResult.result.pulledCount} emails
+							</strong>
+						</div>
+						
+						<details open style="background: rgb(var(--m3-scheme-surface-container)); border-radius: var(--m3-util-rounding-small); margin-top: 1rem;">
+							<summary style="cursor: pointer; padding: 1rem; color: rgb(var(--m3-scheme-primary)); font-weight: 500;">Diagnostic Logs</summary>
+							<div style="padding: 0 1rem 1rem;">
+								<pre class="diag" style="margin: 0;">{JSON.stringify(pullForwardResult.diagnostics, null, 2)}</pre>
+							</div>
+						</details>
+					</div>
+				{:else}
+					<div style="color: rgb(var(--m3-scheme-error)); background: rgb(var(--m3-scheme-error-container) / 0.1); padding: 1rem; border-radius: var(--m3-util-rounding-small); margin-top: 1rem;">
+						<strong>Test Failed:</strong> {pullForwardResult.error}
+					</div>
+					{#if pullForwardResult.diagnostics}
+						<details open style="background: rgb(var(--m3-scheme-surface-container)); border-radius: var(--m3-util-rounding-small); margin-top: 1rem;">
+							<summary style="cursor: pointer; padding: 1rem; color: rgb(var(--m3-scheme-primary)); font-weight: 500;">Diagnostic Logs</summary>
+							<div style="padding: 0 1rem 1rem;">
+								<pre class="diag" style="margin: 0;">{JSON.stringify(pullForwardResult.diagnostics, null, 2)}</pre>
+							</div>
+						</details>
+					{/if}
 				{/if}
 			</div>
 		{/if}

@@ -1288,6 +1288,9 @@ function onKeyDown(e: KeyboardEvent) {
   
   // Skip other handlers if attachment dialog is open
   if (attDialogOpen) return;
+  // If snooze menu is open, let its internal handlers manage keys (shortcuts)
+  if (snoozeMenuOpen) return;
+  
   const ct = currentThread;
   if (!ct) return;
   // b: open snooze menu

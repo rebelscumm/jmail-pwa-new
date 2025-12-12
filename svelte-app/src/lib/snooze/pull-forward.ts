@@ -3,6 +3,7 @@ import { settings } from '$lib/stores/settings';
 import { labels as labelsStore } from '$lib/stores/labels';
 import { listThreadIdsByLabelId, getThreadSummary, batchModify } from '$lib/gmail/api';
 import { resolveRule, normalizeRuleKey } from '$lib/snooze/rules';
+import { pushGmailDiag } from '$lib/gmail/diag';
 import type { GmailThread } from '$lib/types';
 
 interface SnoozeCandidate {
@@ -29,6 +30,13 @@ export async function findSnoozedThreads(maxCount: number): Promise<SnoozeCandid
   const labels = get(labelsStore);
   const labelMapping = s.labelMapping || {};
   
+  pushGmailDiag({
+    type: 'snooze_scan',
+    action: 'findSnoozedThreads',
+    labelMappingKeys: Object.keys(labelMapping),
+    labelsCount: labels.length
+  });
+
   const candidates: SnoozeCandidate[] = [];
   
   // Go through each mapped snooze label
@@ -37,7 +45,10 @@ export async function findSnoozedThreads(maxCount: number): Promise<SnoozeCandid
     
     // Find the label in our labels list to ensure it exists
     const label = labels.find(l => l.id === labelId);
-    if (!label) continue;
+    if (!label) {
+      pushGmailDiag({ type: 'snooze_scan_skip', reason: 'label_not_found', ruleKey, labelId });
+      continue;
+    }
     
     // Skip persistent snooze buckets (Desktop, long-term)
     const normalizedRule = normalizeRuleKey(ruleKey);
@@ -45,12 +56,19 @@ export async function findSnoozedThreads(maxCount: number): Promise<SnoozeCandid
     
     // Get the snooze time for this rule
     const snoozeTime = getSnoozeTime(normalizedRule);
-    if (!snoozeTime) continue;
+    if (!snoozeTime) {
+      pushGmailDiag({ type: 'snooze_scan_skip', reason: 'no_snooze_time', ruleKey, normalizedRule });
+      continue;
+    }
     
     try {
       // Get threads with this label (limiting to a reasonable number per label)
       const { ids } = await listThreadIdsByLabelId(labelId, 10);
       
+      if (ids.length > 0) {
+        pushGmailDiag({ type: 'snooze_scan_found', ruleKey, labelId, count: ids.length });
+      }
+
       // Get thread summaries for each
       for (const threadId of ids) {
         try {
@@ -63,11 +81,13 @@ export async function findSnoozedThreads(maxCount: number): Promise<SnoozeCandid
           });
         } catch (e) {
           console.warn(`Failed to get thread summary for ${threadId}:`, e);
+          pushGmailDiag({ type: 'snooze_scan_error', threadId, error: e instanceof Error ? e.message : String(e) });
           continue;
         }
       }
     } catch (e) {
       console.warn(`Failed to get threads for label ${labelId} (${ruleKey}):`, e);
+      pushGmailDiag({ type: 'snooze_scan_label_error', labelId, ruleKey, error: e instanceof Error ? e.message : String(e) });
       continue;
     }
   }
@@ -85,10 +105,13 @@ export async function pullForwardSnoozedEmails(count?: number): Promise<{ succes
     const s = get(settings);
     const pullCount = count || s.pullForwardCount || 3;
     
+    pushGmailDiag({ type: 'pull_forward_start', count: pullCount });
+
     // Find the snoozed threads with the most proximate snooze times
     const candidates = await findSnoozedThreads(pullCount);
     
     if (candidates.length === 0) {
+      pushGmailDiag({ type: 'pull_forward_result', count: 0, reason: 'no_candidates' });
       return { success: true, pulledCount: 0 };
     }
     
@@ -107,17 +130,22 @@ export async function pullForwardSnoozedEmails(count?: number): Promise<{ succes
       }
     }
     
+    pushGmailDiag({ type: 'pull_forward_modifying', threadIds, removeLabels: Array.from(allLabelsToRemove) });
+
     // Use batch modify to move threads back to inbox with clean labels
     // Add INBOX and remove all other labels (except core system labels)
     await batchModify(threadIds, ['INBOX'], Array.from(allLabelsToRemove));
     
+    pushGmailDiag({ type: 'pull_forward_success', count: candidates.length });
     return { success: true, pulledCount: candidates.length };
   } catch (error) {
     console.error('Failed to pull forward snoozed emails:', error);
+    const msg = error instanceof Error ? error.message : 'Unknown error';
+    pushGmailDiag({ type: 'pull_forward_error', error: msg, stack: error instanceof Error ? error.stack : undefined });
     return { 
       success: false, 
       pulledCount: 0, 
-      error: error instanceof Error ? error.message : 'Unknown error'
+      error: msg
     };
   }
 }

@@ -75,6 +75,13 @@
       return;
     }
 
+    // If any interactive menu/popover (details element) is open, let it handle the event.
+    // This ensures specific menu shortcuts (like snooze options) take precedence over global list shortcuts.
+    // We check for 'details.menu-toggle[open]' specifically to target our menus.
+    if (document.querySelector('details.menu-toggle[open]')) {
+      return;
+    }
+
     // Find the first visible thread that hasn't been acted upon
     const firstAvailableThread = sortedVisibleThreads.find(thread => {
       // Check if thread is in holds (meaning it's been acted upon)

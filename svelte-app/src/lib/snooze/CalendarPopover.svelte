@@ -50,14 +50,19 @@
   // Compute visible labels and their shortcuts
   const visibleLabelsWithShortcuts = $derived.by(() => {
     const visible = orderedLabels.filter(isMappedDisplay);
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
     return visible.map((label, index) => {
       let key = '';
       if (index < 9) {
         key = (index + 1).toString();
       } else if (index === 9) {
         key = '0';
+      } else {
+        const charCode = index - 10;
+        if (charCode < alphabet.length) {
+          key = alphabet[charCode];
+        }
       }
-      // We could add letters for more than 10 items if needed, but 1-0 covers most cases.
       return { label, rule: displayToRule[label], key };
     });
   });
@@ -69,8 +74,9 @@
     // Don't trigger if user is typing in an input
     if (e.target && (e.target as HTMLElement).tagName === 'INPUT') return;
     
-    // Check for number keys
-    const match = visibleLabelsWithShortcuts.find(item => item.key === e.key);
+    // Check for number keys or letters
+    const k = e.key.toUpperCase();
+    const match = visibleLabelsWithShortcuts.find(item => item.key === k);
     if (match) {
       e.preventDefault();
       e.stopPropagation();
