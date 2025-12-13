@@ -36,6 +36,30 @@ jobs:
           output_location: "build" # Built app content directory - optional
           ###### End of Repository/Build Configurations ######
 
+      - name: Notify Deployment Success
+        if: success() && github.event_name == 'push'
+        run: |
+          COMMIT_MSG=$(git log -1 --pretty=format:"%s" ${{ github.sha }})
+          COMMIT_AUTHOR=$(git log -1 --pretty=format:"%an" ${{ github.sha }})
+          COMMIT_SHORT=$(echo ${{ github.sha }} | cut -c1-7)
+          BRANCH="${{ github.ref_name }}"
+          
+          TOPIC="${NTFY_TOPIC:-jmail-pwa-deploy}"
+          
+          curl -H "Title: Jmail PWA - Deployment Successful" \
+               -H "Priority: default" \
+               -d "Deployment completed successfully!
+
+          Branch: $BRANCH
+          Commit: $COMMIT_SHORT
+          Author: $COMMIT_AUTHOR
+          Message: $COMMIT_MSG
+          
+          Ready to test!" \
+               https://ntfy.sh/$TOPIC || echo "Notification failed (optional)"
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+
       - name: Register prod/dev hostnames (optional)
         if: always()
         uses: azure/CLI@v1

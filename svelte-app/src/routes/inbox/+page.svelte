@@ -82,6 +82,13 @@
       return;
     }
 
+    if (event.key === 'r' || event.key === 'R') {
+      event.preventDefault();
+      // Trigger immediate disappearance of all slid rows
+      window.dispatchEvent(new CustomEvent('jmail:disappearNow'));
+      return;
+    }
+
     // Find the first visible thread that hasn't been acted upon
     const firstAvailableThread = sortedVisibleThreads.find(thread => {
       // Check if thread is in holds (meaning it's been acted upon)
