@@ -86,6 +86,10 @@
       event.preventDefault();
       // Trigger immediate disappearance of all slid rows
       window.dispatchEvent(new CustomEvent('jmail:disappearNow'));
+      // Wait for animation to finish then clear holds to reflow list
+      setTimeout(() => {
+        try { clearAllHolds(); } catch {}
+      }, 200);
       return;
     }
 
