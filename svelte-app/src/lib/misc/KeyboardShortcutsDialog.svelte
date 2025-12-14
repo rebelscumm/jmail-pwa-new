@@ -13,7 +13,6 @@
       <ul class="shortcuts">
         <li><span class="k">?</span><span class="v">Open this help</span></li>
         <li><span class="k">/</span><span class="v">Focus search</span></li>
-        <li><span class="k">c</span><span class="v">Compose</span></li>
         <li><span class="k">j / k</span><span class="v">Move selection down / up</span></li>
         <li><span class="k">o or Enter</span><span class="v">Open selected conversation</span></li>
         <li><span class="k">Space</span><span class="v">Open first conversation (Inbox)</span></li>

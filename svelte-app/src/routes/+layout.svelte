@@ -265,13 +265,6 @@
         try { (window as any).jmailFocusSearch?.(); } catch {}
         return;
       }
-      // 'c' compose
-      if ((e.key === 'c' || e.key === 'C') && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        if (isFromInput(e)) return;
-        e.preventDefault();
-        showCompose = true;
-        return;
-      }
     };
     window.addEventListener('keydown', onKeyDown);
     onKeyDownRef = onKeyDown;
