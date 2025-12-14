@@ -3,6 +3,7 @@ import { enqueueBatchModify, enqueueSendMessage, hashIntent } from '$lib/queue/o
 import type { GmailMessage, GmailThread, QueuedOp } from '$lib/types';
 import { get } from 'svelte/store';
 import { messages as messagesStore, threads as threadsStore } from '$lib/stores/threads';
+import { counts } from '$lib/stores/counts';
 import { settings } from '$lib/stores/settings';
 
 const ACCOUNT_SUB = 'me';
@@ -93,39 +94,43 @@ export async function queueThreadModify(threadId: string, addLabelIds: string[],
   
   // Calculate optimistic counter adjustments BEFORE updating local state
   // This ensures accurate delta calculation based on the original labels
-  if (options?.optimisticLocal === false) {
-    try {
-      const currentLabels = new Set(thread.labelIds || []);
-      const wasInInbox = currentLabels.has('INBOX');
-      const wasUnread = currentLabels.has('UNREAD');
-      
-      // Apply the pending changes to calculate new state
-      const newLabels = new Set(currentLabels);
-      for (const label of removeLabelIds) newLabels.delete(label);
-      for (const label of addLabelIds) newLabels.add(label);
-      
-      const willBeInInbox = newLabels.has('INBOX');
-      const willBeUnread = newLabels.has('UNREAD');
-      
-      const inboxDelta = (willBeInInbox ? 1 : 0) - (wasInInbox ? 1 : 0);
-      const unreadDelta = (willBeUnread ? 1 : 0) - (wasUnread ? 1 : 0);
-      
+  try {
+    const currentLabels = new Set(thread.labelIds || []);
+    const wasInInbox = currentLabels.has('INBOX');
+    const wasUnread = currentLabels.has('UNREAD');
+    
+    // Apply the pending changes to calculate new state
+    const newLabels = new Set(currentLabels);
+    for (const label of removeLabelIds) newLabels.delete(label);
+    for (const label of addLabelIds) newLabels.add(label);
+    
+    const willBeInInbox = newLabels.has('INBOX');
+    const willBeUnread = newLabels.has('UNREAD');
+    
+    const inboxDelta = (willBeInInbox ? 1 : 0) - (wasInInbox ? 1 : 0);
+    const unreadDelta = (willBeUnread ? 1 : 0) - (wasUnread ? 1 : 0);
+    
+    // Update global counts store optimistically for TopAppBar
+    if (inboxDelta !== 0 || unreadDelta !== 0) {
+      counts.update(c => ({
+        ...c,
+        inbox: Math.max(0, c.inbox + inboxDelta),
+        unread: Math.max(0, c.unread + unreadDelta),
+        lastUpdated: Date.now()
+      }));
+    }
+
+    if (options?.optimisticLocal === false) {
       // Apply optimistic counter adjustments immediately if there's a change
       if (inboxDelta !== 0 || unreadDelta !== 0) {
         const { adjustOptimisticCounters } = await import('$lib/stores/optimistic-counters');
         adjustOptimisticCounters(inboxDelta, unreadDelta);
       }
-    } catch (e) {
-      console.warn('[queueThreadModify] Failed to adjust optimistic counters:', e);
     }
-  } else {
-    // If optimisticLocal is true (default), updateLocalThreadAndMessages will update the store immediately.
-    // We used to calculate adjustments here too, but that resulted in double-counting because
-    // the store update changes baseInboxCount AND we were adding inboxDelta.
-    // Since updateLocalThreadAndMessages is fast enough (updates store before DB or concurrently),
-    // we rely on the store update for the immediate UI feedback.
+  } catch (e) {
+    console.warn('[queueThreadModify] Failed to adjust optimistic counters:', e);
   }
-  
+
   // When optimisticLocal is true (default), update local store immediately
   // This updates the base count immediately, providing instant UI feedback
   // When optimisticLocal is false (bulk operations), DON'T update local store

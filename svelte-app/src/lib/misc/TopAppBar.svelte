@@ -45,6 +45,7 @@ import { precomputeStatus } from '$lib/stores/precompute';
   import { cacheVersion as cacheVersionStore } from '$lib/utils/cacheVersion';
   import { trailingHolds } from '$lib/stores/holds';
   import { labels as labelsStore } from '$lib/stores/labels';
+  import { counts } from '$lib/stores/counts';
   import { optimisticCounters } from '$lib/stores/optimistic-counters';
   let { onSyncNow, backHref, backLabel }: { onSyncNow?: () => void; backHref?: string; backLabel?: string } = $props();
   let overflowDetails: HTMLDetailsElement;
@@ -1184,19 +1185,12 @@ import { precomputeStatus } from '$lib/stores/precompute';
   let now = $state(Date.now());
   onMount(() => { const id = setInterval(() => { now = Date.now(); }, 250); return () => clearInterval(id); });
 
-  // Optional inbox label totals fetched from Gmail (preferred authoritative counts)
-  // Note: use thread-level counts (threadsTotal/threadsUnread) to match local thread-based counters
-  let inboxMessagesTotal = $state<number | undefined>(undefined);
-  let inboxMessagesUnread = $state<number | undefined>(undefined);
-
   async function refreshLabelStats(force = false) {
     try {
       const { getLabel } = await import('$lib/gmail/api');
       const inboxLabel = await getLabel('INBOX');
       const tt = typeof inboxLabel?.threadsTotal === 'number' ? inboxLabel.threadsTotal : undefined;
       const tu = typeof inboxLabel?.threadsUnread === 'number' ? inboxLabel.threadsUnread : undefined;
-      inboxMessagesTotal = tt;
-      inboxMessagesUnread = tu;
       
       // Check if there are recent user actions or pending operations
       // If so, prefer local counts over potentially stale server counts
@@ -1239,18 +1233,21 @@ import { precomputeStatus } from '$lib/stores/precompute';
         console.log(`[TopAppBar] Force refresh - using server counts regardless of recent activity`);
       }
       
-      // Only overwrite rendered counts with server values if there's no recent activity OR force=true
-      // This prevents showing stale server counts when user just performed actions
+      // Only update global counts with server values if there's no recent activity OR force=true
+      // This prevents overwriting optimistic updates with stale server counts
       if (!hasRecentActivity || force) {
         console.log(`[TopAppBar] Using server counts${force ? ' (forced)' : ' - no recent activity'} (server: ${tt} inbox, ${tu} unread)`);
-        if (typeof tt === 'number') renderedInboxCount = tt;
-        if (typeof tu === 'number') renderedUnreadCount = tu;
+        counts.update(c => ({
+          ...c,
+          inbox: typeof tt === 'number' ? tt : c.inbox,
+          unread: typeof tu === 'number' ? tu : c.unread,
+          lastUpdated: Date.now()
+        }));
       } else {
-        console.log(`[TopAppBar] Skipping server count update - ${activityReason} (server: ${tt}, local: ${renderedInboxCount})`);
+        console.log(`[TopAppBar] Skipping server count update - ${activityReason} (server: ${tt})`);
       }
     } catch (e) {
-      inboxMessagesTotal = undefined;
-      inboxMessagesUnread = undefined;
+      console.warn('[TopAppBar] Failed to refresh label stats:', e);
     }
   }
 
@@ -1284,63 +1281,6 @@ import { precomputeStatus } from '$lib/stores/precompute';
     }
   });
   
-  const baseInboxCount = $derived(() => {
-    try {
-      const threads = $threadsStore || [];
-      return threads.filter((t) => {
-        if (!t || typeof (t as any).threadId !== 'string') return false;
-        const labels = Array.isArray((t as any).labelIds) ? ((t as any).labelIds as string[]) : [];
-        return labels.includes('INBOX');
-      }).length;
-    } catch {
-      return 0;
-    }
-  });
-  
-  const baseUnreadCount = $derived(() => {
-    try {
-      const threads = $threadsStore || [];
-      return threads.filter((t) => {
-        if (!t || typeof (t as any).threadId !== 'string') return false;
-        const labels = Array.isArray((t as any).labelIds) ? ((t as any).labelIds as string[]) : [];
-        return labels.includes('INBOX') && labels.includes('UNREAD');
-      }).length;
-    } catch {
-      return 0;
-    }
-  });
-  
-  // Apply optimistic adjustments on top of base counts (held threads are handled by trailing holds visual)
-  const inboxCount = $derived(() => {
-    try {
-      return baseInboxCount();
-    } catch {
-      return 0;
-    }
-  });
-  const unreadCount = $derived(() => {
-    try {
-      return baseUnreadCount();
-    } catch {
-      return 0;
-    }
-  });
-  const optimisticInboxCount = $derived(() => {
-    try {
-      const counters = $optimisticCounters || { inboxDelta: 0, unreadDelta: 0, timestamp: 0 };
-      return Math.max(0, baseInboxCount() + counters.inboxDelta);
-    } catch {
-      return 0;
-    }
-  });
-  const optimisticUnreadCount = $derived(() => {
-    try {
-      const counters = $optimisticCounters || { inboxDelta: 0, unreadDelta: 0, timestamp: 0 };
-      return Math.max(0, baseUnreadCount() + counters.unreadDelta);
-    } catch {
-      return 0;
-    }
-  });
   // Schedule authoritative label stat refresh when local counts change
   let _labelRefreshTimer: number | undefined;
   function scheduleLabelRefresh() {
@@ -1349,56 +1289,12 @@ import { precomputeStatus } from '$lib/stores/precompute';
     } catch {}
     _labelRefreshTimer = window.setTimeout(() => { try { refreshLabelStats(); } catch {} }, 800);
   }
-  // Schedule label refresh when optimistic counts change
-  // Don't set renderedInboxCount here - let the main effect below handle that
-  $effect(() => {
-    try { 
-      optimisticInboxCount(); // Subscribe to changes
-      optimisticUnreadCount(); // Subscribe to changes
-    } catch {}
-    scheduleLabelRefresh();
-  });
+  
   // Cleanup timer when component unmounts
   $effect(() => {
     return () => { try { if (typeof _labelRefreshTimer !== 'undefined') clearTimeout(_labelRefreshTimer); } catch {} };
   });
-  
-  // Render-safe primitive values to avoid accidentally printing function sources
-  let renderedInboxCount = $state(0);
-  let renderedUnreadCount = $state(0);
-  $effect(() => {
-    try {
-      // If the user is actively viewing the inbox route, prefer the local
-      // thread-derived counts (matches diagnostics page behavior) so numbers
-      // displayed in the topbar align with the inbox view.
-      const onInbox = typeof window !== 'undefined' && typeof window.location !== 'undefined' && String(window.location.pathname || '').startsWith('/inbox');
-      if (onInbox) {
-        // When viewing the inbox, align the topbar counts with the visible list.
-        // Use OPTIMISTIC counts that include pending operations, not just base counts
-        try { renderedInboxCount = Number(optimisticInboxCount() || 0); } catch { renderedInboxCount = 0; }
-        try { renderedUnreadCount = Number(optimisticUnreadCount() || 0); } catch { renderedUnreadCount = 0; }
-        console.log(`[TopAppBar] Inbox route - using optimistic counts: ${renderedInboxCount} inbox, ${renderedUnreadCount} unread`);
-        return;
-      }
 
-      // Otherwise prefer authoritative label stats when available, falling
-      // back to optimistic counters.
-      if (typeof inboxMessagesTotal === 'number') {
-        renderedInboxCount = inboxMessagesTotal;
-      } else {
-        try { renderedInboxCount = Number(optimisticInboxCount() || 0); } catch { renderedInboxCount = 0; }
-      }
-
-      if (typeof inboxMessagesUnread === 'number') {
-        renderedUnreadCount = inboxMessagesUnread;
-      } else {
-        try { renderedUnreadCount = Number(optimisticUnreadCount() || 0); } catch { renderedUnreadCount = 0; }
-      }
-    } catch {
-      renderedInboxCount = 0;
-      renderedUnreadCount = 0;
-    }
-  });
 </script>
 
 <div class="topbar">
@@ -1408,16 +1304,16 @@ import { precomputeStatus } from '$lib/stores/precompute';
         <Icon icon={iconBack} />
       </Button>
     {/if}
-    {#if !backHref && (renderedInboxCount > 0 || renderedUnreadCount > 0)}
+    {#if !backHref && ($counts.inbox > 0 || $counts.unread > 0)}
       <div class="counters">
         <span class="counter-badge" title="Total inbox threads">
           <Icon icon={iconInbox} width="1.125rem" height="1.125rem" />
-          {renderedInboxCount}
+          {$counts.inbox}
         </span>
-        {#if renderedUnreadCount > 0}
+        {#if $counts.unread > 0}
           <span class="counter-badge unread" title="Unread threads">
             <Icon icon={iconMarkEmailUnread} width="1.125rem" height="1.125rem" />
-            {renderedUnreadCount}
+            {$counts.unread}
           </span>
         {/if}
       </div>
