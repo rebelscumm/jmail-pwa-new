@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { onDestroy } from 'svelte';
+  import { get } from 'svelte/store';
   import { beforeNavigate } from '$app/navigation';
   import { getDB } from '$lib/db/indexeddb';
   import { listLabels } from '$lib/gmail/api';
@@ -31,7 +32,7 @@
   let _roundMinutes = $state(5);
   let _unreadOnUnsnooze = $state(true);
   let _notifEnabled = $state(false);
-  let _aiProvider = $state<AppSettings['aiProvider']>('openai');
+  let _aiProvider = $state<AppSettings['aiProvider']>('gemini');
   let _aiApiKey = $state('');
   let _aiModel = $state('');
   let _aiSummaryModel = $state('');
@@ -42,7 +43,6 @@
   let _trailingRefreshDelayMs = $state(5000);
   let _trailingSlideOutDurationMs = $state(260);
   // AI precompute
-  let _precomputeSummaries = $state(false);
   let _precomputeUseBatch = $state(true);
   let _precomputeUseContextCache = $state(true);
   // If true, auto-run a nightly/initial backfill when missing summaries detected
@@ -100,7 +100,7 @@
       _roundMinutes = s.roundMinutes;
       _unreadOnUnsnooze = s.unreadOnUnsnooze;
       _notifEnabled = !!s.notifEnabled;
-      _aiProvider = s.aiProvider || 'openai';
+      _aiProvider = s.aiProvider || 'gemini';
       _aiApiKey = s.aiApiKey || '';
       _aiModel = s.aiModel || '';
       _aiSummaryModel = s.aiSummaryModel || '';
@@ -110,7 +110,6 @@
       _trailingRefreshDelayMs = Number(s.trailingRefreshDelayMs || 5000);
       _trailingSlideOutDurationMs = Number((s as any).trailingSlideOutDurationMs || 260);
       _inboxPageSize = Number(s.inboxPageSize || 100);
-      _precomputeSummaries = !!(s as any).precomputeSummaries;
       _precomputeUseBatch = (s as any).precomputeUseBatch !== false;
       _precomputeUseContextCache = (s as any).precomputeUseContextCache !== false;
       _precomputeAutoRun = !!(s as any).precomputeAutoRun;
@@ -218,7 +217,7 @@
   let showDiscardDialog = $state(false);
   let pendingNavigation = $state<{ cancel: () => void } | null>(null);
   
-  let isDirty = $derived((): boolean => {
+  let isDirty = $derived.by(() => {
     // Compare current UI state against $settings where possible
     const s = $settings as AppSettings;
     if (!initialLoaded || !s) return false;
@@ -238,14 +237,22 @@
         _aiPageFetchOptIn !== !!s.aiPageFetchOptIn ||
         _taskFilePath !== (s.taskFilePath || '') ||
         Number(_trailingRefreshDelayMs || 5000) !== Number(s.trailingRefreshDelayMs || 5000) ||
-        Number(_trailingSlideOutDurationMs || 260) !== Number((s as any).trailingSlideOutDurationMs || 260) ||
+        Number(_trailingSlideOutDurationMs || 260) !== Number(s.trailingSlideOutDurationMs || 260) ||
         (_swipeRightPrimary as any) !== (s.swipeRightPrimary || 'archive') ||
         (_swipeLeftPrimary as any) !== (s.swipeLeftPrimary || 'delete') ||
         !!_confirmDelete !== !!s.confirmDelete ||
         Number(_swipeCommitVelocityPxPerSec || 1000) !== Number(s.swipeCommitVelocityPxPerSec || 1000) ||
-        Number(_swipeDisappearMs || 5000) !== Number(s.swipeDisappearMs || 5000)
+        Number(_swipeDisappearMs || 5000) !== Number(s.swipeDisappearMs || 5000) ||
+        Number(_aiSummaryVersion || 1) !== Number(s.aiSummaryVersion || 1) ||
+        !!_forceRecomputeOnVersionBump !== !!s.forceRecomputeOnVersionBump ||
+        !!_precomputeAutoRun !== !!s.precomputeAutoRun ||
+        !!_precomputeUseBatch !== !!s.precomputeUseBatch ||
+        !!_precomputeUseContextCache !== !!s.precomputeUseContextCache ||
+        !!_suppressAuthPopups !== !!s.suppressAuthPopups ||
+        Number(_authPopupCooldownSeconds || 30) !== Number(s.authPopupCooldownSeconds || 30) ||
+        Number(_pullForwardCount || 3) !== Number(s.pullForwardCount || 3)
       );
-      return mappingChanged || uiMappingChanged || appChanged || (Number(_fontScalePercent || 100) !== Number((s as any).fontScalePercent || 100));
+      return mappingChanged || uiMappingChanged || appChanged || (Number(_fontScalePercent || 100) !== Number(s.fontScalePercent || 100));
     } catch { return false; }
   });
 
@@ -254,7 +261,7 @@
   // SvelteKit navigation guard
   let removeBeforeUnload: (() => void) | null = null;
   const removeBeforeNavigate = beforeNavigate((nav) => {
-    if (suppressGuards || !(isDirty as unknown as boolean)) return;
+    if (suppressGuards || !isDirty) return;
     // Cancel navigation and show MD3 dialog for user confirmation
     nav.cancel();
     pendingNavigation = nav;
@@ -314,10 +321,12 @@
   }
 
   async function saveUiMapping() {
-    // Validate IDs
-    const known = new Set(labels.map((l) => l.id));
-    for (const [k, v] of Object.entries(uiMapping)) {
-      if (v && !known.has(v)) throw new Error(`Unknown label id for ${k}: ${v}`);
+    // Validate IDs if labels are available
+    if (labels.length > 0) {
+      const known = new Set(labels.map((l) => l.id));
+      for (const [k, v] of Object.entries(uiMapping)) {
+        if (v && !known.has(v)) throw new Error(`Unknown label id for ${k}: ${v}`);
+      }
     }
     await saveLabelMapping(uiMapping);
     mappingJson = JSON.stringify(uiMapping, null, 2);
@@ -380,7 +389,36 @@
   }
 
   async function saveAppSettings() {
-    await updateAppSettings({ anchorHour: _anchorHour, roundMinutes: _roundMinutes, unreadOnUnsnooze: _unreadOnUnsnooze, notifEnabled: _notifEnabled, aiProvider: _aiProvider, aiApiKey: _aiApiKey, aiModel: _aiModel, aiSummaryModel: _aiSummaryModel, aiDraftModel: _aiDraftModel, aiPageFetchOptIn: _aiPageFetchOptIn, taskFilePath: _taskFilePath, trailingRefreshDelayMs: Math.max(0, Number(_trailingRefreshDelayMs || 0)), trailingSlideOutDurationMs: Math.max(0, Number(_trailingSlideOutDurationMs || 0)), swipeRightPrimary: _swipeRightPrimary, swipeLeftPrimary: _swipeLeftPrimary, confirmDelete: _confirmDelete, swipeCommitVelocityPxPerSec: Math.max(100, Number(_swipeCommitVelocityPxPerSec || 1000)), swipeDisappearMs: Math.max(100, Number(_swipeDisappearMs || 800)), fontScalePercent: Math.max(50, Math.min(200, Number(_fontScalePercent || 100))), precomputeSummaries: _precomputeSummaries, precomputeUseBatch: _precomputeUseBatch, precomputeUseContextCache: _precomputeUseContextCache, inboxPageSize: Math.max(10, Number(_inboxPageSize || 100)), suppressAuthPopups: _suppressAuthPopups, authPopupCooldownSeconds: Math.max(5, Number(_authPopupCooldownSeconds || 30)), pullForwardCount: Math.max(1, Math.min(10, Number(_pullForwardCount || 3))) });
+    await updateAppSettings({ 
+      anchorHour: Number(_anchorHour || 0), 
+      roundMinutes: Number(_roundMinutes || 0), 
+      unreadOnUnsnooze: _unreadOnUnsnooze, 
+      notifEnabled: _notifEnabled, 
+      aiProvider: _aiProvider, 
+      aiApiKey: _aiApiKey, 
+      aiModel: _aiModel, 
+      aiSummaryModel: _aiSummaryModel, 
+      aiDraftModel: _aiDraftModel, 
+      aiPageFetchOptIn: _aiPageFetchOptIn, 
+      taskFilePath: _taskFilePath, 
+      trailingRefreshDelayMs: Math.max(0, Number(_trailingRefreshDelayMs || 0)), 
+      trailingSlideOutDurationMs: Math.max(0, Number(_trailingSlideOutDurationMs || 0)), 
+      swipeRightPrimary: _swipeRightPrimary, 
+      swipeLeftPrimary: _swipeLeftPrimary, 
+      confirmDelete: _confirmDelete, 
+      swipeCommitVelocityPxPerSec: Math.max(100, Number(_swipeCommitVelocityPxPerSec || 1000)), 
+      swipeDisappearMs: Math.max(100, Number(_swipeDisappearMs || 800)), 
+      fontScalePercent: Math.max(50, Math.min(200, Number(_fontScalePercent || 100))), 
+      precomputeUseBatch: _precomputeUseBatch, 
+      precomputeUseContextCache: _precomputeUseContextCache, 
+      precomputeAutoRun: _precomputeAutoRun,
+      aiSummaryVersion: Number(_aiSummaryVersion || 1),
+      forceRecomputeOnVersionBump: _forceRecomputeOnVersionBump,
+      inboxPageSize: Math.max(10, Number(_inboxPageSize || 100)), 
+      suppressAuthPopups: _suppressAuthPopups, 
+      authPopupCooldownSeconds: Math.max(5, Number(_authPopupCooldownSeconds || 30)), 
+      pullForwardCount: Math.max(1, Math.min(10, Number(_pullForwardCount || 3))) 
+    });
     if (_notifEnabled && 'Notification' in window) {
       const p = await Notification.requestPermission();
       if (p !== 'granted') {
@@ -403,12 +441,21 @@
   }
 
   async function saveAll() {
-    if (currentTab === 'app' || currentTab === 'api' || currentTab === 'auth') {
+    try {
+      // Always save app settings (which includes API and Auth)
       await saveAppSettings();
-    } else if (currentTab === 'mapping') {
-      await saveMapping();
-    } else {
-      info = 'Nothing to save on Backups tab.';
+      
+      // Also save label mappings
+      if (currentTab === 'mapping') {
+        await saveMapping();
+      } else {
+        await saveUiMapping();
+      }
+      
+      info = 'All settings saved!';
+    } catch (e: unknown) {
+      info = e instanceof Error ? e.message : String(e);
+      throw e;
     }
   }
 
@@ -620,8 +667,8 @@
         </div>
       {/if}
       <TextFieldOutlined label="Default model (fallback)" bind:value={_aiModel} placeholder="gpt-4o-mini / claude-3-haiku / gemini-1.5-flash" />
-      <TextFieldOutlined label="Summary model" bind:value={_aiSummaryModel} placeholder="gemini-2.5-flash-lite (default)" />
-      <TextFieldOutlined label="Draft model" bind:value={_aiDraftModel} placeholder="gemini-2.5-pro (default)" />
+      <TextFieldOutlined label="Summary model" bind:value={_aiSummaryModel} placeholder="gemini-1.5-flash (default)" />
+      <TextFieldOutlined label="Draft model" bind:value={_aiDraftModel} placeholder="gemini-1.5-pro (default)" />
       <label style="display:flex; align-items:center; gap:0.5rem;">
         <Checkbox>
           <input type="checkbox" bind:checked={_aiPageFetchOptIn} />
@@ -629,14 +676,6 @@
         <span class="m3-font-body-medium">Allow page fetch for link-only emails</span>
       </label>
       <div style="grid-column: 1 / -1; height:1px; background:var(--m3-outline-variant); margin:0.25rem 0;"></div>
-      <label style="display:flex; align-items:center; gap:0.5rem;">
-        <Switch bind:checked={_precomputeSummaries} />
-        <span class="m3-font-body-medium">Precompute summaries (background)</span>
-      </label>
-      <div style="grid-column: 1 / -1; margin-left: 2rem; color: rgb(var(--m3-scheme-on-surface-variant)); font-size: 0.875rem;">
-        When enabled, AI summaries and subjects will be generated automatically in the background for inbox threads.
-        This requires an AI API key to be configured above.
-      </div>
       <label style="display:flex; align-items:center; gap:0.5rem;">
         <Checkbox>
           <input type="checkbox" bind:checked={_precomputeUseBatch} />
@@ -668,18 +707,6 @@
         <span class="m3-font-body-small">{_precomputeInfo}</span>
       {/if}
     </div>
-    {#if !_precomputeSummaries}
-      <div style="grid-column: 1 / -1; margin-top: 0.5rem; padding: 0.75rem; background: rgb(var(--m3-scheme-surface-container-lowest)); border-radius: 0.5rem; border: 1px solid rgb(var(--m3-scheme-outline-variant));">
-        <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
-          <span style="color: rgb(var(--m3-scheme-error));">⚠️</span>
-          <span class="m3-font-title-small" style="color: rgb(var(--m3-scheme-error));">Precompute is disabled</span>
-        </div>
-        <div style="color: rgb(var(--m3-scheme-on-surface-variant)); font-size: 0.875rem;">
-          Enable the "Precompute summaries" switch above to start generating AI summaries and subjects automatically.
-          You can also use the "Run Precompute" button in the top app bar overflow menu for manual processing.
-        </div>
-      </div>
-    {/if}
   </Card>
 {/if}
 

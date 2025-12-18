@@ -516,19 +516,8 @@ import { precomputeStatus } from '$lib/stores/precompute';
   async function doPrecompute() {
     console.log('[TopAppBar] Precompute function called');
     try {
-      // Check if precompute is enabled
       const { settings } = await import('$lib/stores/settings');
       const s = get(settings);
-      if (!s?.precomputeSummaries) {
-        showSnackbar({ 
-          message: 'Precompute is disabled. Enable it in Settings > App > Precompute summaries', 
-          timeout: 6000,
-          actions: {
-            'Go to Settings': () => { location.href = '/settings'; }
-          }
-        });
-        return;
-      }
       
       if (!s?.aiApiKey) {
         showSnackbar({ 

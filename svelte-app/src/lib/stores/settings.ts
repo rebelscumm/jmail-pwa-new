@@ -71,6 +71,10 @@ export type AppSettings = {
   authPopupCooldownSeconds?: number;
   /** Number of emails to pull forward from snooze when inbox is empty */
   pullForwardCount?: number;
+  /** AI summary schema version (legacy but kept for compat) */
+  aiSummaryVersion?: number;
+  /** Force recompute of summaries when version bumps */
+  forceRecomputeOnVersionBump?: boolean;
 };
 
 const DEFAULTS: AppSettings = {
@@ -89,7 +93,7 @@ const DEFAULTS: AppSettings = {
   inboxSort: 'date_desc',
   fontScalePercent: 100,
   aiProvider: 'gemini',
-  aiSummaryModel: 'gemini-2.5-flash-lite',
+  aiSummaryModel: 'gemini-1.5-flash',
   precomputeSummaries: false,
   precomputeUseBatch: true,
   precomputeUseContextCache: true,
@@ -129,10 +133,19 @@ export async function loadSettings(): Promise<void> {
     ...(app as Partial<AppSettings> | undefined),
     labelMapping: (mapping as LabelMapping | undefined) || {}
   };
+
+  // Automatically enable precompute if API key is present
+  const hasKey = merged.aiApiKey && merged.aiApiKey.trim() !== '';
+  if (hasKey) {
+    merged.precomputeSummaries = true;
+  } else {
+    merged.precomputeSummaries = false;
+  }
   
-  console.log('[Settings] Merged settings:', {
+  console.log('[Settings] loadSettings() final merged state:', {
     aiProvider: merged.aiProvider,
-    hasApiKey: !!merged.aiApiKey,
+    hasApiKey: hasKey,
+    apiKeyLength: merged.aiApiKey?.length || 0,
     labelMappingCount: Object.keys(merged.labelMapping).length,
     precomputeSummaries: merged.precomputeSummaries
   });
@@ -177,18 +190,40 @@ export async function updateAppSettings(patch: Partial<AppSettings>): Promise<vo
   console.log('[Settings] updateAppSettings() called with keys:', Object.keys(patch));
   console.log('[Settings] updateAppSettings() hasApiKey:', !!patch.aiApiKey);
   
-  settings.update((s) => ({ ...s, ...patch }));
   const db = await getDB();
-  const current = await db.get('settings', 'app');
-  const merged = { ...(current as object), ...patch };
-  await db.put('settings', merged, 'app');
+  const current = (await db.get('settings', 'app')) as Partial<AppSettings> || {};
+  
+  // Merge current and patch
+  const merged = { ...current, ...patch };
+
+  // Enforce precomputeSummaries based on aiApiKey
+  const hasKey = merged.aiApiKey && merged.aiApiKey.trim() !== '';
+  if (hasKey) {
+    merged.precomputeSummaries = true;
+  } else {
+    merged.precomputeSummaries = false;
+  }
+  
+  console.log('[Settings] updateAppSettings() final merged state:', {
+    aiProvider: merged.aiProvider,
+    hasApiKey: hasKey,
+    apiKeyLength: merged.aiApiKey?.length || 0,
+    precomputeSummaries: merged.precomputeSummaries
+  });
+
+  // Ensure we persist a plain object (avoid Svelte $state proxies not being cloneable)
+  const clean = JSON.parse(JSON.stringify(merged));
+  
+  settings.set({ ...DEFAULTS, ...clean, labelMapping: (await db.get('settings', 'labelMapping')) as LabelMapping || {} });
+  await db.put('settings', clean, 'app');
   
   // Verify the save worked
   const verify = await db.get('settings', 'app');
   console.log('[Settings] updateAppSettings() verification:', {
     saved: !!verify,
     hasApiKey: !!(verify as any)?.aiApiKey,
-    aiProvider: (verify as any)?.aiProvider
+    aiProvider: (verify as any)?.aiProvider,
+    precomputeSummaries: (verify as any)?.precomputeSummaries
   });
 }
 

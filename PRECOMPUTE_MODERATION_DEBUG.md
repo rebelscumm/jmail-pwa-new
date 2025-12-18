@@ -23,7 +23,7 @@ If the college recruiting filter works on individual emails but doesn't automati
    - **AI Precompute** - Must be enabled
    - **AI API Key** - Must be set
    - **AI Provider** - Should be "Gemini" (or your preferred provider)
-   - **AI Summary Model** - Should be set (e.g., `gemini-2.5-flash-lite`)
+   - **AI Summary Model** - Should be set (e.g., `gemini-1.5-flash`)
 
 ### Step 3: Check Thread Eligibility Logs
 

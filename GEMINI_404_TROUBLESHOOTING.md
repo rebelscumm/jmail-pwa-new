@@ -24,9 +24,9 @@ You're seeing "Diagnostic failed: Gemini error 404" when trying to use the colle
 **Solution:**
 - Check Settings > API > AI Summary Model
 - Use a valid Gemini model name like:
-  - `gemini-2.5-flash-lite` (recommended)
-  - `gemini-2.5-pro`
-  - `gemini-pro`
+  - `gemini-1.5-flash` (recommended)
+  - `gemini-1.5-pro`
+  - `gemini-pro` (v1.0)
 
 ### 4. API Key Permissions
 **Error:** "Gemini API endpoint not found"
@@ -48,7 +48,7 @@ You're seeing "Diagnostic failed: Gemini error 404" when trying to use the colle
 1. Go to Settings > API
 2. Verify your API key is set
 3. Check that AI Provider is set to "Gemini"
-4. Verify AI Summary Model is set to `gemini-2.5-flash-lite` or another valid model
+4. Verify AI Summary Model is set to `gemini-1.5-flash` or another valid model
 5. Use the "Test Recruiting Filter" button in any email viewer
 6. Check the Diagnostics page for detailed error information
 

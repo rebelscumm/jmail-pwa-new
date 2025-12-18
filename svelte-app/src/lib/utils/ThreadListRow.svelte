@@ -783,7 +783,7 @@
         const preSummary = getPrecomputeSummary();
         if ((preSummary && (preSummary.errors || 0) > 0)) applicable.push('Errors occurred during precompute; check precompute logs for details.');
         // Precompute disabled
-        if (!$settings?.precomputeSummaries) applicable.push('Background precompute is disabled in Settings.');
+        if (!$settings?.precomputeSummaries) applicable.push('Background precompute requires an AI API key.');
 
         // Thread-level checks
         const labels = thread.labelIds || [];

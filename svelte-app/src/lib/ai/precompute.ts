@@ -445,7 +445,7 @@ async function runGeminiCombinedBatch(
   mode: GeminiBatchMode = 'summary'
 ): Promise<Record<string, string>> {
   const key = (apiKey || '').trim();
-  const modelName = (model || '').trim() || 'gemini-2.5-flash-lite';
+  const modelName = (model || '').trim() || 'gemini-1.5-flash';
   if (!key || !items.length) return {};
 
   const results: Record<string, string> = {};
@@ -509,20 +509,27 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
     console.log('[Precompute] Settings:', { 
       precomputeSummaries: s?.precomputeSummaries, 
       aiProvider: s?.aiProvider, 
-      aiApiKey: s?.aiApiKey ? '***' : 'missing',
+      aiApiKey: s?.aiApiKey ? `*** (${s.aiApiKey.length})` : 'missing',
       aiModel: s?.aiModel,
       aiSummaryModel: s?.aiSummaryModel
     });
     pushLog('debug', '[Precompute] Settings:', { 
       precomputeSummaries: s?.precomputeSummaries, 
       aiProvider: s?.aiProvider, 
-      aiApiKey: s?.aiApiKey ? '***' : 'missing',
+      aiApiKey: s?.aiApiKey ? `*** (${s.aiApiKey.length})` : 'missing',
       aiModel: s?.aiModel,
       aiSummaryModel: s?.aiSummaryModel
     });
     
     if (!s?.precomputeSummaries) {
       console.log('[Precompute] Precompute summaries disabled in settings');
+      precomputeStatus.complete();
+      return { processed: 0, total: 0 };
+    }
+
+    if (!s?.aiApiKey || s.aiApiKey.trim() === '') {
+      console.warn('[Precompute] AI API key is missing; cannot run precompute');
+      pushLog('warn', '[Precompute] AI API key is missing; cannot run precompute');
       precomputeStatus.complete();
       return { processed: 0, total: 0 };
     }
@@ -881,7 +888,7 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
       
       const combinedItems = summaryTargets.map((p) => ({ id: p.thread.threadId, text: p.text || p.subject || '' }));
       let map: Record<string, string> = {};
-      if (s.aiApiKey) {
+      if (s.aiApiKey && s.aiProvider === 'gemini') {
         pushLog('debug', '[Precompute] Attempting client-side combined batch for summaries');
         map = await summarizeBatchRemote(combinedItems, s.aiApiKey, s.aiSummaryModel || s.aiModel, s.precomputeUseContextCache, true);
         if (map && Object.keys(map).length) {
@@ -890,8 +897,10 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
         } else {
           pushLog('debug', '[Precompute] Combined batch summary call returned no data, falling back to direct');
         }
+      } else if (s.aiApiKey && s.aiProvider !== 'gemini') {
+        pushLog('debug', '[Precompute] Skipping combined batching for provider:', s.aiProvider);
       } else {
-        pushLog('warn', '[Precompute] No Gemini API key configured; skipping combined batch for summaries');
+        pushLog('warn', `[Precompute] No ${s.aiProvider || 'AI'} API key configured; skipping combined batch for summaries`);
       }
 
       const missingSummaryTargets = summaryTargets.filter((p) => {
@@ -999,7 +1008,7 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
       });
 
       let subjMap: Record<string, string> = {};
-      if (s.aiApiKey) {
+      if (s.aiApiKey && s.aiProvider === 'gemini') {
         pushLog('debug', '[Precompute] Attempting client-side combined batch for subjects');
         subjMap = await summarizeSubjectBatchRemote(subjectItems, s.aiApiKey, s.aiSummaryModel || s.aiModel, s.precomputeUseContextCache, true);
         if (subjMap && Object.keys(subjMap).length) {
@@ -1008,8 +1017,10 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
         } else {
           pushLog('debug', '[Precompute] Combined batch subject call returned no data, falling back to direct');
         }
+      } else if (s.aiApiKey && s.aiProvider !== 'gemini') {
+        pushLog('debug', '[Precompute] Skipping combined batching for provider:', s.aiProvider);
       } else {
-        pushLog('warn', '[Precompute] No Gemini API key configured; skipping combined batch for subjects');
+        pushLog('warn', `[Precompute] No ${s.aiProvider || 'AI'} API key configured; skipping combined batch for subjects`);
       }
 
       const missingSubjects = wantsSubject.filter((p) => {

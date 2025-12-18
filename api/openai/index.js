@@ -18,7 +18,8 @@ module.exports = async function (context, req) {
     return;
   }
 
-  const apiKey = process.env.OPENAI_API_KEY;
+  const body = req.body || {};
+  const apiKey = body.apiKey || process.env.OPENAI_API_KEY;
   if (!apiKey) {
     context.res = {
       status: 500,
@@ -28,7 +29,6 @@ module.exports = async function (context, req) {
     return;
   }
 
-  const body = req.body || {};
   const model = body.model || 'gpt-4o-mini';
   const messages = body.messages || [{ role: 'user', content: 'Hello' }];
   const temperature = body.temperature ?? 0.2;

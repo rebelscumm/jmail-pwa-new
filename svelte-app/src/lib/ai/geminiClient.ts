@@ -96,7 +96,7 @@ function backoffForAttempt(attempt: number) {
 async function sendDirect(item: QueueItem) {
   const s = get(settings);
   const apiKey = s.aiApiKey || '';
-  const model = item.req.model || s.aiSummaryModel || s.aiModel || 'gemini-2.5-flash-lite';
+  const model = item.req.model || s.aiSummaryModel || s.aiModel || 'gemini-1.5-flash';
   
   // Validate API key before making request
   if (!apiKey || apiKey.trim() === '') {

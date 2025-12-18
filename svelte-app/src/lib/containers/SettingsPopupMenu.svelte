@@ -25,7 +25,6 @@
 
   function getSettingLabel(key: keyof AppSettings): string {
     const labels: Record<keyof AppSettings, string> = {
-      precomputeSummaries: 'Enable AI Precompute',
       precomputeAutoRun: 'Auto-run Precompute',
       precomputeUseBatch: 'Use Batch Mode',
       precomputeUseContextCache: 'Use Context Cache',
@@ -61,7 +60,6 @@
 
   function getSettingDescription(key: keyof AppSettings): string {
     const descriptions: Record<keyof AppSettings, string> = {
-      precomputeSummaries: 'Enable background AI processing to generate summaries',
       precomputeAutoRun: 'Automatically run precompute when missing summaries are detected',
       precomputeUseBatch: 'Use Gemini Batch Mode for more efficient processing',
       precomputeUseContextCache: 'Cache AI context for better performance',
