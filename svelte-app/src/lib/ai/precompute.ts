@@ -501,9 +501,9 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T)
   return results;
 }
 
-export async function tickPrecompute(limit = 10): Promise<{ processed: number; total: number }> {
+export async function tickPrecompute(limit = 10, skipSync = false, options?: { cumulativeProcessed?: number; totalCandidates?: number; skipComplete?: boolean }): Promise<{ processed: number; total: number }> {
   try {
-    console.log('[Precompute] ===== STARTING PRECOMPUTE ===== limit:', limit);
+    console.log('[Precompute] ===== STARTING PRECOMPUTE ===== limit:', limit, 'skipSync:', skipSync, 'options:', options);
     const s = get(settings);
     // No time-based auto-run gating: allow precompute to run whenever requested.
     console.log('[Precompute] Settings:', { 
@@ -518,104 +518,129 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
       aiProvider: s?.aiProvider, 
       aiApiKey: s?.aiApiKey ? `*** (${s.aiApiKey.length})` : 'missing',
       aiModel: s?.aiModel,
-      aiSummaryModel: s?.aiSummaryModel
+      aiSummaryModel: s?.aiSummaryModel,
+      skipSync,
+      options
     });
     
     if (!s?.precomputeSummaries) {
       console.log('[Precompute] Precompute summaries disabled in settings');
-      precomputeStatus.complete();
+      if (!options?.skipComplete) precomputeStatus.complete();
       return { processed: 0, total: 0 };
     }
 
     if (!s?.aiApiKey || s.aiApiKey.trim() === '') {
       console.warn('[Precompute] AI API key is missing; cannot run precompute');
       pushLog('warn', '[Precompute] AI API key is missing; cannot run precompute');
-      precomputeStatus.complete();
+      if (!options?.skipComplete) precomputeStatus.complete();
       return { processed: 0, total: 0 };
     }
     
     const db = await getDB();
     // Ensure database has all INBOX message/thread metadata before computing
     // This will walk Gmail pages and populate 'messages' and 'threads' stores in indexeddb
-    try {
-      const { listMessageIdsByLabelId, getMessageMetadata } = await import('$lib/gmail/api');
-      let pageToken: string | undefined = undefined;
-      const allMsgIds: string[] = [];
-      // Fetch pages of message ids (Gmail paginates). Use a reasonably large page size.
-      do {
-        const page = await listMessageIdsByLabelId('INBOX', 100, pageToken);
-        if (page.ids && page.ids.length) allMsgIds.push(...page.ids);
-        pageToken = page.nextPageToken;
-      } while (pageToken);
-
-      // Fetch metadata for all message ids with concurrency and persist
-      const msgs = await mapWithConcurrency(allMsgIds, 6, async (id) => await getMessageMetadata(id));
-      // Persist messages and build thread map
+    if (!skipSync) {
       try {
-        const txMsgs = db.transaction('messages', 'readwrite');
-        for (const m of msgs) await txMsgs.store.put(m);
-        await txMsgs.done;
-      } catch (e) { pushLog('warn', '[Precompute] Failed to persist messages', e); }
+        const { listMessageIdsByLabelId, getMessageMetadata } = await import('$lib/gmail/api');
+        let pageToken: string | undefined = undefined;
+        const allMsgIds: string[] = [];
+        // Fetch pages of message ids (Gmail paginates). Use a reasonably large page size.
+        do {
+          const page = await listMessageIdsByLabelId('INBOX', 100, pageToken);
+          if (page.ids && page.ids.length) allMsgIds.push(...page.ids);
+          pageToken = page.nextPageToken;
+        } while (pageToken);
 
-      const threadMap: Record<string, { messageIds: string[]; labelIds: Record<string, true>; last: { from?: string; subject?: string; date?: number } }> = {};
-      for (const m of msgs) {
-        const existing = threadMap[m.threadId] || { messageIds: [], labelIds: {}, last: {} };
-        existing.messageIds.push(m.id);
-        for (const x of m.labelIds) existing.labelIds[x] = true;
-        const date = m.internalDate || Date.parse(m.headers?.Date || '');
-        if (!existing.last.date || (date && date > existing.last.date)) {
-          existing.last = { from: m.headers?.From, subject: m.headers?.Subject, date };
-        }
-        threadMap[m.threadId] = existing;
-      }
-      const threadList = Object.entries(threadMap).map(([threadId, v]) => ({ threadId, messageIds: v.messageIds, lastMsgMeta: v.last, labelIds: Object.keys(v.labelIds) }));
-      try {
-        const txThreads = db.transaction('threads', 'readwrite');
-        for (const t of threadList) {
+        // Identify which messages we already have metadata for
+        const existingMsgIds = new Set(await db.getAllKeys('messages'));
+        const missingMsgIds = allMsgIds.filter(id => !existingMsgIds.has(id));
+        
+        pushLog('debug', '[Precompute] Syncing inbox messages:', allMsgIds.length, 'total,', missingMsgIds.length, 'missing');
+        
+        // Fetch metadata ONLY for missing message ids with concurrency and persist
+        if (missingMsgIds.length > 0) {
+          const newMsgs = await mapWithConcurrency(missingMsgIds, 6, async (id) => await getMessageMetadata(id));
           try {
-            const existing = await txThreads.store.get(t.threadId as any) as GmailThread | undefined;
-            const existingHasInbox = existing ? (Array.isArray(existing.labelIds) && existing.labelIds.includes('INBOX')) : false;
-            const incomingHasInbox = Array.isArray((t as any).labelIds) && (t as any).labelIds.includes('INBOX');
-            
-            if (existing) {
-              // Compute last-activity markers to decide whether to overwrite
-              const existingLast = Math.max(Number(existing.lastMsgMeta?.date) || 0, Number((existing as any).aiSubjectUpdatedAt) || 0, Number(existing.summaryUpdatedAt) || 0);
-              const incomingLast = Number((t as any).lastMsgMeta?.date) || 0;
-              // If the local copy removed INBOX (archived/snoozed/deleted locally), prefer local and skip overwrite
-              if (!existingHasInbox && incomingHasInbox) {
-                pushLog('debug', '[Precompute] Skipping thread prime for', t.threadId, 'because local has removed INBOX');
-                continue;
-              }
-              if (existingLast >= incomingLast) {
-                pushLog('debug', '[Precompute] Skipping thread prime for', t.threadId, 'because local is newer');
-                continue;
-              }
-            }
-
-            // Merge minimal incoming metadata with any existing thread record to preserve
-            // cached AI summary fields (summary, summaryStatus, summaryUpdatedAt, bodyHash, etc.)
-            const merged: GmailThread = existing ? { ...existing, ...t } : (t as any);
-            
-            // CRITICAL: Preserve local state for processed emails to prevent resurrection
-            // If local thread has removed INBOX (archived/snoozed/deleted), keep local labelIds
-            // Otherwise, use incoming labelIds for proper inbox syncing
-            if (existing && !existingHasInbox && incomingHasInbox) {
-              // Local has been processed (INBOX removed), preserve local labelIds
-              merged.labelIds = existing.labelIds || [];
-            } else {
-              // Use incoming labelIds for normal inbox syncing
-              merged.labelIds = (t as any).labelIds || merged.labelIds || [];
-            }
-            
-            merged.lastMsgMeta = (t as any).lastMsgMeta || merged.lastMsgMeta || { date: 0 };
-
-            await txThreads.store.put(merged as any);
-          } catch (e) { pushLog('warn', '[Precompute] Failed to evaluate/put thread', t.threadId, e); }
+            const txMsgs = db.transaction('messages', 'readwrite');
+            for (const m of newMsgs) await txMsgs.store.put(m);
+            await txMsgs.done;
+          } catch (e) { pushLog('warn', '[Precompute] Failed to persist new messages', e); }
         }
-        await txThreads.done;
-      } catch (e) { pushLog('warn', '[Precompute] Failed to persist threads', e); }
-    } catch (e) {
-      pushLog('warn', '[Precompute] Failed to prime DB from Gmail before precompute', e);
+
+        // Fetch all current inbox messages from DB (already populated or just updated)
+        const txRead = db.transaction('messages', 'readonly');
+        const msgsResults = await Promise.all(allMsgIds.map(id => txRead.store.get(id)));
+        const msgs = msgsResults.filter((m): m is GmailMessage => !!m);
+        
+        for (const m of msgs) {
+          // Ensure the message has the INBOX label in our local representation
+          if (!m.labelIds.includes('INBOX')) {
+            m.labelIds.push('INBOX');
+          }
+        }
+
+        const threadMap: Record<string, { messageIds: string[]; labelIds: Record<string, true>; last: { from?: string; subject?: string; date?: number } }> = {};
+        for (const m of msgs) {
+          const existing = threadMap[m.threadId] || { messageIds: [], labelIds: {}, last: {} };
+          existing.messageIds.push(m.id);
+          for (const x of m.labelIds) existing.labelIds[x] = true;
+          const date = m.internalDate || Date.parse(m.headers?.Date || '');
+          if (!existing.last.date || (date && date > existing.last.date)) {
+            existing.last = { from: m.headers?.From, subject: m.headers?.Subject, date };
+          }
+          threadMap[m.threadId] = existing;
+        }
+        const threadList = Object.entries(threadMap).map(([threadId, v]) => ({ threadId, messageIds: v.messageIds, lastMsgMeta: v.last, labelIds: Object.keys(v.labelIds) }));
+        try {
+          const txThreads = db.transaction('threads', 'readwrite');
+          for (const t of threadList) {
+            try {
+              const existing = await txThreads.store.get(t.threadId as any) as GmailThread | undefined;
+              const existingHasInbox = existing ? (Array.isArray(existing.labelIds) && existing.labelIds.includes('INBOX')) : false;
+              const incomingHasInbox = Array.isArray((t as any).labelIds) && (t as any).labelIds.includes('INBOX');
+              
+              if (existing) {
+                // Compute last-activity markers to decide whether to overwrite
+                const existingLast = Math.max(Number(existing.lastMsgMeta?.date) || 0, Number((existing as any).aiSubjectUpdatedAt) || 0, Number(existing.summaryUpdatedAt) || 0);
+                const incomingLast = Number((t as any).lastMsgMeta?.date) || 0;
+                // If the local copy removed INBOX (archived/snoozed/deleted locally), prefer local and skip overwrite
+                if (!existingHasInbox && incomingHasInbox) {
+                  pushLog('debug', '[Precompute] Skipping thread prime for', t.threadId, 'because local has removed INBOX');
+                  continue;
+                }
+                if (existingLast >= incomingLast) {
+                  pushLog('debug', '[Precompute] Skipping thread prime for', t.threadId, 'because local is newer');
+                  continue;
+                }
+              }
+
+              // Merge minimal incoming metadata with any existing thread record to preserve
+              // cached AI summary fields (summary, summaryStatus, summaryUpdatedAt, bodyHash, etc.)
+              const merged: GmailThread = existing ? { ...existing, ...t } : (t as any);
+              
+              // CRITICAL: Preserve local state for processed emails to prevent resurrection
+              // If local thread has removed INBOX (archived/snoozed/deleted), keep local labelIds
+              // Otherwise, use incoming labelIds for proper inbox syncing
+              if (existing && !existingHasInbox && incomingHasInbox) {
+                // Local has been processed (INBOX removed), preserve local labelIds
+                merged.labelIds = existing.labelIds || [];
+              } else {
+                // Use incoming labelIds for normal inbox syncing
+                merged.labelIds = (t as any).labelIds || merged.labelIds || [];
+              }
+              
+              merged.lastMsgMeta = (t as any).lastMsgMeta || merged.lastMsgMeta || { date: 0 };
+
+              await txThreads.store.put(merged as any);
+            } catch (e) { pushLog('warn', '[Precompute] Failed to evaluate/put thread', t.threadId, e); }
+          }
+          await txThreads.done;
+        } catch (e) { pushLog('warn', '[Precompute] Failed to persist threads', e); }
+      } catch (e) {
+        pushLog('warn', '[Precompute] Failed to prime DB from Gmail before precompute', e);
+      }
+    } else {
+      pushLog('debug', '[Precompute] Skipping Gmail sync as requested');
     }
 
     const allThreads = await db.getAll('threads');
@@ -676,12 +701,14 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
         pushLog('debug', '[Precompute] All inbox threads are filtered out (SPAM/TRASH)');
       }
       
-      precomputeStatus.complete();
+      if (!options?.skipComplete) precomputeStatus.complete();
       return { processed: 0, total: allThreads.length };
     }
     
     // Start progress tracking
-    precomputeStatus.start(candidates.length);
+    if (options?.cumulativeProcessed === undefined) {
+      precomputeStatus.start(options?.totalCandidates || candidates.length);
+    }
 
     // Removed AI summary versioning. Cached summaries are binary (exist / not)
     // Ensure `nowVersion` is defined to avoid ReferenceError from older code paths
@@ -765,7 +792,7 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
         pushLog('debug', '[Precompute] Items exist but none need processing (possible version mismatch)');
       }
       
-      precomputeStatus.complete();
+      if (!options?.skipComplete) precomputeStatus.complete();
       return { processed: 0, total: candidates.length };
     }
 
@@ -773,8 +800,10 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
     console.log('[Precompute] Processing batch of:', batch.length, 'threads');
     pushLog('debug', '[Precompute] Processing batch of:', batch.length);
     
+    const cumulativeOffset = options?.cumulativeProcessed || 0;
+    
     // Update progress - preparing texts
-    precomputeStatus.updateProgress(0, 'Preparing email content...');
+    precomputeStatus.updateProgress(cumulativeOffset, 'Preparing email content...');
 
     // Prepare texts
     console.log('[Precompute] Preparing thread content...');
@@ -884,7 +913,7 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
       pushLog('debug', '[Precompute] Processing', summaryTargets.length, 'summary targets');
       
       // Update progress - processing summaries
-      precomputeStatus.updateProgress(0, `Processing ${summaryTargets.length} summaries...`);
+      precomputeStatus.updateProgress(cumulativeOffset, `Processing ${summaryTargets.length} summaries...`);
       
       const combinedItems = summaryTargets.map((p) => ({ id: p.thread.threadId, text: p.text || p.subject || '' }));
       let map: Record<string, string> = {};
@@ -959,7 +988,7 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
       console.log('[Precompute] Running college recruiting moderation for', moderationTargets.length, 'threads');
       pushLog('debug', '[Precompute] Running college recruiting moderation for', moderationTargets.length, 'threads');
       precomputeStatus.updateProgress(
-        summaryTargets.length + wantsSubject.length,
+        cumulativeOffset + summaryTargets.length + wantsSubject.length,
         `Checking ${moderationTargets.length} recruiting candidates...`
       );
 
@@ -994,7 +1023,7 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
       
       // Update progress - processing subjects
       precomputeStatus.updateProgress(
-        summaryTargets.length, 
+        cumulativeOffset + summaryTargets.length, 
         `Processing ${wantsSubject.length} AI subjects...`
       );
       
@@ -1213,19 +1242,21 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
     }
     
     // Update progress - completed
-    precomputeStatus.updateProgress(prepared.length, 'Saving complete.');
+    precomputeStatus.updateProgress(cumulativeOffset + prepared.length, 'Saving complete.');
 
     // Return processing information
     const result = { processed: prepared.length, total: candidates.length };
-    pushLog('debug', '[Precompute] Completed:', result);
+    pushLog('debug', '[Precompute] Completed batch tick:', result);
 
     // Keep current error/warn counts available to the UI by passing them through complete()
-    try {
-      const counts = (precomputeStatus as any).getCounts ? (precomputeStatus as any).getCounts() : { errors: 0, warns: 0 };
-      precomputeStatus.complete({ errors: counts.errors || 0, warns: counts.warns || 0, processed: result.processed, total: result.total });
-      // Do not persist last run timestamp; we no longer gate by time.
-    } catch (e) {
-      precomputeStatus.complete();
+    if (!options?.skipComplete) {
+      try {
+        const counts = (precomputeStatus as any).getCounts ? (precomputeStatus as any).getCounts() : { errors: 0, warns: 0 };
+        precomputeStatus.complete({ errors: counts.errors || 0, warns: counts.warns || 0, processed: cumulativeOffset + result.processed, total: options?.totalCandidates || result.total });
+        // Do not persist last run timestamp; we no longer gate by time.
+      } catch (e) {
+        precomputeStatus.complete();
+      }
     }
 
     return result;
@@ -1242,9 +1273,50 @@ export async function tickPrecompute(limit = 10): Promise<{ processed: number; t
   }
 }
 
-export async function precomputeNow(limit = 25): Promise<{ processed: number; total: number }> {
-  const result = await tickPrecompute(limit);
-  return result;
+export async function precomputeNow(limit = 500): Promise<{ processed: number; total: number }> {
+  pushLog('debug', '[Precompute] precomputeNow starting with limit:', limit);
+  let totalProcessed = 0;
+  let candidatesTotal = 0;
+  
+  // First tick includes Gmail sync and sets up the progress bar
+  // We use a reasonably small batch size for the first tick to give fast feedback
+  let result = await tickPrecompute(Math.min(limit, 25), false, { skipComplete: true });
+  totalProcessed += result.processed;
+  candidatesTotal = result.total;
+  
+  // If we already hit the limit or have no more work, complete and return
+  if (totalProcessed >= limit || (result.processed === 0 && candidatesTotal > 0)) {
+    // If we have no more work but candidatesTotal > 0, it means everything is already summarized
+    const counts = (precomputeStatus as any).getCounts ? (precomputeStatus as any).getCounts() : { errors: 0, warns: 0 };
+    precomputeStatus.complete({ errors: counts.errors || 0, warns: counts.warns || 0, processed: totalProcessed, total: candidatesTotal });
+    return { processed: totalProcessed, total: candidatesTotal };
+  }
+
+  // If result.total is 0, tickPrecompute already handled complete() if we didn't pass skipComplete, 
+  // but we did pass skipComplete.
+  if (candidatesTotal === 0) {
+    precomputeStatus.complete();
+    return { processed: 0, total: 0 };
+  }
+
+  // Subsequent ticks skip Gmail sync to be efficient and update the existing progress bar
+  while (totalProcessed < limit) {
+    const nextBatchSize = Math.min(25, limit - totalProcessed);
+    result = await tickPrecompute(nextBatchSize, true, { 
+      cumulativeProcessed: totalProcessed, 
+      totalCandidates: candidatesTotal,
+      skipComplete: true 
+    });
+    
+    if (result.processed === 0) break;
+    totalProcessed += result.processed;
+  }
+  
+  // Final completion
+  const counts = (precomputeStatus as any).getCounts ? (precomputeStatus as any).getCounts() : { errors: 0, warns: 0 };
+  precomputeStatus.complete({ errors: counts.errors || 0, warns: counts.warns || 0, processed: totalProcessed, total: candidatesTotal });
+  
+  return { processed: totalProcessed, total: candidatesTotal };
 }
 
 /**
