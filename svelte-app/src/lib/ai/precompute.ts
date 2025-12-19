@@ -1131,8 +1131,10 @@ export async function tickPrecompute(limit = 10, skipSync = false, options?: {
       // Pre-fetch label ID and existing threads to avoid awaits inside transaction
       const labelId = await ensureCollegeRecruitingLabel();
       const existingThreadsMap = new Map<string, GmailThread>();
-      const txRead = db.transaction('threads', 'readonly');
-      const readResults = await Promise.all(prepared.map(p => txRead.store.get(p.thread.threadId)));
+      
+      // Use individual db.get calls in parallel instead of a manual transaction
+      // This avoids InvalidStateError from long-lived read transactions
+      const readResults = await Promise.all(prepared.map(p => db.get('threads', p.thread.threadId)));
       prepared.forEach((p, i) => {
         if (readResults[i]) existingThreadsMap.set(p.thread.threadId, readResults[i] as GmailThread);
       });
@@ -1224,13 +1226,14 @@ export async function tickPrecompute(limit = 10, skipSync = false, options?: {
         updatedThreads.push(next);
       }
 
-      // Fast transaction for all puts
-      const txWrite = db.transaction('threads', 'readwrite');
-      for (const ut of updatedThreads) {
-        await txWrite.store.put(ut);
+      if (updatedThreads.length > 0) {
+        // Fast transaction for all puts, parallelized
+        const txWrite = db.transaction('threads', 'readwrite');
+        const putPromises = updatedThreads.map(ut => txWrite.store.put(ut));
+        await Promise.all(putPromises);
+        await txWrite.done;
+        pushLog('debug', '[Precompute] Updated', updatedThreads.length, 'threads in database');
       }
-      await txWrite.done;
-      pushLog('debug', '[Precompute] Updated', updatedThreads.length, 'threads in database');
 
       // Run queue actions AFTER transaction
       for (const action of queueActions) {
