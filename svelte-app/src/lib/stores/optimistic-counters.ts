@@ -72,8 +72,12 @@ export async function recalculateOptimisticCounters() {
       const willBeInInbox = newLabels.has('INBOX');
       const willBeUnread = newLabels.has('UNREAD');
       
+      // Calculate deltas based on unread status WITHIN the inbox
+      const wasUnreadInbox = wasInInbox && wasUnread;
+      const willBeUnreadInbox = willBeInInbox && willBeUnread;
+      
       inboxDelta += (willBeInInbox ? 1 : 0) - (wasInInbox ? 1 : 0);
-      unreadDelta += (willBeUnread ? 1 : 0) - (wasUnread ? 1 : 0);
+      unreadDelta += (willBeUnreadInbox ? 1 : 0) - (wasUnreadInbox ? 1 : 0);
     }
     
     optimisticCounters.set({ inboxDelta, unreadDelta, timestamp: Date.now() });

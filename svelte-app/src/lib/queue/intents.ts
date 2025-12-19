@@ -107,8 +107,12 @@ export async function queueThreadModify(threadId: string, addLabelIds: string[],
     const willBeInInbox = newLabels.has('INBOX');
     const willBeUnread = newLabels.has('UNREAD');
     
+    // Calculate deltas based on unread status WITHIN the inbox
+    const wasUnreadInbox = wasInInbox && wasUnread;
+    const willBeUnreadInbox = willBeInInbox && willBeUnread;
+    
     const inboxDelta = (willBeInInbox ? 1 : 0) - (wasInInbox ? 1 : 0);
-    const unreadDelta = (willBeUnread ? 1 : 0) - (wasUnread ? 1 : 0);
+    const unreadDelta = (willBeUnreadInbox ? 1 : 0) - (wasUnreadInbox ? 1 : 0);
     
     // Update global counts store optimistically for TopAppBar
     if (inboxDelta !== 0 || unreadDelta !== 0) {
