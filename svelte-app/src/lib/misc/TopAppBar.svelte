@@ -551,7 +551,7 @@ import { precomputeStatus } from '$lib/stores/precompute';
       
       showSnackbar({ message: 'Starting precompute...' });
       const { precomputeNow } = await import('$lib/ai/precompute');
-      const result: any = await precomputeNow(25);
+      const result: any = await precomputeNow(100);
       // If the precompute module returned a skip reason, surface it to the user and offer a force-run
       if (result && result.__reason) {
         showSnackbar({
@@ -560,7 +560,7 @@ import { precomputeStatus } from '$lib/stores/precompute';
           actions: {
             'Force run': async () => {
               showSnackbar({ message: 'Forcing precompute now…', timeout: 2000 });
-              const forced: any = await precomputeNow(25);
+              const forced: any = await precomputeNow(100);
               if (forced && forced.processed > 0) showSnackbar({ message: `Precompute complete: ${forced.processed} items processed`, timeout: 4000 });
               else showSnackbar({ message: 'Precompute did not process any items', timeout: 4000 });
             }
@@ -664,9 +664,9 @@ import { precomputeStatus } from '$lib/stores/precompute';
       }
       
       // Run precompute which includes moderation
-      console.log('[TopAppBar] Starting college recruiting filter - calling precomputeNow(50)');
+      console.log('[TopAppBar] Starting college recruiting filter - calling precomputeNow(200, { moderationPriority: true })');
       const { precomputeNow } = await import('$lib/ai/precompute');
-      const result: any = await precomputeNow(50); // Process more threads
+      const result: any = await precomputeNow(200, { moderationPriority: true }); // Process more threads and prioritize moderation
       console.log('[TopAppBar] Precompute completed:', result);
       
       if (result && result.processed > 0) {

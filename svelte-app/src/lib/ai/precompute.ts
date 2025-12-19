@@ -335,6 +335,10 @@ function isUnfilteredInbox(thread: GmailThread): boolean {
     
     // If thread has both INBOX and custom labels, it might be legitimately labeled
     // Only exclude if it seems like a snooze pattern (custom label without clear inbox intent)
+    if (hasCustomSnoozeLabels && !labels.includes('INBOX')) {
+      return false;
+    }
+    
     return true;
   } catch {
     return false;
@@ -501,7 +505,13 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T)
   return results;
 }
 
-export async function tickPrecompute(limit = 10, skipSync = false, options?: { cumulativeProcessed?: number; totalCandidates?: number; skipComplete?: boolean }): Promise<{ processed: number; total: number }> {
+export async function tickPrecompute(limit = 10, skipSync = false, options?: { 
+  cumulativeProcessed?: number; 
+  totalCandidates?: number; 
+  skipComplete?: boolean;
+  moderationPriority?: boolean;
+  moderationLimit?: number;
+}): Promise<{ processed: number; total: number }> {
   try {
     console.log('[Precompute] ===== STARTING PRECOMPUTE ===== limit:', limit, 'skipSync:', skipSync, 'options:', options);
     const s = get(settings);
@@ -716,32 +726,14 @@ export async function tickPrecompute(limit = 10, skipSync = false, options?: { c
     const nowVersion = 1; // kept for backwards compatibility checks (no-op with binary cache)
     pushLog('debug', '[Precompute] Using binary cached summaries (no version) nowVersion:', nowVersion);
     
-    const pending: Array<GmailThread> = [];
+    const needsSummaryThreads: Array<GmailThread> = [];
     for (const t of candidates) {
       // Without versions, only recompute when missing or in an error/none state
       // or when content appears changed since last summary (bodyHash/summaryUpdatedAt).
-      const bodyHashExists = !!t.bodyHash;
-      // Do NOT trigger recompute if a cached summary exists. Respect any existing
-      // cached summary and only mark missing/error summaries as needing work.
       const needsSummary = !t.summary || t.summaryStatus === 'none' || t.summaryStatus === 'error';
       const needsSubject = !t.aiSubject || t.aiSubjectStatus === 'none' || t.aiSubjectStatus === 'error';
-      if (needsSummary || needsSubject) pending.push(t);
+      if (needsSummary || needsSubject) needsSummaryThreads.push(t);
     }
-    
-    pushLog('debug', '[Precompute] Pending items:', pending.length);
-    if (pending.length > 0) {
-      pushLog('debug', '[Precompute] Sample pending item:', {
-        threadId: pending[0].threadId,
-        summary: pending[0].summary,
-        summaryStatus: pending[0].summaryStatus,
-        summaryVersion: pending[0].summaryVersion,
-        aiSubject: pending[0].aiSubject,
-        aiSubjectStatus: pending[0].aiSubjectStatus,
-        subjectVersion: pending[0].subjectVersion
-      });
-    }
-    
-    console.log('[Precompute] Pending items check: pending.length=', pending.length, 'candidates.length=', candidates.length);
     
     // Check which threads need moderation (separate from summary processing)
     const needsModerationThreads = candidates.filter(t => {
@@ -759,26 +751,57 @@ export async function tickPrecompute(limit = 10, skipSync = false, options?: { c
     });
     
     console.log('[Precompute] Needs moderation:', needsModerationThreads.length, 'threads');
-    
-    // Add threads that need moderation to pending if not already there
-    if (needsModerationThreads.length > 0) {
-      const pendingIds = new Set(pending.map(t => t.threadId));
-      const toAddForModeration = needsModerationThreads
-        .filter(t => !pendingIds.has(t.threadId))
-        .slice(0, Math.max(0, limit - pending.length));
-      
-      if (toAddForModeration.length > 0) {
-        console.log('[Precompute] Adding', toAddForModeration.length, 'threads for moderation-only processing');
-        pending.push(...toAddForModeration);
+    console.log('[Precompute] Needs summary/subject:', needsSummaryThreads.length, 'threads');
+
+    // Construct the final pending list for this tick, balancing moderation and summaries
+    const pending: Array<GmailThread> = [];
+    const pendingIds = new Set<string>();
+
+    if (options?.moderationPriority) {
+      // If moderation is priority, fill the batch with moderation tasks first
+      const moderationBatch = needsModerationThreads.slice(0, limit);
+      for (const t of moderationBatch) {
+        if (!pendingIds.has(t.threadId)) {
+          pending.push(t);
+          pendingIds.add(t.threadId);
+        }
+      }
+      // Then fill remaining space with summaries
+      if (pending.length < limit) {
+        const summaryBatch = needsSummaryThreads
+          .filter(t => !pendingIds.has(t.threadId))
+          .slice(0, limit - pending.length);
+        for (const t of summaryBatch) {
+          pending.push(t);
+          pendingIds.add(t.threadId);
+        }
+      }
+    } else {
+      // Normal behavior: prioritize summaries, then fill with moderation
+      const summaryBatch = needsSummaryThreads.slice(0, limit);
+      for (const t of summaryBatch) {
+        pending.push(t);
+        pendingIds.add(t.threadId);
+      }
+      if (pending.length < limit) {
+        const moderationBatch = needsModerationThreads
+          .filter(t => !pendingIds.has(t.threadId))
+          .slice(0, limit - pending.length);
+        for (const t of moderationBatch) {
+          pending.push(t);
+          pendingIds.add(t.threadId);
+        }
       }
     }
+    
+    pushLog('debug', '[Precompute] Pending items for this tick:', pending.length, 
+      '(Summary priority:', !options?.moderationPriority, ')');
     
     if (!pending.length) {
       console.log('[Precompute] No pending items or moderation needed - returning early');
       pushLog('debug', '[Precompute] No pending items found');
       // Check if this is because all items already have summaries
       const allHaveSummaries = candidates.every(t => {
-        // Version checks disabled (binary cache), so mismatch is always false
         const needsSummary = !t.summary || t.summaryStatus === 'none' || t.summaryStatus === 'error';
         const needsSubject = !t.aiSubject || t.aiSubjectStatus === 'none' || t.aiSubjectStatus === 'error';
         return !needsSummary && !needsSubject;
@@ -787,16 +810,13 @@ export async function tickPrecompute(limit = 10, skipSync = false, options?: { c
       if (allHaveSummaries) {
         console.log('[Precompute] All items already have up-to-date summaries and subjects');
         pushLog('debug', '[Precompute] All items already have up-to-date summaries and subjects');
-      } else {
-        console.log('[Precompute] Items exist but none need processing (possible version mismatch)');
-        pushLog('debug', '[Precompute] Items exist but none need processing (possible version mismatch)');
       }
       
       if (!options?.skipComplete) precomputeStatus.complete();
       return { processed: 0, total: candidates.length };
     }
 
-    const batch = pending.slice(0, Math.max(1, limit));
+    const batch = pending; // already limited by logic above
     console.log('[Precompute] Processing batch of:', batch.length, 'threads');
     pushLog('debug', '[Precompute] Processing batch of:', batch.length);
     
@@ -987,9 +1007,13 @@ export async function tickPrecompute(limit = 10, skipSync = false, options?: { c
     if (moderationTargets.length) {
       console.log('[Precompute] Running college recruiting moderation for', moderationTargets.length, 'threads');
       pushLog('debug', '[Precompute] Running college recruiting moderation for', moderationTargets.length, 'threads');
+      
+      const modMsg = `Checking ${moderationTargets.length} recruiting candidates...`;
+      const summMsg = summaryTargets.length > 0 ? ` (and ${summaryTargets.length} summaries)` : '';
+      
       precomputeStatus.updateProgress(
-        cumulativeOffset + summaryTargets.length + wantsSubject.length,
-        `Checking ${moderationTargets.length} recruiting candidates...`
+        cumulativeOffset + summaryTargets.length + (wantsSubject?.length || 0),
+        modMsg + summMsg
       );
 
       await mapWithConcurrency(moderationTargets, 2, async (p) => {
@@ -1100,10 +1124,19 @@ export async function tickPrecompute(limit = 10, skipSync = false, options?: { c
     // Persist results
     pushLog('debug', '[Precompute] Persisting results...');
     try {
-      const tx = db.transaction('threads', 'readwrite');
       const nowMs = Date.now();
-      let updatedCount = 0;
-      const updatedThreads: any[] = [];
+      const updatedThreads: GmailThread[] = [];
+      const queueActions: Array<{ threadId: string; labelId: string }> = [];
+
+      // Pre-fetch label ID and existing threads to avoid awaits inside transaction
+      const labelId = await ensureCollegeRecruitingLabel();
+      const existingThreadsMap = new Map<string, GmailThread>();
+      const txRead = db.transaction('threads', 'readonly');
+      const readResults = await Promise.all(prepared.map(p => txRead.store.get(p.thread.threadId)));
+      prepared.forEach((p, i) => {
+        if (readResults[i]) existingThreadsMap.set(p.thread.threadId, readResults[i] as GmailThread);
+      });
+
       for (const p of prepared) {
         const t = p.thread;
         const sumText = (summaryResults && summaryResults[t.threadId]) || '';
@@ -1112,51 +1145,28 @@ export async function tickPrecompute(limit = 10, skipSync = false, options?: { c
         const subjOk = !!(subjText && subjText.trim());
         const needsSum = !!wantsSummary.find((x) => x.thread.threadId === t.threadId);
         const needsSubj = !!wantsSubject.find((x) => x.thread.threadId === t.threadId);
-        const hadReadySummary = t.summaryStatus === 'ready' && !!t.summary;
-        const computedButWasntRequested = !needsSum && sumOk && !hadReadySummary;
-        const setSummaryFields = needsSum || computedButWasntRequested;
         
-        pushLog('debug', '[Precompute] Thread', t.threadId, ':', {
-          needsSummary: needsSum,
-          needsSubject: needsSubj,
-          summaryOk: sumOk,
-          subjectOk: subjOk,
-          summaryText: sumText ? `${sumText.slice(0, 50)}...` : 'none',
-          subjectText: subjText ? `${subjText.slice(0, 50)}...` : 'none',
-          moderationStatus: p.moderationResult?.status
-        });
-        
-        // Be aggressive about persisting AI fields: do not block writes based
-        // on timestamps or bodyHash. Only skip when the local copy explicitly
-        // removed INBOX or the thread is in TRASH. Preserve any existing
-        // non-empty AI fields (do not overwrite them) to avoid clobbering a
-        // user-updated subject/summary.
-        let existing: GmailThread | undefined;
-        let existingHasAiSubject = false;
-        let existingHasSummary = false;
-        try {
-          existing = await tx.store.get(t.threadId as any) as GmailThread | undefined;
-          if (existing) {
-            const existingHasInbox = Array.isArray(existing.labelIds) && existing.labelIds.includes('INBOX');
-            const incomingHasInbox = Array.isArray((t as any).labelIds) && (t as any).labelIds.includes('INBOX');
-            if (!existingHasInbox && incomingHasInbox) {
-              pushLog('debug', '[Precompute] Skipping persist for', t.threadId, 'local removed INBOX');
-              continue;
-            }
-            if (Array.isArray(existing.labelIds) && existing.labelIds.includes('TRASH')) {
-              pushLog('debug', '[Precompute] Skipping persist for', t.threadId, 'thread is in TRASH');
-              continue;
-            }
-            existingHasAiSubject = !!(existing.aiSubject && String(existing.aiSubject).trim());
-            existingHasSummary = !!(existing.summary && String(existing.summary).trim());
+        const existing = existingThreadsMap.get(t.threadId);
+        if (existing) {
+          const existingHasInbox = Array.isArray(existing.labelIds) && existing.labelIds.includes('INBOX');
+          const incomingHasInbox = Array.isArray((t as any).labelIds) && (t as any).labelIds.includes('INBOX');
+          if (!existingHasInbox && incomingHasInbox) {
+            pushLog('debug', '[Precompute] Skipping persist for', t.threadId, 'local removed INBOX');
+            continue;
           }
-        } catch (e) {
-          pushLog('warn', '[Precompute] Failed to check existing thread for persist guard', t.threadId, e);
+          if (Array.isArray(existing.labelIds) && existing.labelIds.includes('TRASH')) {
+            pushLog('debug', '[Precompute] Skipping persist for', t.threadId, 'thread is in TRASH');
+            continue;
+          }
         }
 
-        // Merge: start from existing to preserve local fields, then overlay
-        // incoming metadata, but only set AI fields when existing ones are
-        // empty.
+        const existingHasAiSubject = !!(existing?.aiSubject && String(existing.aiSubject).trim());
+        const existingHasSummary = !!(existing?.summary && String(existing.summary).trim());
+        const hadReadySummary = existing?.summaryStatus === 'ready' && !!existing.summary;
+        const computedButWasntRequested = !needsSum && sumOk && !hadReadySummary;
+        const setSummaryFields = needsSum || computedButWasntRequested;
+
+        // Merge: start from existing to preserve local fields, then overlay incoming metadata
         const base = existing ? { ...existing } : { ...t };
         const next: GmailThread = {
           ...base,
@@ -1166,6 +1176,7 @@ export async function tickPrecompute(limit = 10, skipSync = false, options?: { c
           summaryUpdatedAt: (existing && existingHasSummary) ? (existing.summaryUpdatedAt || nowMs) : (setSummaryFields ? nowMs : t.summaryUpdatedAt),
           bodyHash: p.bodyHash
         } as any;
+
         if (p.moderationEligible) {
           const mod = p.moderationResult;
           const prevModeration = (existing || t).autoModeration || {};
@@ -1185,23 +1196,16 @@ export async function tickPrecompute(limit = 10, skipSync = false, options?: { c
           };
 
           if (mod?.status === 'match') {
-            try {
-              // Ensure the college recruiting label exists
-              const labelId = await ensureCollegeRecruitingLabel();
-              if (labelId) {
-                pushLog('debug', '[Precompute] Enqueuing label for recruiting match', t.threadId, 'labelId:', labelId);
-                await queueThreadModify(t.threadId, [labelId], ['INBOX'], { optimisticLocal: false });
-                (next as any).autoModeration[MODERATION_RULE_KEY].actionTaken = 'label_enqueued';
-              } else {
-                pushLog('error', '[Precompute] Could not get college_recruiting label ID for', t.threadId);
-                (next as any).autoModeration[MODERATION_RULE_KEY].lastError = 'Failed to get label ID';
-              }
-            } catch (err) {
-              pushLog('error', '[Precompute] Failed to enqueue label for', t.threadId, err);
-              (next as any).autoModeration[MODERATION_RULE_KEY].lastError = String(err instanceof Error ? err.message : err);
+            if (labelId) {
+              queueActions.push({ threadId: t.threadId, labelId });
+              (next as any).autoModeration[MODERATION_RULE_KEY].actionTaken = 'label_enqueued';
+            } else {
+              pushLog('error', '[Precompute] Could not get college_recruiting label ID for', t.threadId);
+              (next as any).autoModeration[MODERATION_RULE_KEY].lastError = 'Failed to get label ID';
             }
           }
         }
+
         if (needsSubj) {
           if (subjOk) {
             if (existing && existingHasAiSubject) {
@@ -1217,19 +1221,31 @@ export async function tickPrecompute(limit = 10, skipSync = false, options?: { c
             (next as any).aiSubjectStatus = (t as any).aiSubjectStatus || 'error';
           }
         }
-        await tx.store.put(next);
-        updatedCount++;
         updatedThreads.push(next);
       }
-      await tx.done;
-      pushLog('debug', '[Precompute] Updated', updatedCount, 'threads in database');
+
+      // Fast transaction for all puts
+      const txWrite = db.transaction('threads', 'readwrite');
+      for (const ut of updatedThreads) {
+        await txWrite.store.put(ut);
+      }
+      await txWrite.done;
+      pushLog('debug', '[Precompute] Updated', updatedThreads.length, 'threads in database');
+
+      // Run queue actions AFTER transaction
+      for (const action of queueActions) {
+        try {
+          pushLog('debug', '[Precompute] Enqueuing label for recruiting match', action.threadId, 'labelId:', action.labelId);
+          await queueThreadModify(action.threadId, [action.labelId], ['INBOX'], { optimisticLocal: false });
+        } catch (err) {
+          pushLog('error', '[Precompute] Failed to enqueue label for', action.threadId, err);
+        }
+      }
+
       // Merge updates into in-memory threads store so UI updates immediately
       try {
         const current = Array.isArray(getStore(threads)) ? getStore(threads) : [];
-        const merged = [...current].reduce((acc, t) => {
-          acc.push(t);
-          return acc;
-        }, [] as any[]);
+        const merged = [...current];
         for (const ut of updatedThreads) {
           const idx = merged.findIndex((x) => x.threadId === ut.threadId);
           if (idx >= 0) merged[idx] = { ...merged[idx], ...ut };
@@ -1273,14 +1289,17 @@ export async function tickPrecompute(limit = 10, skipSync = false, options?: { c
   }
 }
 
-export async function precomputeNow(limit = 500): Promise<{ processed: number; total: number }> {
-  pushLog('debug', '[Precompute] precomputeNow starting with limit:', limit);
+export async function precomputeNow(limit = 500, options?: { moderationPriority?: boolean }): Promise<{ processed: number; total: number }> {
+  pushLog('debug', '[Precompute] precomputeNow starting with limit:', limit, 'options:', options);
   let totalProcessed = 0;
   let candidatesTotal = 0;
   
   // First tick includes Gmail sync and sets up the progress bar
   // We use a reasonably small batch size for the first tick to give fast feedback
-  let result = await tickPrecompute(Math.min(limit, 25), false, { skipComplete: true });
+  let result = await tickPrecompute(Math.min(limit, 25), false, { 
+    skipComplete: true,
+    moderationPriority: options?.moderationPriority
+  });
   totalProcessed += result.processed;
   candidatesTotal = result.total;
   
@@ -1305,7 +1324,8 @@ export async function precomputeNow(limit = 500): Promise<{ processed: number; t
     result = await tickPrecompute(nextBatchSize, true, { 
       cumulativeProcessed: totalProcessed, 
       totalCandidates: candidatesTotal,
-      skipComplete: true 
+      skipComplete: true,
+      moderationPriority: options?.moderationPriority
     });
     
     if (result.processed === 0) break;
