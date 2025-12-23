@@ -41,6 +41,10 @@ async function handleRefresh() {
 		
 		if (success) {
 			markOnline();
+			// Dispatch request to refresh content since session is now fresh
+			if (typeof window !== 'undefined') {
+				window.dispatchEvent(new CustomEvent('jmail:requestSync'));
+			}
 			showSnackbar({
 				message: '✓ Session refreshed successfully!',
 				timeout: 3000,

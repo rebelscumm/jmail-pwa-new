@@ -2,10 +2,16 @@ import { get } from 'svelte/store';
 import { settings } from '$lib/stores/settings';
 import { getDB } from '$lib/db/indexeddb';
 import type { GmailMessage, GmailThread, GmailAttachment } from '$lib/types';
-import { aiSummarizeEmail, aiSummarizeSubject, aiDetectCollegeRecruiting } from '$lib/ai/providers';
+import {
+  aiSummarizeEmail,
+  aiSummarizeSubject,
+  aiRunModeration
+} from '$lib/ai/providers';
 import {
   getEmailSummaryCombinedPrompt,
-  getSubjectImprovementCombinedPrompt
+  getSubjectImprovementCombinedPrompt,
+  getCollegeRecruitingModerationPrompt,
+  getReviewsModerationPrompt
 } from '$lib/ai/prompts';
 import { queueThreadModify } from '$lib/queue/intents';
 import { precomputeStatus } from '$lib/stores/precompute';
@@ -18,96 +24,90 @@ const PRECOMPUTE_LOG_CAP = 1000; // hard cap on retained logs
 const PRECOMPUTE_LOG_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 7; // 7 days
 const _precomputeLogs: PrecomputeLogEntry[] = [];
 
-const MODERATION_RULE_KEY = 'college_recruiting_v1';
-const MODERATION_PROMPT_VERSION = 1;
-const COLLEGE_RECRUITING_LABEL_NAME = 'college_recruiting';
+// Moderation Rules Configuration
+const MODERATION_RULES = [
+  {
+    id: 'college_recruiting_v2',
+    labelName: 'college_recruiting',
+    prompt: getCollegeRecruitingModerationPrompt(),
+    version: 2
+  },
+  {
+    id: 'reviews_v1',
+    labelName: 'reviews',
+    prompt: getReviewsModerationPrompt(),
+    version: 1
+  }
+];
 
-// Cache for the college recruiting label ID
-let _collegeRecruitingLabelId: string | null = null;
+// Cache for label IDs
+const _labelIdCache: Record<string, string> = {};
 
-async function ensureCollegeRecruitingLabel(): Promise<string | null> {
-  if (_collegeRecruitingLabelId) return _collegeRecruitingLabelId;
+async function ensureLabel(name: string): Promise<string | null> {
+  if (_labelIdCache[name]) return _labelIdCache[name];
   
   try {
     const { listLabels, createLabel } = await import('$lib/gmail/api');
     const labels = await listLabels();
-    const existing = labels.find((l) => l.name === COLLEGE_RECRUITING_LABEL_NAME);
+    const existing = labels.find((l) => l.name === name);
     
     if (existing && existing.id) {
-      _collegeRecruitingLabelId = existing.id;
-      pushLog('debug', '[Precompute] Found existing college_recruiting label:', existing.id);
+      _labelIdCache[name] = existing.id;
+      pushLog('debug', `[Precompute] Found existing label "${name}":`, existing.id);
       return existing.id;
     }
     
     // Create the label
-    pushLog('debug', '[Precompute] Creating college_recruiting label');
-    const newLabel = await createLabel(COLLEGE_RECRUITING_LABEL_NAME);
-    _collegeRecruitingLabelId = newLabel.id;
-    pushLog('debug', '[Precompute] Created college_recruiting label:', newLabel.id);
+    pushLog('debug', `[Precompute] Creating label "${name}"`);
+    const newLabel = await createLabel(name);
+    _labelIdCache[name] = newLabel.id;
+    pushLog('debug', `[Precompute] Created label "${name}":`, newLabel.id);
     return newLabel.id;
   } catch (e) {
-    pushLog('error', '[Precompute] Failed to ensure college_recruiting label:', e);
+    pushLog('error', `[Precompute] Failed to ensure label "${name}":`, e);
     return null;
   }
 }
 
-function shouldRunRecruitingModeration(thread: GmailThread, prepared: { bodyText?: string; bodyHtml?: string; subject?: string; summary?: string }): boolean {
+function getEligibleModerationRule(thread: GmailThread, prepared: { bodyText?: string; bodyHtml?: string; subject?: string; summary?: string }): typeof MODERATION_RULES[0] | null {
   try {
     const labels = thread.labelIds || [];
-    if (!labels.includes('INBOX')) {
-      pushLog('debug', '[Precompute] Thread not in INBOX:', thread.threadId);
-      return false;
-    }
-    if (labels.includes('TRASH') || labels.includes('SPAM')) {
-      pushLog('debug', '[Precompute] Thread in TRASH/SPAM:', thread.threadId);
-      return false;
-    }
+    if (!labels.includes('INBOX')) return null;
+    if (labels.includes('TRASH') || labels.includes('SPAM')) return null;
     
-    // Check if we have at least subject, summary, or body content (AI can work with any of these)
+    // Check content availability
     const hasSubject = prepared.subject && prepared.subject.trim().length > 0;
     const hasSummary = prepared.summary && prepared.summary.trim().length > 0;
     const hasBody = !!(prepared.bodyText || prepared.bodyHtml);
-    if (!hasSubject && !hasSummary && !hasBody) {
-      pushLog('debug', '[Precompute] Thread has no subject, summary, or body content:', thread.threadId);
-      return false;
-    }
-    
-    // Skip if already labeled as college recruiting
-    const hasCollegeLabel = labels.some(l => l.includes('college_recruiting') || l === _collegeRecruitingLabelId);
-    if (hasCollegeLabel) {
-      pushLog('debug', '[Precompute] Thread already has college_recruiting label:', thread.threadId);
-      return false;
-    }
-    
-    const existing = thread.autoModeration?.[MODERATION_RULE_KEY];
+    if (!hasSubject && !hasSummary && !hasBody) return null;
+
     const lastActivity = Number(thread.lastMsgMeta?.date) || 0;
-    if (!existing) {
-      pushLog('debug', '[Precompute] Thread eligible for moderation (no existing):', thread.threadId);
-      return true;
+
+    for (const rule of MODERATION_RULES) {
+      // Skip if already labeled with this rule's label
+      const hasLabel = labels.some(l => l.includes(rule.labelName) || l === _labelIdCache[rule.labelName]);
+      if (hasLabel) continue;
+
+      const existing = thread.autoModeration?.[rule.id];
+      if (!existing) return rule;
+
+      // Retry if status is not decisive or error
+      if (existing.status === 'pending' || existing.status === 'error' || existing.status === 'unknown') return rule;
+
+      // Retry if prompt version changed
+      if (existing.promptVersion !== rule.version) return rule;
+
+      // Retry if new activity since last moderation
+      if (existing.status === 'not_match' && lastActivity > (existing.updatedAt || 0)) return rule;
+
+      // Retry if match but action failed
+      if (existing.status === 'match' && existing.actionTaken !== 'label_enqueued') return rule;
     }
-    if (existing.status === 'pending' || existing.status === 'error' || existing.status === 'unknown') {
-      pushLog('debug', '[Precompute] Thread eligible for moderation (retry):', thread.threadId, 'status:', existing.status);
-      return true;
-    }
-    if (existing.promptVersion !== MODERATION_PROMPT_VERSION) {
-      pushLog('debug', '[Precompute] Thread eligible for moderation (version mismatch):', thread.threadId);
-      return true;
-    }
-    if (existing.status === 'not_match') {
-      const shouldRetry = lastActivity > (existing.updatedAt || 0);
-      pushLog('debug', '[Precompute] Thread not_match, retry:', shouldRetry, thread.threadId);
-      return shouldRetry;
-    }
-    if (existing.status === 'match') {
-      const shouldRetry = existing.actionTaken !== 'label_enqueued';
-      pushLog('debug', '[Precompute] Thread match, retry:', shouldRetry, thread.threadId, 'actionTaken:', existing.actionTaken, 'existing:', JSON.stringify(existing));
-      return shouldRetry;
-    }
-    pushLog('debug', '[Precompute] Thread not eligible for moderation:', thread.threadId);
-    return false;
+
+    return null;
   } catch (e) {
     pushLog('warn', '[Precompute] Error checking moderation eligibility:', thread.threadId, e);
-    return false;
+    return null;
   }
 }
 
@@ -740,14 +740,10 @@ export async function tickPrecompute(limit = 10, skipSync = false, options?: {
       const labels = t.labelIds || [];
       if (!labels.includes('INBOX')) return false;
       if (labels.includes('TRASH') || labels.includes('SPAM')) return false;
-      const hasCollegeLabel = labels.some(l => l.includes('college_recruiting'));
-      if (hasCollegeLabel) return false;
-      const existing = t.autoModeration?.[MODERATION_RULE_KEY];
-      if (!existing) return true;
-      if (existing.status === 'pending' || existing.status === 'error' || existing.status === 'unknown') return true;
-      if (existing.promptVersion !== MODERATION_PROMPT_VERSION) return true;
-      if (existing.status === 'match' && existing.actionTaken !== 'label_enqueued') return true;
-      return false;
+      
+      // Check if any rule is eligible
+      const eligibleRule = getEligibleModerationRule(t, { subject: t.lastMsgMeta?.subject, summary: t.summary });
+      return !!eligibleRule;
     });
     
     console.log('[Precompute] Needs moderation:', needsModerationThreads.length, 'threads');
@@ -841,14 +837,27 @@ export async function tickPrecompute(limit = 10, skipSync = false, options?: {
       const text = `${subject}\n\n${bodyText || ''}${!bodyText && bodyHtml ? bodyHtml : ''}${attText ? `\n\n${attText}` : ''}`.trim();
       const bodyHash = simpleHash(text || subject || t.threadId);
       
-      // For moderation, prefer using existing AI summary if available, otherwise use body or subject
+      // For moderation, find the first eligible rule
       const summary = t.summary;
-      const moderationEligible = shouldRunRecruitingModeration(t, { bodyText, bodyHtml, subject, summary });
-      return { thread: t, subject, bodyText, bodyHtml, summary, attachments, text, bodyHash, moderationEligible, moderationResult: null as null | {
-        status: 'match' | 'not_match' | 'unknown' | 'error';
-        raw?: string;
-        error?: unknown;
-      } } as any;
+      const moderationRule = getEligibleModerationRule(t, { bodyText, bodyHtml, subject, summary });
+      return { 
+        thread: t, 
+        subject, 
+        bodyText, 
+        bodyHtml, 
+        summary, 
+        attachments, 
+        text, 
+        bodyHash, 
+        moderationRule, 
+        moderationResult: null as null | {
+          status: 'match' | 'not_match' | 'unknown' | 'error';
+          ruleId: string;
+          labelName: string;
+          raw?: string;
+          error?: unknown;
+        } 
+      } as any;
     });
 
     // Before marking items as pending, re-check DB state to avoid touching threads the user removed
@@ -984,31 +993,16 @@ export async function tickPrecompute(limit = 10, skipSync = false, options?: {
       }
     }
 
-    // Run college recruiting moderation for eligible threads
-    const moderationTargets = prepared.filter((p) => p.moderationEligible);
+    // Run moderation for eligible threads
+    const moderationTargets = prepared.filter((p) => p.moderationRule);
     console.log('[Precompute] Moderation eligibility check: total prepared:', prepared.length, 'eligible:', moderationTargets.length);
     pushLog('debug', '[Precompute] Moderation eligibility check: total prepared:', prepared.length, 'eligible:', moderationTargets.length);
     
-    if (moderationTargets.length === 0 && prepared.length > 0) {
-      console.log('[Precompute] No eligible threads for moderation. Sample thread check:');
-      const sample = prepared[0];
-      if (sample) {
-        console.log('  - Thread ID:', sample.thread.threadId);
-        console.log('  - Subject:', sample.subject);
-        console.log('  - Has summary:', !!sample.summary);
-        console.log('  - Has bodyText:', !!sample.bodyText);
-        console.log('  - Has bodyHtml:', !!sample.bodyHtml);
-        console.log('  - Labels:', sample.thread.labelIds);
-        console.log('  - moderationEligible:', sample.moderationEligible);
-        console.log('  - Existing moderation:', sample.thread.autoModeration?.[MODERATION_RULE_KEY]);
-      }
-    }
-    
     if (moderationTargets.length) {
-      console.log('[Precompute] Running college recruiting moderation for', moderationTargets.length, 'threads');
-      pushLog('debug', '[Precompute] Running college recruiting moderation for', moderationTargets.length, 'threads');
+      console.log('[Precompute] Running moderation for', moderationTargets.length, 'threads');
+      pushLog('debug', '[Precompute] Running moderation for', moderationTargets.length, 'threads');
       
-      const modMsg = `Checking ${moderationTargets.length} recruiting candidates...`;
+      const modMsg = `Checking ${moderationTargets.length} moderation candidates...`;
       const summMsg = summaryTargets.length > 0 ? ` (and ${summaryTargets.length} summaries)` : '';
       
       precomputeStatus.updateProgress(
@@ -1018,24 +1012,32 @@ export async function tickPrecompute(limit = 10, skipSync = false, options?: {
 
       await mapWithConcurrency(moderationTargets, 2, async (p) => {
         try {
-          console.log('[Precompute] Calling aiDetectCollegeRecruiting for', p.thread.threadId, 
-            'hasSummary:', !!p.summary, 'hasBody:', !!(p.bodyText || p.bodyHtml));
+          const rule = p.moderationRule;
+          console.log('[Precompute] Calling aiRunModeration for', p.thread.threadId, 
+            'rule:', rule.id, 'hasSummary:', !!p.summary);
           
           // Prefer using existing AI summary if available, fall back to body
           const contentForAI = p.summary || p.bodyText || p.bodyHtml;
-          const result = await aiDetectCollegeRecruiting(p.subject, contentForAI, undefined, p.thread.lastMsgMeta?.from);
+          const result = await aiRunModeration(rule.prompt, p.subject, contentForAI, undefined, p.thread.lastMsgMeta?.from);
           
           p.moderationResult = {
             status:
               result.verdict === 'match' ? 'match' :
               result.verdict === 'not_match' ? 'not_match' : 'unknown',
+            ruleId: rule.id,
+            labelName: rule.labelName,
             raw: result.raw
           };
-          console.log('[Precompute] Moderation verdict for', p.thread.threadId, ':', result.verdict);
-          pushLog('debug', '[Precompute] Moderation verdict for', p.thread.threadId, ':', result.verdict);
+          console.log('[Precompute] Moderation verdict for', p.thread.threadId, 'rule:', rule.id, ':', result.verdict);
+          pushLog('debug', '[Precompute] Moderation verdict for', p.thread.threadId, 'rule:', rule.id, ':', result.verdict);
         } catch (e) {
           console.error('[Precompute] Moderation failed for', p.thread.threadId, e);
-          p.moderationResult = { status: 'error', error: e instanceof Error ? e.message : String(e) };
+          p.moderationResult = { 
+            status: 'error', 
+            ruleId: p.moderationRule.id,
+            labelName: p.moderationRule.labelName,
+            error: e instanceof Error ? e.message : String(e) 
+          };
           pushLog('warn', '[Precompute] Moderation failed for', p.thread.threadId, e);
         }
       });
@@ -1121,15 +1123,13 @@ export async function tickPrecompute(limit = 10, skipSync = false, options?: {
       'Saving AI summaries and subjects...'
     );
     
-    // Persist results
+      // Persist results
     pushLog('debug', '[Precompute] Persisting results...');
     try {
       const nowMs = Date.now();
       const updatedThreads: GmailThread[] = [];
       const queueActions: Array<{ threadId: string; labelId: string }> = [];
-
-      // Pre-fetch label ID and existing threads to avoid awaits inside transaction
-      const labelId = await ensureCollegeRecruitingLabel();
+      
       const existingThreadsMap = new Map<string, GmailThread>();
       
       // Use individual db.get calls in parallel instead of a manual transaction
@@ -1179,31 +1179,34 @@ export async function tickPrecompute(limit = 10, skipSync = false, options?: {
           bodyHash: p.bodyHash
         } as any;
 
-        if (p.moderationEligible) {
+        if (p.moderationRule && p.moderationResult) {
           const mod = p.moderationResult;
+          const ruleId = mod.ruleId;
+          const rule = MODERATION_RULES.find(r => r.id === ruleId);
           const prevModeration = (existing || t).autoModeration || {};
-          const moderationEntry = (prevModeration as any)[MODERATION_RULE_KEY] || {};
+          const moderationEntry = (prevModeration as any)[ruleId] || {};
           const nextModerationEntry = {
             ...moderationEntry,
-            status: mod?.status || 'error',
-            raw: mod?.raw,
-            lastError: mod?.error ? String(mod.error) : undefined,
-            promptVersion: MODERATION_PROMPT_VERSION,
+            status: mod.status,
+            raw: mod.raw,
+            lastError: mod.error ? String(mod.error) : undefined,
+            promptVersion: rule?.version,
             updatedAt: nowMs,
             actionTaken: moderationEntry.actionTaken
           };
           (next as any).autoModeration = {
             ...prevModeration,
-            [MODERATION_RULE_KEY]: nextModerationEntry
+            [ruleId]: nextModerationEntry
           };
 
-          if (mod?.status === 'match') {
+          if (mod.status === 'match') {
+            const labelId = await ensureLabel(mod.labelName);
             if (labelId) {
               queueActions.push({ threadId: t.threadId, labelId });
-              (next as any).autoModeration[MODERATION_RULE_KEY].actionTaken = 'label_enqueued';
+              (next as any).autoModeration[ruleId].actionTaken = 'label_enqueued';
             } else {
-              pushLog('error', '[Precompute] Could not get college_recruiting label ID for', t.threadId);
-              (next as any).autoModeration[MODERATION_RULE_KEY].lastError = 'Failed to get label ID';
+              pushLog('error', `[Precompute] Could not get label ID for "${mod.labelName}" on thread`, t.threadId);
+              (next as any).autoModeration[ruleId].lastError = 'Failed to get label ID';
             }
           }
         }
@@ -1346,7 +1349,7 @@ export async function precomputeNow(limit = 500, options?: { moderationPriority?
  * Clear moderation data for threads that were tested but not labeled
  * This allows precompute to reprocess them
  */
-export async function clearModerationDataForThread(threadId: string): Promise<{ success: boolean; message: string }> {
+export async function clearModerationDataForThread(threadId: string, ruleId?: string): Promise<{ success: boolean; message: string }> {
   try {
     const db = await getDB();
     const thread = await db.get('threads', threadId);
@@ -1355,15 +1358,16 @@ export async function clearModerationDataForThread(threadId: string): Promise<{ 
       return { success: false, message: 'Thread not found in local database' };
     }
     
-    const existing = thread.autoModeration?.[MODERATION_RULE_KEY];
+    const targetRuleId = ruleId || 'college_recruiting_v2'; // default for backward compat
+    const existing = thread.autoModeration?.[targetRuleId];
     if (!existing) {
-      return { success: false, message: 'No moderation data found for this thread' };
+      return { success: false, message: `No moderation data found for rule "${targetRuleId}" on this thread` };
     }
     
     // Only clear if it was a match but no action was taken
     if (existing.status === 'match' && existing.actionTaken !== 'label_enqueued') {
       const updatedModeration = { ...thread.autoModeration };
-      delete updatedModeration[MODERATION_RULE_KEY];
+      delete updatedModeration[targetRuleId];
       
       const updatedThread = {
         ...thread,
@@ -1371,7 +1375,7 @@ export async function clearModerationDataForThread(threadId: string): Promise<{ 
       };
       
       await db.put('threads', updatedThread);
-      return { success: true, message: 'Moderation data cleared - thread will be reprocessed by precompute' };
+      return { success: true, message: `Moderation data for "${targetRuleId}" cleared - thread will be reprocessed by precompute` };
     } else {
       return { success: false, message: `Cannot clear moderation data - status: ${existing.status}, actionTaken: ${existing.actionTaken}` };
     }
@@ -1384,16 +1388,21 @@ export async function clearModerationDataForThread(threadId: string): Promise<{ 
 }
 
 /**
- * Manually trigger college recruiting moderation for a specific thread
- * Useful for debugging why a thread wasn't processed automatically
+ * Manually trigger moderation for a specific thread
  */
-export async function moderateThreadManually(threadId: string): Promise<{ success: boolean; message: string; result?: any }> {
+export async function moderateThreadManually(threadId: string, ruleId?: string): Promise<{ success: boolean; message: string; result?: any }> {
   try {
     const db = await getDB();
     const thread = await db.get('threads', threadId);
     
     if (!thread) {
       return { success: false, message: 'Thread not found in local database' };
+    }
+
+    const targetRuleId = ruleId || 'college_recruiting_v2';
+    const rule = MODERATION_RULES.find(r => r.id === targetRuleId);
+    if (!rule) {
+      return { success: false, message: `Moderation rule "${targetRuleId}" not found` };
     }
     
     // Get the last message with full body
@@ -1408,23 +1417,24 @@ export async function moderateThreadManually(threadId: string): Promise<{ succes
     const from = thread.lastMsgMeta?.from || msg.headers?.From || '';
     
     // Run AI detection
-    const result = await aiDetectCollegeRecruiting(subject, msg.bodyText, msg.bodyHtml, from);
+    const contentForAI = thread.summary || msg.bodyText || msg.bodyHtml;
+    const result = await aiRunModeration(rule.prompt, subject, contentForAI, undefined, from);
     
     // If it's a match, apply the label
     if (result.verdict === 'match') {
-      const labelId = await ensureCollegeRecruitingLabel();
+      const labelId = await ensureLabel(rule.labelName);
       if (labelId) {
         await queueThreadModify(threadId, [labelId], ['INBOX'], { optimisticLocal: false });
         
         // Update local thread data
         const nowMs = Date.now();
         const prevModeration = thread.autoModeration || {};
-        const moderationEntry = (prevModeration as any)[MODERATION_RULE_KEY] || {};
+        const moderationEntry = (prevModeration as any)[targetRuleId] || {};
         const nextModerationEntry = {
           ...moderationEntry,
           status: 'match',
           raw: result.raw,
-          promptVersion: MODERATION_PROMPT_VERSION,
+          promptVersion: rule.version,
           updatedAt: nowMs,
           actionTaken: 'label_enqueued'
         };
@@ -1433,7 +1443,7 @@ export async function moderateThreadManually(threadId: string): Promise<{ succes
           ...thread,
           autoModeration: {
             ...prevModeration,
-            [MODERATION_RULE_KEY]: nextModerationEntry
+            [targetRuleId]: nextModerationEntry
           }
         };
         
@@ -1441,22 +1451,22 @@ export async function moderateThreadManually(threadId: string): Promise<{ succes
         
         return { 
           success: true, 
-          message: `Thread labeled as college recruiting and removed from inbox`,
+          message: `Thread labeled as "${rule.labelName}" and removed from inbox`,
           result: { verdict: result.verdict, raw: result.raw, labelId }
         };
       } else {
-        return { success: false, message: 'Failed to get college_recruiting label ID' };
+        return { success: false, message: `Failed to get label ID for "${rule.labelName}"` };
       }
     } else {
       // Update local thread data even for non-matches
       const nowMs = Date.now();
       const prevModeration = thread.autoModeration || {};
-      const moderationEntry = (prevModeration as any)[MODERATION_RULE_KEY] || {};
+      const moderationEntry = (prevModeration as any)[targetRuleId] || {};
       const nextModerationEntry = {
         ...moderationEntry,
         status: result.verdict === 'not_match' ? 'not_match' : 'unknown',
         raw: result.raw,
-        promptVersion: MODERATION_PROMPT_VERSION,
+        promptVersion: rule.version,
         updatedAt: nowMs,
         actionTaken: moderationEntry.actionTaken
       };
@@ -1465,7 +1475,7 @@ export async function moderateThreadManually(threadId: string): Promise<{ succes
         ...thread,
         autoModeration: {
           ...prevModeration,
-          [MODERATION_RULE_KEY]: nextModerationEntry
+          [targetRuleId]: nextModerationEntry
         }
       };
       
@@ -1473,7 +1483,7 @@ export async function moderateThreadManually(threadId: string): Promise<{ succes
       
       return { 
         success: true, 
-        message: `Thread classified as ${result.verdict}`,
+        message: `Thread classified as ${result.verdict} for rule "${targetRuleId}"`,
         result: { verdict: result.verdict, raw: result.raw }
       };
     }

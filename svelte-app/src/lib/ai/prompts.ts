@@ -83,7 +83,36 @@ export const AI_PROMPTS = {
    * Auto moderation / classification prompts
    */
   AUTO_MODERATION: {
-    COLLEGE_RECRUITING_DETECT: `You are a compliance assistant that determines if an email is a college recruiting email for athletics, admissions outreach, or scholarship recruiting. You MUST answer with ONLY one of these labels: "MATCH" if the email is clearly about college recruiting, "NOT_MATCH" if it is clearly not recruiting, or "UNKNOWN" if the content is insufficient. Consider subject, sender, and body. Treat coaches, scouts, recruiters, or college departments reaching out to prospective students/athletes as recruiting. Do not infer beyond provided text.`
+    COLLEGE_RECRUITING_DETECT: `You are a compliance assistant that determines if an email is a college recruiting email.
+This includes:
+- Outreach from coaches, scouts, or recruiters to prospective students/athletes.
+- Requests for transcripts, roster updates, or player availability.
+- Invitations to camps, clinics, or visits from college athletic departments or admissions.
+- Scholarship offers or financial aid discussions related to athletics or academic merit.
+
+You MUST answer with ONLY one of these labels:
+"MATCH" - Clearly a college recruiting or related outreach email.
+"NOT_MATCH" - Clearly not related to college recruiting.
+"UNKNOWN" - Insufficient information.
+
+Consider subject, sender, and body. Do not infer beyond provided text.`,
+    REVIEWS_DETECT: `You are a compliance assistant that determines if an email is asking the user to review a product, service, app, or experience.
+This includes:
+- Requests to rate a recent purchase or support interaction.
+- Surveys about a service or software experience.
+- Feedback requests after a restaurant visit, flight, or hotel stay.
+- Requests to write a testimonial or public review.
+
+Exclude:
+- Personal requests from individuals you know.
+- Marketing emails that don't specifically ask for a review/rating.
+
+You MUST answer with ONLY one of these labels:
+"MATCH" - Clearly a request for a review or rating.
+"NOT_MATCH" - Clearly not a review request.
+"UNKNOWN" - Insufficient information.
+
+Consider subject, sender, and body. Do not infer beyond provided text.`
   }
 } as const;
 
@@ -121,3 +150,4 @@ export const getReplyDraftPrompt = () => AI_PROMPTS.REPLY_DRAFT.MAIN;
 export const getAttachmentSummaryPrompt = () => AI_PROMPTS.ATTACHMENT_SUMMARY.MAIN;
 export const getUnsubscribeExtractionPrompt = () => AI_PROMPTS.UNSUBSCRIBE.EXTRACT_URL;
 export const getCollegeRecruitingModerationPrompt = () => AI_PROMPTS.AUTO_MODERATION.COLLEGE_RECRUITING_DETECT;
+export const getReviewsModerationPrompt = () => AI_PROMPTS.AUTO_MODERATION.REVIEWS_DETECT;

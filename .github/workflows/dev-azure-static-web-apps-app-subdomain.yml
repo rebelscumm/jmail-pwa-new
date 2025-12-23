@@ -59,6 +59,31 @@
 #                https://ntfy.sh/$TOPIC || echo "Notification failed (optional)"
 #         env:
 #           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+#
+#       - name: Notify Deployment Failure
+#         if: failure() && github.event_name == 'push'
+#         run: |
+#           COMMIT_MSG=$(git log -1 --pretty=format:"%s" ${{ github.sha }})
+#           COMMIT_AUTHOR=$(git log -1 --pretty=format:"%an" ${{ github.sha }})
+#           COMMIT_SHORT=$(echo ${{ github.sha }} | cut -c1-7)
+#           BRANCH="${{ github.ref_name }}"
+#           
+#           TOPIC="${NTFY_TOPIC:-jmail-pwa-deploy}"
+#           
+#           curl -H "Title: Deployment FAILED (Dev)" \
+#                -H "Priority: high" \
+#                -H "Tags: warning,skull" \
+#                -d "Dev deployment failed!
+# 
+#           Branch: $BRANCH
+#           Commit: $COMMIT_SHORT
+#           Author: $COMMIT_AUTHOR
+#           Message: $COMMIT_MSG
+#           
+#           Check GitHub Actions for details." \
+#                https://ntfy.sh/$TOPIC || echo "Notification failed (optional)"
+#         env:
+#           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
 
 #       # Display deployment URLs
 #       - name: Display Deployment Information

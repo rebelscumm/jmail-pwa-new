@@ -1147,14 +1147,17 @@ import { precomputeStatus } from '$lib/stores/precompute';
   onMount(() => {
     const handleRefresh = () => { void refreshLabelStats(); };
     const handleRefreshLabelStats = () => { void refreshLabelStats(); };
+    const handleRequestSync = () => { void doComprehensiveRefresh(); };
     
     try {
       window.addEventListener('jmail:refresh', handleRefresh);
       window.addEventListener('jmail:refreshLabelStats', handleRefreshLabelStats);
+      window.addEventListener('jmail:requestSync', handleRequestSync);
     } catch (_) {}
     return () => {
       try { window.removeEventListener('jmail:refresh', handleRefresh); } catch (_) {}
       try { window.removeEventListener('jmail:refreshLabelStats', handleRefreshLabelStats); } catch (_) {}
+      try { window.removeEventListener('jmail:requestSync', handleRequestSync); } catch (_) {}
     };
   });
 

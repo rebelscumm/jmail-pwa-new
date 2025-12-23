@@ -10,7 +10,8 @@ import {
   getReplyDraftPrompt,
   getAttachmentSummaryPrompt,
   getUnsubscribeExtractionPrompt,
-  getCollegeRecruitingModerationPrompt
+  getCollegeRecruitingModerationPrompt,
+  getReviewsModerationPrompt
 } from './prompts';
 
 export type AIResult = {
@@ -986,7 +987,8 @@ export async function aiExtractUnsubscribeUrl(subject: string, bodyText?: string
   return match ? match[1] : null;
 }
 
-export async function aiDetectCollegeRecruiting(
+export async function aiRunModeration(
+  prompt: string,
   subject: string,
   bodyText?: string,
   bodyHtml?: string,
@@ -1000,31 +1002,55 @@ export async function aiDetectCollegeRecruiting(
   if (from && from.trim()) segments.push(`From: ${from.trim()}`);
   if (baseText.trim()) segments.push(`Body:\n${baseText.trim()}`);
   const redacted = redactPII(segments.join('\n\n'));
-  const prompt = `${getCollegeRecruitingModerationPrompt()}\n\n${redacted}`;
+  const fullPrompt = `${prompt}\n\n${redacted}`;
   
   // Use the summary model from settings, falling back to appropriate defaults
   const model = s.aiSummaryModel || s.aiModel || (provider === 'gemini' ? 'gemini-1.5-flash' : provider === 'anthropic' ? 'claude-3-haiku-20240307' : 'gpt-4o-mini');
   
   let out: AIResult;
   if (provider === 'anthropic') {
-    out = await callAnthropic(prompt, s.aiSummaryModel || s.aiModel || 'claude-3-haiku-20240307');
+    out = await callAnthropic(fullPrompt, s.aiSummaryModel || s.aiModel || 'claude-3-haiku-20240307');
   } else if (provider === 'gemini') {
-    out = await callGemini(prompt, model);
+    out = await callGemini(fullPrompt, model);
   } else {
-    out = await callOpenAI(prompt, s.aiSummaryModel || s.aiModel || 'gpt-4o-mini');
+    out = await callOpenAI(fullPrompt, s.aiSummaryModel || s.aiModel || 'gpt-4o-mini');
   }
+  
   const raw = (out.text || '').trim();
   const normalized = raw.toUpperCase();
-  if (normalized.startsWith('MATCH')) return { verdict: 'match', raw };
-  if (normalized.startsWith('NOT') || normalized.startsWith('DO NOT MATCH') || normalized.includes('NOT_MATCH') || normalized.includes('NOT MATCH')) {
-    return { verdict: 'not_match', raw };
-  }
-  if (normalized.startsWith('UNKNOWN')) return { verdict: 'unknown', raw };
+  
+  // Robust parsing: check for keywords in the first part of the response
+  // AI sometimes adds preamble even when told not to.
+  const first100 = normalized.slice(0, 100);
+  
+  if (first100.includes('NOT_MATCH') || first100.includes('NOT MATCH')) return { verdict: 'not_match', raw };
+  if (first100.includes('MATCH')) return { verdict: 'match', raw };
+  if (first100.includes('UNKNOWN')) return { verdict: 'unknown', raw };
+  
   // Fallback: check first token
   const firstToken = normalized.split(/\s+/)[0] || '';
   if (firstToken === 'MATCH') return { verdict: 'match', raw };
   if (firstToken === 'NOT_MATCH' || firstToken === 'NOT') return { verdict: 'not_match', raw };
+  
   return { verdict: 'unknown', raw };
+}
+
+export async function aiDetectCollegeRecruiting(
+  subject: string,
+  bodyText?: string,
+  bodyHtml?: string,
+  from?: string
+): Promise<{ verdict: 'match' | 'not_match' | 'unknown'; raw: string }> {
+  return aiRunModeration(getCollegeRecruitingModerationPrompt(), subject, bodyText, bodyHtml, from);
+}
+
+export async function aiDetectReviews(
+  subject: string,
+  bodyText?: string,
+  bodyHtml?: string,
+  from?: string
+): Promise<{ verdict: 'match' | 'not_match' | 'unknown'; raw: string }> {
+  return aiRunModeration(getReviewsModerationPrompt(), subject, bodyText, bodyHtml, from);
 }
 
 

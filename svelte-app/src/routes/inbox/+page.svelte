@@ -227,6 +227,8 @@
     const handleAuthoritativeSync = async () => {
       try {
         await performAuthoritativeInboxSync();
+        // Reload data from IndexedDB into the UI stores to reflect authoritative changes
+        await hydrateFromCache();
         // Emit completion event for TopAppBar
         window.dispatchEvent(new CustomEvent('jmail:authSyncComplete'));
       } catch (e) {
