@@ -950,7 +950,7 @@
         }
       }
       const { setThreadsWithReset } = await import('$lib/stores/optimistic-counters');
-      setThreadsWithReset(merged);
+      await setThreadsWithReset(merged);
     }
     const cachedMessages = await db.getAll('messages');
     if (cachedMessages?.length) {
@@ -1888,7 +1888,7 @@
         const inboxCount = allThreads.filter((t: any) => t.labelIds?.includes('INBOX')).length;
         console.log(`[AuthSync] Refreshing store with ${allThreads.length} total threads (${inboxCount} with INBOX)`);
         const { setThreadsWithReset } = await import('$lib/stores/optimistic-counters');
-        setThreadsWithReset(allThreads as any);
+        await setThreadsWithReset(allThreads as any);
         console.log(`[AuthSync] Store refreshed`);
       } catch (e) {
         console.error('[AuthSync] Failed to refresh store:', e);
@@ -2104,7 +2104,7 @@
           return acc;
         }, [] as typeof current);
         const { setThreadsWithReset } = await import('$lib/stores/optimistic-counters');
-        setThreadsWithReset(merged);
+        await setThreadsWithReset(merged);
       }
       hasCached = true;
     }
@@ -2324,7 +2324,7 @@
         if (!merged.find((m) => m.threadId === t.threadId)) merged.push(t as any);
       }
       const { setThreadsWithReset } = await import('$lib/stores/optimistic-counters');
-      setThreadsWithReset(merged as any);
+      await setThreadsWithReset(merged as any);
     } catch (e) {
       // Fallback: conservative merge of newly fetched threads into memory
       const current = $threadsStore || [];
@@ -2334,7 +2334,7 @@
         return acc;
       }, [] as typeof current);
       const { setThreadsWithReset } = await import('$lib/stores/optimistic-counters');
-      setThreadsWithReset(merged);
+      await setThreadsWithReset(merged);
     }
     const msgDict: Record<string, import('$lib/types').GmailMessage> = { ...$messagesStore };
     for (const m of msgs) msgDict[m.id] = m;
@@ -2490,7 +2490,7 @@
         return acc;
       }, [] as typeof current);
       const { setThreadsWithReset } = await import('$lib/stores/optimistic-counters');
-      setThreadsWithReset(merged);
+      await setThreadsWithReset(merged);
       const msgDict: Record<string, import('$lib/types').GmailMessage> = { ...$messagesStore };
       for (const m of msgs) msgDict[m.id] = m;
       messagesStore.set(msgDict);
@@ -2645,7 +2645,7 @@
       // Refresh the in-memory store
       const refreshed = await db.getAll('threads');
       const { setThreadsWithReset } = await import('$lib/stores/optimistic-counters');
-      setThreadsWithReset(refreshed as any);
+      await setThreadsWithReset(refreshed as any);
       
       showSnackbar({ message: `Cleaned ${toClean.length} stale threads from inbox`, timeout: 4000 });
       return { cleaned: toClean.length };
@@ -2987,7 +2987,7 @@
           // Refresh thread store
           const refreshedThreads = await db.getAll('threads');
           const { setThreadsWithReset } = await import('$lib/stores/optimistic-counters');
-          setThreadsWithReset(refreshedThreads as any);
+          await setThreadsWithReset(refreshedThreads as any);
           
           log('Store refresh completed');
           

@@ -439,7 +439,7 @@ export async function applyRemoteLabels(
   // applyRemoteLabels is called during sync, so use setThreadsWithReset to recalculate
   // optimistic counters from pending operations to ensure accuracy after server reconciliation
   const { setThreadsWithReset } = await import('$lib/stores/optimistic-counters');
-  setThreadsWithReset(updatedThreads);
+  await setThreadsWithReset(updatedThreads);
 
   const currentMessages = get(messagesStore);
   messagesStore.set({ ...currentMessages, ...updatedMessages });
