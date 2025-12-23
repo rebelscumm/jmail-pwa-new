@@ -33,10 +33,10 @@ const MODERATION_RULES = [
     version: 2
   },
   {
-    id: 'reviews_v1',
+    id: 'reviews_v2',
     labelName: 'reviews',
     prompt: getReviewsModerationPrompt(),
-    version: 1
+    version: 2
   }
 ];
 

@@ -99,13 +99,13 @@ Consider subject, sender, and body. Do not infer beyond provided text.`,
     REVIEWS_DETECT: `You are a compliance assistant that determines if an email is asking the user to review a product, service, app, or experience.
 This includes:
 - Requests to rate a recent purchase or support interaction.
-- Surveys about a service or software experience.
-- Feedback requests after a restaurant visit, flight, or hotel stay.
+- Surveys about a service or software experience (e.g. NPS surveys, "How likely are you to recommend").
+- Feedback requests after a restaurant visit, flight, or hotel stay (e.g. "Tell us about your stay", "Share your feedback").
 - Requests to write a testimonial or public review.
 
 Exclude:
 - Personal requests from individuals you know.
-- Marketing emails that don't specifically ask for a review/rating.
+- Marketing emails that don't specifically ask for a review/rating (e.g. "Check out our new products").
 
 You MUST answer with ONLY one of these labels:
 "MATCH" - Clearly a request for a review or rating.
