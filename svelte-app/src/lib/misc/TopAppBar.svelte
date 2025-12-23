@@ -326,12 +326,17 @@ import { precomputeStatus } from '$lib/stores/precompute';
       }
       
       // Step 7: Refresh label stats to update counters with authoritative Gmail counts
-      console.log('[TopAppBar] Step 5: Refreshing label stats from Gmail...');
-      try {
-        await refreshLabelStats(true); // Force update after authoritative sync
-        console.log('[TopAppBar] Step 5: Label stats refreshed successfully');
-      } catch (e) {
-        console.warn('[TopAppBar] Step 5: Could not refresh label stats:', e);
+      // Skip if we just did an authoritative sync on the inbox page, as it already updated counts from local truth
+      if (!isInboxPage) {
+        console.log('[TopAppBar] Step 5: Refreshing label stats from Gmail...');
+        try {
+          await refreshLabelStats(true); // Force update after authoritative sync
+          console.log('[TopAppBar] Step 5: Label stats refreshed successfully');
+        } catch (e) {
+          console.warn('[TopAppBar] Step 5: Could not refresh label stats:', e);
+        }
+      } else {
+        console.log('[TopAppBar] Step 5: Skipping label stats refresh (handled by authoritative sync)');
       }
       
       // Step 8: Get post-sync counts and compare with Gmail

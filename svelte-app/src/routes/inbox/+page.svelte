@@ -5,7 +5,8 @@
   import { listLabels, listInboxMessageIds, listThreadIdsByLabelId, getMessageMetadata, GmailApiError, getProfile, copyGmailDiagnosticsToClipboard, getAndClearGmailDiagnostics, listHistory, getThreadSummary } from '$lib/gmail/api';
   import { labels as labelsStore } from '$lib/stores/labels';
   import { threads as threadsStore, messages as messagesStore } from '$lib/stores/threads';
-  import { optimisticCounters } from '$lib/stores/optimistic-counters';
+  import { optimisticCounters, resetOptimisticCounters } from '$lib/stores/optimistic-counters';
+  import { counts } from '$lib/stores/counts';
   import { getDB } from '$lib/db/indexeddb';
   import VirtualList from '$lib/utils/VirtualList.svelte';
   import ThreadListRow from '$lib/utils/ThreadListRow.svelte';
@@ -227,8 +228,6 @@
     const handleAuthoritativeSync = async () => {
       try {
         await performAuthoritativeInboxSync();
-        // Reload data from IndexedDB into the UI stores to reflect authoritative changes
-        await hydrateFromCache();
         // Emit completion event for TopAppBar
         window.dispatchEvent(new CustomEvent('jmail:authSyncComplete'));
       } catch (e) {
@@ -1910,6 +1909,18 @@
       console.log(`[AuthSync] Enumerated from Gmail: ${gmailThreadIds.size} threads`);
       console.log(`[AuthSync] Change: ${preSyncInboxThreads.length} → ${finalInboxThreads.length} (${finalInboxThreads.length >= preSyncInboxThreads.length ? '+' : ''}${finalInboxThreads.length - preSyncInboxThreads.length})`);
       
+      // Update the global counts store with the accurate local data we just synced.
+      // This is more reliable than Gmail's labels.get API which is eventually consistent.
+      counts.update(c => ({
+        ...c,
+        inbox: finalInboxThreads.length,
+        unread: finalUnreadThreads.length,
+        lastUpdated: Date.now()
+      }));
+
+      // Reset optimistic counters since local state now matches authoritative Gmail state
+      resetOptimisticCounters();
+
       const discrepancy = gmailReportedCount - finalInboxThreads.length;
       if (Math.abs(discrepancy) <= 2) {
         console.log(`[AuthSync] ✅ Counts match (within tolerance)`);
