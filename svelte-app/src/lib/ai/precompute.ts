@@ -727,12 +727,16 @@ export async function tickPrecompute(limit = 10, skipSync = false, options?: {
     pushLog('debug', '[Precompute] Using binary cached summaries (no version) nowVersion:', nowVersion);
     
     const needsSummaryThreads: Array<GmailThread> = [];
+    let totalPendingSummaries = 0;
+    let totalPendingSubjects = 0;
     for (const t of candidates) {
       // Without versions, only recompute when missing or in an error/none state
       // or when content appears changed since last summary (bodyHash/summaryUpdatedAt).
       const needsSummary = !t.summary || t.summaryStatus === 'none' || t.summaryStatus === 'error';
       const needsSubject = !t.aiSubject || t.aiSubjectStatus === 'none' || t.aiSubjectStatus === 'error';
       if (needsSummary || needsSubject) needsSummaryThreads.push(t);
+      if (needsSummary) totalPendingSummaries++;
+      if (needsSubject) totalPendingSubjects++;
     }
     
     // Check which threads need moderation (separate from summary processing)
@@ -942,7 +946,10 @@ export async function tickPrecompute(limit = 10, skipSync = false, options?: {
       pushLog('debug', '[Precompute] Processing', summaryTargets.length, 'summary targets');
       
       // Update progress - processing summaries
-      precomputeStatus.updateProgress(cumulativeOffset, `Processing ${summaryTargets.length} summaries...`);
+      precomputeStatus.updateProgress(
+        cumulativeOffset,
+        `Processing ${totalPendingSummaries || summaryTargets.length} summaries...`
+      );
       
       const combinedItems = summaryTargets.map((p) => ({ id: p.thread.threadId, text: p.text || p.subject || '' }));
       let map: Record<string, string> = {};
@@ -1050,7 +1057,7 @@ export async function tickPrecompute(limit = 10, skipSync = false, options?: {
       // Update progress - processing subjects
       precomputeStatus.updateProgress(
         cumulativeOffset + summaryTargets.length, 
-        `Processing ${wantsSubject.length} AI subjects...`
+        `Processing ${totalPendingSubjects || wantsSubject.length} AI subjects...`
       );
       
       const subjectItems = wantsSubject.map((p) => {
